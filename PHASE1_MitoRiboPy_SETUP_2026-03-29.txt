@@ -1,0 +1,48 @@
+Phase I Package Bootstrap (MitoRiboPy)
+Date: 2026-03-29
+
+Implemented
+1) Package metadata + build config
+- Added pyproject.toml
+- Project/distribution name: MitoRiboPy
+- Import package: mitoribopy
+- Console entrypoint: mitoribopy -> mitoribopy.cli:main
+
+2) Source package scaffold
+- Added src/mitoribopy/
+  - __init__.py
+  - __main__.py
+  - cli.py
+  - analysis/, config/, data/, io/, pipeline/, plotting/, tools/, utils/ with __init__.py
+  - config/defaults.py, config/models.py, config/loader.py
+  - pipeline/runner.py
+
+3) Phase I compatibility behavior
+- mitoribopy CLI currently forwards arguments to legacy main.py parser.
+- This keeps current workflow behavior while migration is in progress.
+- Legacy runtime modules are bundled under src/mitoribopy/_legacy so package CLI works from built artifacts.
+
+4) Documentation alignment
+- README updated to use package name MitoRiboPy and describe Phase I entrypoint usage.
+- docs/PACKAGE_REFACTOR_SCHEME.md updated to MitoRiboPy / mitoribopy naming.
+
+Validation performed
+- Syntax checks passed:
+  python -m py_compile *.py src/mitoribopy/*.py src/mitoribopy/*/*.py
+
+- Entrypoint checks passed (source mode):
+  PYTHONPATH=src python -m mitoribopy --version
+  PYTHONPATH=src python -m mitoribopy --help
+
+- Wheel build passed (offline-safe):
+  python -m pip wheel . --no-build-isolation --no-deps -w /tmp/mitoribopy_wheel_test
+
+Known environment constraint during testing
+- Editable install in this sandbox could not complete due permission restrictions writing to ~/.local.
+- This is an environment constraint, not a packaging syntax/build failure.
+
+Phase I outcome
+- Package scaffold exists and command entrypoint is established.
+- Legacy behavior is preserved via forwarding.
+- Packaged _legacy runtime keeps forwarding self-contained in the wheel.
+- Ready for Phase II migration (move functional modules into src/mitoribopy/* with wrappers).

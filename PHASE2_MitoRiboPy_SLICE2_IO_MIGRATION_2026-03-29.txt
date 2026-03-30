@@ -1,0 +1,84 @@
+Phase II Slice 2: BED + Read-Count I/O Migration (MitoRiboPy)
+Date: 2026-03-29
+
+Goal
+- Move BED-processing and read-count parsing from legacy top-level module into package-native io modules.
+- Preserve behavior and CLI outputs while keeping old import paths functional.
+
+New package-native modules
+1) src/mitoribopy/io/read_counts.py
+- _resolve_column_name(columns, requested_name, fallback_names, label)
+  - Resolves a column name with case-insensitive matching and fallback candidates.
+- _match_any_substring(value, patterns)
+  - Returns True if any supplied pattern appears in the value.
+- compute_total_counts(...)
+  - Reads summary table (CSV/TSV autodetect), computes per-sample total reads.
+  - Supports normalization_mode='total' and normalization_mode='mt_mrna'.
+  - Returns:
+    - total_counts_map: dict for fast lookup (original and lowercase keys)
+    - total_counts_df: DataFrame [Sample, Total_reads]
+
+2) src/mitoribopy/io/bed_reader.py
+- process_bed_files(input_dir, output_dir, organism, annotation_df, rpf_range)
+  - Reads BED files, computes read length, filters by rpf range, writes per-length BED files.
+  - Produces read-length distribution plot per sample.
+  - Produces filtered read_length_summary.csv.
+  - Returns concatenated filtered BED DataFrame + sample directories.
+- compute_unfiltered_read_length_summary(input_dir, output_csv, total_counts_map, read_length_range)
+  - Computes unfiltered read-length counts and RPM values per sample.
+  - Uses total_counts_map for denominator.
+  - Writes unfiltered summary CSV.
+- plot_unfiltered_read_length_heatmap(summary_csv_path, output_png_base, value_col)
+  - Produces count or RPM heatmap from unfiltered summary CSV.
+
+Package exports updated
+- src/mitoribopy/io/__init__.py now exports:
+  - compute_total_counts
+  - process_bed_files
+  - compute_unfiltered_read_length_summary
+  - plot_unfiltered_read_length_heatmap
+
+Compatibility wrappers
+1) bed_processing.py (project root)
+- Converted to deprecation wrapper that re-exports package-native io functions.
+- Keeps old import path usable for external scripts.
+
+2) src/mitoribopy/_legacy/bed_processing.py
+- Converted to deprecation wrapper for packaged legacy runtime.
+- Re-exports package-native io functions.
+
+Import wiring updates
+- main.py now imports BED/read-count functions from mitoribopy.io.
+- src/mitoribopy/_legacy/main.py now imports BED/read-count functions from mitoribopy.io.
+
+Validation completed
+1) Compile checks
+- python -m py_compile main.py bed_processing.py src/mitoribopy/io/__init__.py src/mitoribopy/io/bed_reader.py src/mitoribopy/io/read_counts.py src/mitoribopy/_legacy/main.py src/mitoribopy/_legacy/bed_processing.py
+
+2) API/wrapper checks
+- PYTHONPATH=src import mitoribopy.io -> all expected functions present
+- import bed_processing -> wrapper exports all expected functions
+
+3) CLI checks
+- PYTHONPATH=src python -m mitoribopy --help
+- python main.py --help
+
+4) Runtime smoke tests on human subsample
+Input used:
+- human_phase2_smoke_input/NT3.bed
+- human_phase2_smoke_input/NT5.bed
+
+Run A (P-site):
+- output: phase2_slice2_smoke_psite
+
+Run B (A-site):
+- output: phase2_slice2_smoke_asite
+
+Result consistency check:
+- Selected offset deltas between A-site and P-site remain exact:
+  - 5' delta = +3 for all read lengths 29-34
+  - 3' delta = -3 for all read lengths 29-34
+
+Conclusion
+- Phase II slice 2 migration is complete and behavior-preserving.
+- CLI and pipeline outputs remain stable with package-native io implementation.

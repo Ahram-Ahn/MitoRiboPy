@@ -1,0 +1,261 @@
+Human Sample Update + Full File Guide
+Date: 2026-03-29
+Workspace: /Users/ahramahn/Library/CloudStorage/OneDrive-UniversityofMiami/1.Research/1.Ribosome_Profiling/01.Ribo-seq_v1
+
+================================================================================
+1) What Was Changed (Code + Behavior)
+================================================================================
+A) New offset-site option (P-site or A-site)
+- Added CLI/config option: --offset_site {p,a}
+- Default: p
+- Meaning:
+  - p: selected offsets represent P-site
+  - a: selected offsets represent A-site
+- Implemented in:
+  - main.py (argument + pass-through)
+  - pipeline_config.py / pipeline_config.example.json (defaults)
+  - offset_analysis.py (offset generation shift)
+  - inframe_analysis.py / igv_style_plot.py (convert A-site offsets back to P-site internally)
+
+B) Codon overlap mode added for offset enrichment
+- Added CLI/config option: --codon_overlap_mode {full,any}
+- Default: full (recommended)
+- Meaning:
+  - full: read must fully span all 3 codon nucleotides
+  - any: read can overlap 1-3 codon nucleotides
+- Implemented in offset_analysis.py and wired in main.py + config files
+
+C) Stop-codon coordinate correction
+- Changed stop codon start index to first stop base in 0-based coordinates:
+  - old: l_tr - l_utr3 - 2
+  - new: l_tr - l_utr3 - 3
+- Implemented in main.py
+
+D) Read-count normalization input now user-configurable and robust
+- Existing parameter kept: --read_counts_file
+- Added:
+  - --read_counts_sample_col
+  - --read_counts_reads_col
+- Auto-detection supports common column names (case-insensitive), including:
+  - sample: Sample / sample / sample_name
+  - reads: Reads / read_count / read_counts / count
+- Also added clear warning if sample normalization is missing (RPM=0 fallback)
+- Implemented in bed_processing.py + main.py
+
+E) NaN safety for offset tables
+- If a selected offset is NaN for a read length, those records are skipped safely
+- Implemented in inframe_analysis.py and igv_style_plot.py
+
+F) Reproducible random BED downsampling utility
+- Added script: subsample_bed.py
+- Uses reservoir sampling for exact N random reads with fixed seed
+- Example:
+  python subsample_bed.py --input NT3.bed --output debug_subsample/NT3_subsample.bed --n 200000 --seed 42
+
+G) Documentation updated
+- Updated README.md to reflect new parameters and stop-codon handling
+
+================================================================================
+2) Human-Only Runs Executed (NT3 + NT5)
+================================================================================
+Human-only input dir used:
+- human_only_input/NT3.bed (symlink)
+- human_only_input/NT5.bed (symlink)
+
+Human FASTA used:
+- human_riboseq_mt_entire_genome_withND6.fasta
+
+Run 1 (P-site mode):
+python main.py \
+  --fasta human_riboseq_mt_entire_genome_withND6.fasta \
+  --directory human_only_input \
+  --strain h \
+  -rpf 28 34 \
+  --align start \
+  --offset_type 5 \
+  --offset_site p \
+  --codon_overlap_mode full \
+  --min_offset 1 \
+  --max_offset 40 \
+  --read_counts_file human_read_counts.txt \
+  --output human_run_psite \
+  --plot_format svg \
+  --line_plot_style combined
+
+Run 2 (A-site mode):
+python main.py \
+  --fasta human_riboseq_mt_entire_genome_withND6.fasta \
+  --directory human_only_input \
+  --strain h \
+  -rpf 28 34 \
+  --align start \
+  --offset_type 5 \
+  --offset_site a \
+  --codon_overlap_mode full \
+  --min_offset 1 \
+  --max_offset 40 \
+  --read_counts_file human_read_counts.txt \
+  --output human_run_asite \
+  --plot_format svg \
+  --line_plot_style combined
+
+Note seen during run:
+- human_read_counts.txt has NT3 only, not NT5.
+- NT5 RPM-related outputs therefore use fallback RPM=0 and print warning.
+
+================================================================================
+3) P-site vs A-site Validation Results (Scientific Consistency)
+================================================================================
+A) Offset table shift test (human_run_psite vs human_run_asite)
+- File compared:
+  - human_run_psite/plots_and_csv/p_site_offsets_start.csv
+  - human_run_asite/plots_and_csv/p_site_offsets_start.csv
+
+Observed shift for every read length (28-34):
+- Most Enriched 5' Offset: exactly +3 nt in A-site mode
+- Most Enriched 3' Offset: exactly -3 nt in A-site mode
+
+Shift summary:
+- d5 (A - P): {3: 7}
+- d3 (A - P): {-3: 7}
+
+B) Downstream positional validity test
+- Compared debug coverage maps for NT3 and NT5:
+  - human_run_psite/<sample>/debug_csv/read_cov_map_<sample>.csv
+  - human_run_asite/<sample>/debug_csv/read_cov_map_<sample>.csv
+- Metrics for P_site, A_site, E_site arrays:
+  - identical=True
+  - max_abs_diff=0
+  - sum_abs_diff=0
+  - correlation=1.0
+
+Interpretation:
+- This is exactly expected if A-site offsets are interpreted correctly and converted back to P-site for positional assignment.
+- Therefore, the p/a argument behaves as a pure 3-nt reference shift, not a biologically inconsistent remapping.
+
+================================================================================
+4) Full File Guide (Top-Level Files/Dirs in This Workspace)
+================================================================================
+CON1.bed
+- Yeast sample BED (Ribo-seq alignments).
+- Not used in current human-first validation.
+
+NT3.bed
+- Human sample BED (Ribo-seq alignments).
+- Used in human validation runs.
+
+NT5.bed
+- Human sample BED (Ribo-seq alignments).
+- Used in human validation runs.
+
+README.md
+- Project overview, run examples, parameter guidance.
+- Updated with new offset/read-count options and subsampling usage.
+
+__init__.py
+- Package marker file.
+
+__pycache__/
+- Python bytecode cache.
+
+aligned_ratio.py
+- Utility/analysis module related to alignment ratio calculations.
+
+bed_processing.py
+- BED parsing/filtering and read-length QC.
+- Computes read-length summaries and heatmaps.
+- Handles read-count normalization parsing and RPM calculation.
+- Now supports flexible read-count schema and missing-sample warnings.
+
+codon_correlation.py
+- Cross-sample codon-usage correlation analysis and plotting.
+
+codon_data.py
+- Codon tables and built-in annotation DataFrames for yeast/human mt transcripts.
+- Provides transcript lengths and UTR/CDS structure used by pipeline.
+
+debug_subsample/
+- Randomly downsampled BED files for fast debugging.
+- Contains helper-generated subset files.
+
+human_only_input/
+- Symlink-only input directory containing NT3/NT5 for human-only runs.
+
+human_read_counts.txt
+- Human read-count summary table.
+- Columns currently: sample, reference, read_count.
+- Used by new flexible parser; currently includes NT3 counts only.
+
+human_riboseq_mt_entire_genome_withND6.fasta
+- Human mt transcript FASTA used for human analysis runs.
+- Headers match human annotation IDs (ND1, ND2, COX1, ..., ND6, CYTB).
+
+human_run_asite/
+- Output directory for human pipeline run with --offset_site a.
+- Includes plots_and_csv, per-sample footprint/codon/frame/debug outputs, and IGV plots.
+
+human_run_psite/
+- Output directory for human pipeline run with --offset_site p.
+- Includes same output structure as human_run_asite for direct comparison.
+
+igv_style_plot.py
+- Builds IGV-style read coverage and P-site density plots (RPM + raw).
+- Uses selected offsets by read length.
+- Updated to interpret offset_site and safely skip NaN offsets.
+
+inframe_analysis.py
+- Computes P/A/E site profiles, footprint density, frame usage, and codon usage outputs.
+- Updated to interpret offset_site and safely skip NaN offsets.
+
+main.py
+- Pipeline orchestration and CLI parsing.
+- Wires all modules together.
+- Updated with offset_site/codon_overlap_mode/read-count-column args and stop-codon fix.
+
+offset_analysis.py
+- Offset calculation and enrichment summary.
+- Determines most-enriched offsets by read length.
+- Plotting of offset heatmap/lineplots.
+- Updated with offset-site shifting and codon overlap modes.
+
+pipeline_config.example.json
+- Example JSON config for reproducible runs.
+- Updated with new keys.
+
+pipeline_config.py
+- Central default config + config loader + RPF range resolver.
+- Updated defaults for new options.
+
+plot_style.py
+- Shared matplotlib/seaborn styling presets.
+
+read_counts_summary.txt
+- Yeast-focused read-count summary table.
+
+real_test_run_CON1/
+- Previous yeast run outputs (existing historical results).
+
+riboseq_241127_mtRNA_annotated_with_dodecamer.fa
+- Yeast mt transcript FASTA.
+
+rna_seq_analysis.py
+- RNA-seq coverage analysis + optional ribo/RNA ratio integration.
+
+smoke_test/
+- Small test dataset and historical smoke outputs.
+- Used for quick pipeline sanity checks.
+
+subsample_bed.py
+- New utility script for reproducible random BED downsampling.
+
+varna_plot.py
+- VARNA export and visualization support.
+
+================================================================================
+5) Practical Next Notes for Human Analysis
+================================================================================
+- Add NT5 to human_read_counts.txt if you want NT5 RPM to be meaningful.
+- For biological offset calling, recommended human command options:
+  - --codon_overlap_mode full
+  - --min_offset 11 --max_offset 20 (or lab-validated window)
+- For diagnostic shift checks, use wider offset window (e.g., 1-40) as done above.

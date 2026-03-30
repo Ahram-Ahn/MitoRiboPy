@@ -1,0 +1,80 @@
+Phase II Offset Module Migration (MitoRiboPy)
+Date: 2026-03-29
+
+Scope completed in this phase
+- Migrated offset-analysis logic from legacy top-level module into package-native analysis modules.
+- Preserved backward compatibility with thin wrapper modules for old import paths.
+- Kept runtime behavior stable for existing CLI workflows.
+
+New package-native modules
+1) src/mitoribopy/analysis/offset_enrichment.py
+- compute_offsets(...)
+  - Computes read-level 5' and 3' offsets from codon overlap.
+  - Supports align_to start/stop, offset_site p/a, manual offset, and overlap mode full/any.
+- create_csv_for_offset_enrichment(...)
+  - Builds read-length x offset summary table and writes CSV.
+- plot_offset_enrichment(...)
+  - Produces offset heatmap and line plots.
+
+2) src/mitoribopy/analysis/offset_selection.py
+- determine_p_site_offsets(...)
+  - Selects most-enriched offsets by read length using tie-break logic.
+  - Supports canonical P-site selection-reference behavior and conversion back to A-site.
+- Internal helpers:
+  - _convert_offsets_between_sites(...)
+  - _pick_most_enriched_with_tiebreak(...)
+
+3) src/mitoribopy/plotting/style.py
+- apply_publication_style(...)
+  - Central plotting defaults used by package analysis modules.
+
+Backward-compatibility wrappers
+1) offset_analysis.py (project root)
+- Now a thin compatibility wrapper.
+- Re-exports:
+  - compute_offsets
+  - create_csv_for_offset_enrichment
+  - plot_offset_enrichment
+  - determine_p_site_offsets
+- Adds a deprecation warning for legacy import usage.
+
+2) src/mitoribopy/_legacy/offset_analysis.py
+- Same compatibility role inside packaged legacy runtime.
+- Re-exports package-native offset functions.
+
+Import wiring updates
+- main.py now imports offset functions from mitoribopy.analysis.
+- src/mitoribopy/_legacy/main.py now imports offset functions from mitoribopy.analysis.
+- src/mitoribopy/analysis/__init__.py exports the migrated public API.
+- src/mitoribopy/plotting/__init__.py exports apply_publication_style.
+
+Validation performed
+1) Compile checks
+- python -m py_compile main.py offset_analysis.py src/mitoribopy/analysis/offset_enrichment.py src/mitoribopy/analysis/offset_selection.py src/mitoribopy/_legacy/main.py src/mitoribopy/_legacy/offset_analysis.py src/mitoribopy/plotting/style.py
+
+2) CLI checks
+- PYTHONPATH=src python -m mitoribopy --help
+- python main.py --help
+
+3) Smoke pipeline runs on random subsample
+Input subsample creation:
+- NT3.bed -> human_phase2_smoke_input/NT3.bed (n=120000, seed=7)
+- NT5.bed -> human_phase2_smoke_input/NT5.bed (n=120000, seed=11)
+
+Run A (P-site):
+- output: phase2_smoke_psite
+- args include: -s h, -a stop, --offset_site p, --offset_pick_reference p_site, --min_offset 10, --max_offset 22, --codon_overlap_mode full
+
+Run B (A-site):
+- output: phase2_smoke_asite
+- same as Run A except --offset_site a
+
+Result check (selected offsets table):
+- For read lengths 29-34, deltas were consistent:
+  - Most Enriched 5' Offset (A - P) = +3 for all read lengths
+  - Most Enriched 3' Offset (A - P) = -3 for all read lengths
+
+Conclusion
+- Phase II offset migration is successful for this module slice.
+- Package-native code path is active and backward-compatible wrappers remain available.
+- Next Phase II slices should migrate bed/io and in-frame analysis modules using the same pattern.

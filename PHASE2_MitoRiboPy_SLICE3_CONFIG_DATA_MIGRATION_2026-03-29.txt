@@ -1,0 +1,79 @@
+Phase II Slice 3: Config + Data Module Migration (MitoRiboPy)
+Date: 2026-03-29
+
+Goal
+- Move runtime pipeline configuration and codon/annotation data from legacy top-level modules into package-native modules.
+- Preserve current behavior and keep old import paths valid via wrappers.
+
+Config migration
+1) New module: src/mitoribopy/config/runtime.py
+- DEFAULT_CONFIG
+  - Canonical runtime default parameters for CLI + pipeline execution.
+- load_user_config(config_path)
+  - Reads JSON config, validates object shape, filters to known keys.
+- resolve_rpf_range(strain, rpf_arg)
+  - Resolves explicit or fallback RPF range by strain.
+
+2) Updated export surface: src/mitoribopy/config/__init__.py
+- Re-exports runtime helpers (DEFAULT_CONFIG/load_user_config/resolve_rpf_range)
+- Keeps existing Phase I placeholders exported for compatibility.
+
+3) Compatibility wrappers
+- pipeline_config.py (root) -> deprecation wrapper to mitoribopy.config.runtime
+- src/mitoribopy/_legacy/pipeline_config.py -> same wrapper role for packaged legacy runtime
+
+Data migration
+1) New module: src/mitoribopy/data/codon_tables.py
+- standard_codon_table
+- yeast_mitochondrial_codon_table
+- human_mitochondrial_codon_table
+
+2) New module: src/mitoribopy/data/transcript_annotations.py
+- yeast_annotation_df
+- human_annotation_df
+- Preserves existing l_cds derivation and column ordering.
+
+3) Updated export surface: src/mitoribopy/data/__init__.py
+- Re-exports all codon tables + annotation dataframes.
+
+4) Compatibility wrappers
+- codon_data.py (root) -> deprecation wrapper to mitoribopy.data modules
+- src/mitoribopy/_legacy/codon_data.py -> same wrapper role for packaged legacy runtime
+
+Import rewiring
+- main.py
+  - codon data import switched to mitoribopy.data
+  - pipeline config import switched to mitoribopy.config
+- src/mitoribopy/_legacy/main.py
+  - same rewiring as main.py
+- inframe_analysis.py
+  - codon table import switched to mitoribopy.data
+- src/mitoribopy/_legacy/inframe_analysis.py
+  - same codon table rewiring
+
+Validation
+1) Compile checks
+- python -m py_compile main.py inframe_analysis.py pipeline_config.py codon_data.py
+  src/mitoribopy/config/runtime.py src/mitoribopy/config/__init__.py
+  src/mitoribopy/data/__init__.py src/mitoribopy/data/codon_tables.py
+  src/mitoribopy/data/transcript_annotations.py
+  src/mitoribopy/_legacy/main.py src/mitoribopy/_legacy/inframe_analysis.py
+  src/mitoribopy/_legacy/pipeline_config.py src/mitoribopy/_legacy/codon_data.py
+
+2) API checks
+- mitoribopy.config exports DEFAULT_CONFIG/load_user_config/resolve_rpf_range
+- mitoribopy.data exports annotation DataFrames + codon tables
+- wrapper modules (pipeline_config.py, codon_data.py) export expected names
+
+3) CLI checks
+- PYTHONPATH=src python -m mitoribopy --help
+- python main.py --help
+
+4) Runtime smoke check
+- Full human subsample run completed successfully:
+  - output: phase2_next_slices_smoke_psite
+- Pipeline stages executed end-to-end (offset, in-frame, IGV outputs).
+
+Conclusion
+- Phase II slice 3 migration is complete and behavior-preserving.
+- Runtime now uses package-native config + data modules while old import paths remain available.

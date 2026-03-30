@@ -1,0 +1,92 @@
+MitoRiboPy Full Human Run Report (NT3 / NT5)
+Date: 2026-03-30
+
+1) Inputs
+- FASTA: human_riboseq_mt_entire_genome_withND6.fasta
+- BED inputs: NT3.bed, NT5.bed
+- Input directory used: human_full_input_phase23 (symlinks to NT3.bed/NT5.bed)
+- Read counts table: human_read_counts.txt
+- Read count normalization mode: mt_mrna (reference pattern: mt_genome)
+
+2) Commands executed
+P-site run:
+MPLCONFIGDIR=/tmp PYTHONPATH=src python -m mitoribopy \
+  -s h -f human_riboseq_mt_entire_genome_withND6.fasta \
+  -rpf 29 34 --directory human_full_input_phase23 \
+  --offset_type 5 --offset_site p --offset_pick_reference p_site \
+  -a stop --order_samples NT3 NT5 -v \
+  --min_offset 10 --max_offset 22 \
+  --read_counts_file human_read_counts.txt \
+  --read_counts_sample_col sample --read_counts_reads_col read_count \
+  --rpm_norm_mode mt_mrna \
+  --read_counts_reference_col reference --mrna_ref_patterns mt_genome \
+  --cap_percentile 0.999 --codon_overlap_mode full \
+  --cor_plot --base_sample NT3 -m --plot_format svg -r 25 \
+  -o human_full_phase23_psite_mt_mrna_20260330
+
+A-site run:
+MPLCONFIGDIR=/tmp PYTHONPATH=src python -m mitoribopy \
+  -s h -f human_riboseq_mt_entire_genome_withND6.fasta \
+  -rpf 29 34 --directory human_full_input_phase23 \
+  --offset_type 5 --offset_site a --offset_pick_reference selected_site \
+  -a stop --order_samples NT3 NT5 -v \
+  --min_offset 10 --max_offset 22 \
+  --read_counts_file human_read_counts.txt \
+  --read_counts_sample_col sample --read_counts_reads_col read_count \
+  --rpm_norm_mode mt_mrna \
+  --read_counts_reference_col reference --mrna_ref_patterns mt_genome \
+  --cap_percentile 0.999 --codon_overlap_mode full \
+  --cor_plot --base_sample NT3 -m --plot_format svg -r 25 \
+  -o human_full_phase23_asite_mt_mrna_20260330
+
+Note: CLI currently accepts --offset_pick_reference as {selected_site, p_site}.
+
+3) Output directories
+- human_full_phase23_psite_mt_mrna_20260330
+- human_full_phase23_asite_mt_mrna_20260330
+
+4) Artifact summary (both runs)
+- plots_and_csv files: 22
+- footprint density CSV files: 22
+- codon usage CSV files: 26
+- IGV-style SVG files: 44
+- codon correlation files: 5
+- VARNA files: 44
+
+5) Offset comparison (A minus P)
+Using plots_and_csv/p_site_offsets_stop.csv:
+ReadLength  delta_5prime  delta_3prime
+29         -11           -3
+30         +3            -3
+31         +3            -3
+32         +3            -3
+33         +3            -3
+34         +3            -3
+
+Interpretation:
+- RL30-34 follow expected P/A 5' shift (+3 nt) and 3' shift (-3 nt).
+- RL29 is an outlier (5' = -11), likely due competing enrichment peak selection within the allowed offset window.
+
+6) Are P-site and A-site runs really different?
+Yes.
+- Compared selected-depth vectors across all 22 footprint files:
+  - exactly identical files: 0/22
+  - exact-position equality fraction range: 0.1068 to 0.3737
+  - Pearson correlation range: 0.4547 to 0.7298
+
+7) Codon usage completeness check
+For NT3 and NT5 in both runs:
+- codon_usage_total.csv: 64 rows, 64 codons
+- a_site_codon_usage_total.csv: 64 rows, 64 codons
+- Missing codons: 0
+
+8) Key files to inspect first
+P-site:
+- human_full_phase23_psite_mt_mrna_20260330/plots_and_csv/p_site_offsets_stop.csv
+- human_full_phase23_psite_mt_mrna_20260330/plots_and_csv/offset_stop.csv
+- human_full_phase23_psite_mt_mrna_20260330/codon_correlation/codon_correlation_summary_NT3.csv
+
+A-site:
+- human_full_phase23_asite_mt_mrna_20260330/plots_and_csv/p_site_offsets_stop.csv
+- human_full_phase23_asite_mt_mrna_20260330/plots_and_csv/offset_stop.csv
+- human_full_phase23_asite_mt_mrna_20260330/codon_correlation/codon_correlation_summary_NT3.csv

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MitoRiboPy"
+version = "0.1.0"
+description = "Mitochondrial ribosome profiling analysis pipeline."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=1.5",
+  "matplotlib>=3.7",
+  "seaborn>=0.12",
+  "biopython>=1.81",
+  "scipy>=1.10",
+]
+
+[project.scripts]
+mitoribopy = "mitoribopy.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

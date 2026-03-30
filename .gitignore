@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+build/
+dist/
+*.egg-info/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Large sequencing/raw data
+*.bed
+*.bam
+*.sam
+*.fastq
+*.fastq.gz
+*.fasta
+*.fa
+*.fai
+*.bai
+
+# Local read count/data tables
+human_read_counts.txt
+read_counts_summary.txt
+
+# Generated analysis outputs (dated runs / smoke runs)
+human_compare_asite_20260329/
+human_full_input_phase23/
+human_full_phase23_asite_mt_mrna_20260330/
+human_full_phase23_psite_mt_mrna_20260330/
+human_full_run_stop_asite_mt_mrna_20260329/
+human_full_run_stop_psite_20260329/
+human_full_run_stop_psite_mt_mrna_20260329/
+human_mt_mrna_rpm_check_20260329/
+human_phase2_smoke_input/
+human_refined_pickref_asite_20260329/
+human_refined_pickref_psite_20260329/
+human_test_input/
+phase2_complete_smoke_asite/
+phase2_complete_smoke_psite/
+phase2_next_slices_smoke_psite/
+phase2_slice2_smoke_asite/
+phase2_slice2_smoke_psite/
+phase2_smoke_asite/
+phase2_smoke_psite/
