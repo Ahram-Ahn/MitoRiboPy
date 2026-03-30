@@ -17,6 +17,11 @@ dependencies = [
   "scipy>=1.10",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+]
+
 [project.scripts]
 mitoribopy = "mitoribopy.cli:main"
 
@@ -25,3 +30,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

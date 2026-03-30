@@ -250,7 +250,7 @@ Legacy behavior can be restored with:
 - `--offset_pick_reference selected_site`
 
 Detailed refinement notes:
-- [`OFFSET_PICKING_REFINEMENT_2026-03-29.txt`](OFFSET_PICKING_REFINEMENT_2026-03-29.txt)
+- [`docs/reports/OFFSET_PICKING_REFINEMENT_2026-03-29.txt`](docs/reports/OFFSET_PICKING_REFINEMENT_2026-03-29.txt)
 
 ---
 
@@ -259,7 +259,7 @@ Detailed refinement notes:
 For fast, deterministic testing, create subsampled BED files:
 
 ```bash
-python subsample_bed.py \
+python -m mitoribopy.tools.subsample \
   --input NT3.bed \
   --output debug_subsample/NT3_subsample.bed \
   --n 200000 \
@@ -268,7 +268,14 @@ python subsample_bed.py \
 
 ---
 
-## 10) Configuration Files
+## 10) Run Reports
+
+Project reports and migration logs are stored in:
+- `docs/reports/`
+
+---
+
+## 11) Configuration Files
 
 You can run with a JSON config file and override from CLI.
 
@@ -283,7 +290,20 @@ python main.py --config pipeline_config.example.json --fasta <path_to_fasta>
 
 ---
 
-## 11) Troubleshooting
+## 12) Testing
+
+Yes, having a `tests/` folder is standard for Python packages.
+
+Install test dependency and run:
+
+```bash
+pip install -e .[dev]
+python -m pytest
+```
+
+---
+
+## 13) Troubleshooting
 
 ### No reads survive filtering
 - Check `-rpf` range and input BED coordinate validity.
@@ -303,20 +323,20 @@ python main.py --config pipeline_config.example.json --fasta <path_to_fasta>
 
 ---
 
-## 12) Development and Contribution
+## 14) Development and Contribution
 
 Current best practice for edits:
 - Keep behavior-preserving refactors separate from scientific-logic changes.
 - Add docstrings and type hints for public functions.
 - Prefer explicit names over short abbreviations.
-- Keep plotting style centralized in `plot_style.py` until package split completes.
+- Keep plotting style centralized in `src/mitoribopy/plotting/style.py`.
 
 Planned packaging roadmap:
 - [`docs/PACKAGE_REFACTOR_SCHEME.md`](docs/PACKAGE_REFACTOR_SCHEME.md)
 
 ---
 
-## 13) Citation and Versioning (Planned)
+## 15) Citation and Versioning (Planned)
 
 For public package release, this repository will include:
 - Semantic versioning
