@@ -301,6 +301,9 @@ pip install -e .[dev]
 python -m pytest
 ```
 
+CI runs the same test suite on every push/pull request to `main` via:
+- `.github/workflows/ci.yml`
+
 ---
 
 ## 13) Troubleshooting
@@ -336,7 +339,14 @@ Planned packaging roadmap:
 
 ---
 
-## 15) Citation and Versioning (Planned)
+## 15) Changelog and Release Notes
+
+- Changelog: [`CHANGELOG.md`](CHANGELOG.md)
+- Release notes: [`docs/release-notes/`](docs/release-notes/)
+
+---
+
+## 16) Citation and Versioning (Planned)
 
 For public package release, this repository will include:
 - Semantic versioning
