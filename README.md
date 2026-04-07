@@ -327,7 +327,7 @@ Run the test suite with:
 PYTHONPATH=src pytest
 ```
 
-This repository also includes package migration notes and release materials under [docs](docs).
+This repository also includes package migration notes and release materials under [docs/README.md](docs/README.md).
 
 ## License
 

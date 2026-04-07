@@ -1,5 +1,22 @@
 # Python Package Refactor Scheme
 
+This document is a historical design note from the package migration. It is
+kept for project history, but parts of the original plan now differ from the
+current `0.2.0` package layout.
+
+## Status Note (2026-04-07)
+
+- The package now runs through `mitoribopy.pipeline.runner` and
+  `mitoribopy.pipeline.steps` without a runtime dependency on `_legacy`.
+- The former `inframe_analysis` workflow now lives under
+  `mitoribopy.analysis.translation_profile_analysis`.
+- The former IGV-style plotting module is now
+  `mitoribopy.plotting.coverage_profile_plots`.
+- The former VARNA export module is now
+  `mitoribopy.plotting.structure_density_export`.
+- Built-in codon tables and annotations are packaged as JSON and CSV data files
+  under `src/mitoribopy/data/`.
+
 ## Current Status (2026-03-29)
 - Phase I: completed (package scaffold + CLI forwarding).
 - Phase II slice 1: completed for offset analysis modules with compatibility wrappers.
