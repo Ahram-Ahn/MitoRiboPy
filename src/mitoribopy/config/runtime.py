@@ -6,17 +6,30 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..console import log_warning
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "strain": "y",
     "directory": ".",
     "rpf": None,
+    "annotation_file": None,
+    "codon_tables_file": None,
+    "codon_table_name": None,
+    "start_codons": None,
+    "atp8_atp6_baseline": "ATP6",
+    "nd4l_nd4_baseline": "ND4",
     "align": "start",
     "range": 20,
     "output": "analysis_results",
     "downstream_dir": "footprint_density",
     "min_offset": 11,
     "max_offset": 20,
+    "min_5_offset": None,
+    "max_5_offset": None,
+    "min_3_offset": None,
+    "max_3_offset": None,
+    "offset_mask_nt": 5,
     "offset_pick_reference": "p_site",
     "offset_type": "5",
     "offset_site": "p",
@@ -34,8 +47,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "rpm_norm_mode": "total",
     "read_counts_reference_col": None,
     "mrna_ref_patterns": ["mt_genome", "mt-mrna", "mt_mrna"],
-    "varna": False,
-    "varna_norm_perc": 0.99,
+    "structure_density": False,
+    "structure_density_norm_perc": 0.99,
     "order_samples": None,
     "cor_plot": False,
     "base_sample": None,
@@ -65,12 +78,28 @@ def load_user_config(config_path: str | None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("Config file must be a JSON object (key/value dictionary).")
 
-    allowed = set(DEFAULT_CONFIG.keys())
-    unknown = sorted(key for key in raw.keys() if key not in allowed)
-    if unknown:
-        print(f"[CONFIG] Ignoring unknown keys: {', '.join(unknown)}")
+    legacy_key_map = {
+        "varna": "structure_density",
+        "varna_norm_perc": "structure_density_norm_perc",
+    }
+    normalized_raw = dict(raw)
+    for legacy_key, new_key in legacy_key_map.items():
+        if legacy_key not in normalized_raw:
+            continue
+        if new_key not in normalized_raw:
+            normalized_raw[new_key] = normalized_raw[legacy_key]
+        log_warning(
+            "CONFIG",
+            f"Config key '{legacy_key}' is deprecated; use '{new_key}' instead.",
+        )
+        normalized_raw.pop(legacy_key, None)
 
-    return {key: value for key, value in raw.items() if key in allowed}
+    allowed = set(DEFAULT_CONFIG.keys())
+    unknown = sorted(key for key in normalized_raw.keys() if key not in allowed)
+    if unknown:
+        log_warning("CONFIG", f"Ignoring unknown keys: {', '.join(unknown)}")
+
+    return {key: value for key, value in normalized_raw.items() if key in allowed}
 
 
 def resolve_rpf_range(strain: str, rpf_arg: list[int] | tuple[int, int] | None) -> list[int]:
@@ -84,4 +113,3 @@ def resolve_rpf_range(strain: str, rpf_arg: list[int] | tuple[int, int] | None) 
     if strain == "y":
         return list(range(37, 42))
     return list(range(28, 35))
-

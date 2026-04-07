@@ -11,7 +11,7 @@ Example usage:
       annotation_df=...,
       fasta_file=...,
       output_dir="rna_seq_results",
-      inframe_out_dir="analysis_results",
+      translation_profile_dir="analysis_results",
       do_merge_with_ribo=True
   )
 """
@@ -22,6 +22,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from Bio import SeqIO
+from ..console import iter_with_progress, log_info, log_warning
 from ..plotting.style import apply_publication_style
 
 apply_publication_style()
@@ -32,7 +33,7 @@ def run_rna_seq_analysis(
     annotation_df,
     fasta_file,
     output_dir,
-    inframe_out_dir=None,
+    translation_profile_dir=None,
     do_merge_with_ribo=False,
     ribo_order=None
 ):
@@ -42,13 +43,13 @@ def run_rna_seq_analysis(
     :param annotation_df: transcripts info
     :param fasta_file: path to .fasta
     :param output_dir: where to write coverage, summary, ratio
-    :param inframe_out_dir: where Ribo footprints are, e.g. 'analysis_results'
+    :param translation_profile_dir: where Ribo footprint outputs are stored, e.g. 'analysis_results'
     :param do_merge_with_ribo: produce ratio => p-site / (CoveragePerLength)
     :param ribo_order: list of Ribo sample names, e.g. ["WT","PET","MSS116","MSS51"]
                        must have the same length as rna_order for index matching.
     """
 
-    print("[RNA-SEQ] Starting single-dir analysis with separate rna_order + ribo_order indexing.")
+    log_info("RNA-SEQ", "Starting RNA-seq analysis with paired RNA and Ribo sample ordering.")
     os.makedirs(output_dir, exist_ok=True)
 
     # parse FASTA
@@ -58,14 +59,19 @@ def run_rna_seq_analysis(
     transcript_counts = {}  # transcript_counts[rna_name][transcript] = total coverage
 
     # 1) Read each RNA sample => e.g. rna_name = "WT_total" => "WT_total.bed"
-    for rna_name in rna_order:
+    for rna_name in iter_with_progress(
+        list(rna_order),
+        component="RNA-SEQ",
+        noun="RNA sample",
+        labeler=str,
+    ):
         bedfile = f"{rna_name}.bed"
         bedpath = os.path.join(rna_seq_dir, bedfile)
         if not os.path.isfile(bedpath):
-            print(f"[RNA-SEQ] BED file missing => {bedpath}, skip sample {rna_name}")
+            log_warning("RNA-SEQ", f"BED file missing => {bedpath}; skipping sample {rna_name}.")
             continue
 
-        print(f"[RNA-SEQ] Processing RNA sample => {rna_name} from {bedfile}")
+        log_info("RNA-SEQ", f"Processing RNA sample => {rna_name} from {bedfile}")
         coverage_map[rna_name] = {}
         transcript_counts[rna_name] = {}
 
@@ -79,14 +85,14 @@ def run_rna_seq_analysis(
         try:
             bed_df = pd.read_csv(bedpath, sep="\t", header=None)
         except Exception as e:
-            print(f"[RNA-SEQ] Error reading {bedfile}: {e}")
+            log_warning("RNA-SEQ", f"Error reading {bedfile}: {e}")
             continue
 
         # minimal columns
         if bed_df.shape[1]>=3:
             std_cols = ["chrom","start","end","name","score","strand"][:bed_df.shape[1]]
         else:
-            print(f"[RNA-SEQ] BED format error => {bedfile}, skip.")
+            log_warning("RNA-SEQ", f"Unexpected BED format => {bedfile}; skipping.")
             continue
         bed_df.columns = std_cols
         bed_df["start"] = pd.to_numeric(bed_df["start"], errors="coerce")
@@ -152,23 +158,26 @@ def run_rna_seq_analysis(
     summary_df = pd.DataFrame(summary_data)
     out_summary_csv = os.path.join(output_dir, "rna_seq_transcript_summary.csv")
     summary_df.to_csv(out_summary_csv, index=False)
-    print(f"[RNA-SEQ] Wrote transcript-level summary => {out_summary_csv}")
+    log_info("RNA-SEQ", f"Wrote transcript-level summary => {out_summary_csv}")
 
     # 3) Merge with Ribo => ratio
     if not do_merge_with_ribo:
-        print("[RNA-SEQ] Not merging => done.")
+        log_info("RNA-SEQ", "RNA-only analysis complete; skipping Ribo merge.")
         return
 
-    if not inframe_out_dir or not os.path.isdir(inframe_out_dir):
-        print(f"[RNA-SEQ] inframe_out_dir not found => skip ratio => {inframe_out_dir}")
+    if not translation_profile_dir or not os.path.isdir(translation_profile_dir):
+        log_warning(
+            "RNA-SEQ",
+            f"translation_profile_dir not found => {translation_profile_dir}; skipping ratio.",
+        )
         return
 
     # We need ribo_order to match rna_order by index
     if (ribo_order is None) or (len(ribo_order)!=len(rna_order)):
-        print("[RNA-SEQ] Mismatch in length: rna_order vs. ribo_order => skip ratio.")
+        log_warning("RNA-SEQ", "Mismatch in length between rna_order and ribo_order; skipping ratio.")
         return
 
-    print("[RNA-SEQ] Merging Ribo footprints => ratio p-site / coveragePerLength (by index).")
+    log_info("RNA-SEQ", "Merging Ribo footprints into RNA/Ribo ratio outputs.")
     ratio_dir = os.path.join(output_dir, "ribo_ratio")
     os.makedirs(ratio_dir, exist_ok=True)
 
@@ -189,16 +198,19 @@ def run_rna_seq_analysis(
     # For each index i:
     #   rna_name = rna_order[i]
     #   ribo_name= ribo_order[i]
-    # Then footprints are at inframe_out_dir/ribo_name/footprint_density
+    # Then footprints are at translation_profile_dir/ribo_name/footprint_density
     # ratio => (sum of p-site coverage) / coveragePerLen(rna_name).
     for i in range(len(rna_order)):
         rna_name  = rna_order[i]   # e.g. "WT_total"
         ribo_name = ribo_order[i]  # e.g. "WT"
-        print(f"[RNA-SEQ] => Pairing Ribo '{ribo_name}' with RNA '{rna_name}'")
+        log_info("RNA-SEQ", f"Pairing Ribo '{ribo_name}' with RNA '{rna_name}'")
 
-        foot_dir = os.path.join(inframe_out_dir, ribo_name, "footprint_density")
+        foot_dir = os.path.join(translation_profile_dir, ribo_name, "footprint_density")
         if not os.path.isdir(foot_dir):
-            print(f"[RNA-SEQ] Ribo footprint dir not found => {foot_dir}, skip ratio for {ribo_name}")
+            log_warning(
+                "RNA-SEQ",
+                f"Ribo footprint directory not found => {foot_dir}; skipping {ribo_name}.",
+            )
             continue
 
         sample_ratio_dir = os.path.join(ratio_dir, rna_name)
@@ -211,7 +223,8 @@ def run_rna_seq_analysis(
 
             try:
                 df_foot = pd.read_csv(foot_path)
-            except:
+            except Exception as exc:
+                log_warning("RNA-SEQ", f"Failed reading footprint CSV {foot_path}: {exc}")
                 continue
             if "P_site" not in df_foot.columns:
                 continue
@@ -257,7 +270,7 @@ def run_rna_seq_analysis(
     ratio_summary_df = pd.DataFrame(all_ratio_records)
     combined_ratio_csv = os.path.join(ratio_dir, "rna_ribo_ratio_summary.csv")
     ratio_summary_df.to_csv(combined_ratio_csv, index=False)
-    print(f"[RNA-SEQ] Wrote combined ratio summary => {combined_ratio_csv}")
+    log_info("RNA-SEQ", f"Wrote combined ratio summary => {combined_ratio_csv}")
 
     if not ratio_summary_df.empty:
         plt.figure(figsize=(12, 6))
@@ -268,8 +281,8 @@ def run_rna_seq_analysis(
         combined_ratio_png = os.path.join(ratio_dir, "rna_ribo_ratio_per_transcript.png")
         plt.savefig(combined_ratio_png)
         plt.close()
-        print(f"[RNA-SEQ] Wrote ratio barplot => {combined_ratio_png}")
+        log_info("RNA-SEQ", f"Wrote ratio barplot => {combined_ratio_png}")
     else:
-        print("[RNA-SEQ] No ratio data to plot.")
+        log_warning("RNA-SEQ", "No ratio data available to plot.")
 
-    print(f"[RNA-SEQ] Done merging => ratio stored in {ratio_dir}")
+    log_info("RNA-SEQ", f"Done merging; ratio outputs stored in {ratio_dir}")

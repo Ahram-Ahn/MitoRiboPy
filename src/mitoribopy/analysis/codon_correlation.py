@@ -9,13 +9,14 @@ import pandas as pd
 import seaborn as sns
 from scipy.stats import linregress
 
+from ..console import iter_with_progress, log_info, log_warning
 from ..plotting.style import apply_publication_style
 
 apply_publication_style()
 
 
 def run_codon_correlation(
-    inframe_analysis_dir: str,
+    translation_profile_dir: str,
     samples: list[str],
     base_sample: str,
     column: str = "CoverageDivFreq",
@@ -30,9 +31,9 @@ def run_codon_correlation(
     Two versions ("all" and "masked") are produced based on thresholds.
     CSV files and SVG plots are saved for each version.
     """
-    print(f"[COR] Starting correlation vs base='{base_sample}', column='{column}'.")
+    log_info("COR", f"Starting correlation vs base='{base_sample}', column='{column}'.")
     if output_dir is None:
-        output_dir = os.path.join(inframe_analysis_dir, "codon_correlation")
+        output_dir = os.path.join(translation_profile_dir, "codon_correlation")
     os.makedirs(output_dir, exist_ok=True)
 
     # Helper function: override stop codon value with A-site value
@@ -51,31 +52,36 @@ def run_codon_correlation(
         return df
 
     # Read base sample p-site CSV and override stop codons
-    base_p_csv = os.path.join(inframe_analysis_dir, base_sample, "codon_usage", "codon_usage_total.csv")
-    base_a_csv = os.path.join(inframe_analysis_dir, base_sample, "codon_usage", "a_site_codon_usage_total.csv")
+    base_p_csv = os.path.join(translation_profile_dir, base_sample, "codon_usage", "codon_usage_total.csv")
+    base_a_csv = os.path.join(translation_profile_dir, base_sample, "codon_usage", "a_site_codon_usage_total.csv")
     if not os.path.isfile(base_p_csv):
-        print(f"[COR] Base sample CSV not found => {base_p_csv}")
+        log_warning("COR", f"Base sample CSV not found => {base_p_csv}")
         return
     base_df = override_stop_values(base_p_csv, base_a_csv)
     if column not in base_df.columns:
-        print(f"[COR] Column '{column}' not in base_df => {base_p_csv}")
+        log_warning("COR", f"Column '{column}' not found in base sample CSV => {base_p_csv}")
         return
     base_df = base_df.rename(columns={column: "base_val"})
     base_df = base_df[["Codon", "AA", "Category", "base_val"]]
 
     corr_records = []
 
-    for sample_name in samples:
+    for sample_name in iter_with_progress(
+        list(samples),
+        component="COR",
+        noun="sample",
+        labeler=str,
+    ):
         if sample_name == base_sample:
             continue
-        sample_p_csv = os.path.join(inframe_analysis_dir, sample_name, "codon_usage", "codon_usage_total.csv")
-        sample_a_csv = os.path.join(inframe_analysis_dir, sample_name, "codon_usage", "a_site_codon_usage_total.csv")
+        sample_p_csv = os.path.join(translation_profile_dir, sample_name, "codon_usage", "codon_usage_total.csv")
+        sample_a_csv = os.path.join(translation_profile_dir, sample_name, "codon_usage", "a_site_codon_usage_total.csv")
         if not os.path.isfile(sample_p_csv):
-            print(f"[COR] No file => {sample_p_csv}, skip.")
+            log_warning("COR", f"Missing codon-usage file => {sample_p_csv}; skipping.")
             continue
         s_df = override_stop_values(sample_p_csv, sample_a_csv)
         if column not in s_df.columns:
-            print(f"[COR] '{column}' not in {sample_p_csv}, skip.")
+            log_warning("COR", f"Column '{column}' not found in {sample_p_csv}; skipping.")
             continue
         s_df = s_df.rename(columns={column: "sample_val"})
         s_df = s_df[["Codon", "AA", "Category", "sample_val"]]
@@ -83,7 +89,7 @@ def run_codon_correlation(
         # Merge based on Codon, AA, and Category
         merged = pd.merge(base_df, s_df, on=["Codon", "AA", "Category"], how="inner")
         if merged.empty:
-            print(f"[COR] No overlap => skip {sample_name}")
+            log_warning("COR", f"No overlapping codons found for sample {sample_name}; skipping.")
             continue
 
         threshold = mask_threshold
@@ -96,7 +102,10 @@ def run_codon_correlation(
             if version == "masked":
                 merged_current = merged[(merged["base_val"] <= threshold) & (merged["sample_val"] <= threshold)]
                 if merged_current.empty:
-                    print(f"[COR] No data remains after masking for {sample_name} ({version}).")
+                    log_warning(
+                        "COR",
+                        f"No data remain after masking for sample {sample_name} ({version}).",
+                    )
                     continue
             else:
                 merged_current = merged.copy()
@@ -104,7 +113,7 @@ def run_codon_correlation(
 
             out_csv = os.path.join(output_dir, f"{base_sample}_vs_{sample_name}_{version}.csv")
             merged_current.to_csv(out_csv, index=False)
-            print(f"[COR] Wrote CSV => {out_csv}")
+            log_info("COR", f"Wrote correlation CSV => {out_csv}")
 
             # Regression using CoverageDivFreq values
             slope, intercept, r_value, _, _ = linregress(merged_current["base_val"], merged_current["sample_val"])
@@ -128,7 +137,7 @@ def run_codon_correlation(
             out_svg = os.path.join(output_dir, f"{base_sample}_vs_{sample_name}_{version}.svg")
             plt.savefig(out_svg)
             plt.close()
-            print(f"[COR] Plot saved => {out_svg}")
+            log_info("COR", f"Plot saved => {out_svg}")
 
             corr_records.append({
                 "Base_Sample": base_sample,
@@ -141,11 +150,11 @@ def run_codon_correlation(
     cor_df = pd.DataFrame(corr_records)
     out_summary = os.path.join(output_dir, f"codon_correlation_summary_{base_sample}.csv")
     cor_df.to_csv(out_summary, index=False)
-    print(f"[COR] Correlation summary saved => {out_summary}")
-    print("[COR] Done correlation for all samples.")
+    log_info("COR", f"Correlation summary saved => {out_summary}")
+    log_info("COR", "Done correlation for all samples.")
 
 # Example usage:
-# run_codon_correlation(inframe_analysis_dir="path/to/inframe_analysis",
+# run_codon_correlation(translation_profile_dir="path/to/analysis_results",
 #                       samples=["sample1", "sample2", "sample3"],
 #                       base_sample="sample1",
 #                       column="CoverageDivFreq")

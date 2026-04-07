@@ -1,6 +1,5 @@
-# igv_style_plot.py
 """
-Generates IGV‑style coverage plots (one figure per transcript) for each sample.
+Generates coverage-profile plots (one figure per transcript) for each sample.
 
 Two sets of figures are produced for every transcript in every run:
 
@@ -14,25 +13,27 @@ comparisons are not confounded by different scale bars.
 The directory layout after a successful run looks like this::
 
     <output_dir>/
-        read_coverage_rpm/   *.svg   # old behaviour (unchanged)
-        p_site_coverage_rpm/ *.svg
-        read_coverage_raw/   *.svg   # NEW
-        p_site_coverage_raw/ *.svg   # NEW
+        read_coverage_rpm/   *.<plot_format>
+        p_site_coverage_rpm/ *.<plot_format>
+        read_coverage_raw/   *.<plot_format>
+        p_site_coverage_raw/ *.<plot_format>
 
 Usage
 -----
 Call the exported helper from *main.py*::
 
-    run_igv_style_plot(sample_dirs,
-                       p_site_offsets_df,
-                       offset_type,
-                       fasta_file,
-                       output_dir,
-                       args,
-                       annotation_df)
+    run_coverage_profile_plots(
+        sample_dirs,
+        selected_offsets_df,
+        offset_type,
+        fasta_file,
+        output_dir,
+        args,
+        annotation_df,
+    )
 
 `sample_dirs` must already be in the desired plotting order.
-`p_site_offsets_df` should have the columns:
+`selected_offsets_df` should have the columns:
     * Read Length
     * Most Enriched 5' Offset
     * Most Enriched 3' Offset
@@ -54,6 +55,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from Bio import SeqIO
+from ..console import iter_with_progress, log_info
+from ..data import build_sequence_display_map
 from .style import apply_publication_style
 
 apply_publication_style()
@@ -62,24 +65,25 @@ apply_publication_style()
 # Public entry point
 # -----------------------------------------------------------------------------
 
-def run_igv_style_plot(
+def run_coverage_profile_plots(
     sample_dirs: List[str],
-    p_site_offsets_df: pd.DataFrame,
+    selected_offsets_df: pd.DataFrame,
     offset_type: str,
     fasta_file: str | Path,
     output_dir: str | Path,
     args,
     annotation_df: pd.DataFrame,
+    filtered_bed_df: pd.DataFrame | None = None,
 ):
-    """Create RPM **and** raw‑count IGV‑style plots.
+    """Create RPM and raw-count coverage-profile plots.
 
     Parameters
     ----------
     sample_dirs
         List of directories, each containing the sample's BED files.
         Their order defines the row order in the multi‑panel figures.
-    p_site_offsets_df
-        DataFrame mapping read‑length → most‑enriched offset.
+    selected_offsets_df
+        DataFrame mapping read length to the selected 5' and 3' offsets.
     offset_type
         Either "5" or "3" (use 5′ or 3′ offsets).
     fasta_file
@@ -93,9 +97,10 @@ def run_igv_style_plot(
         CDS, hence not detailed here.
     """
 
-    print("[IGV] ▶︎ Generating IGV‑style plots (RPM + raw counts)…")
+    log_info("COVERAGE", "Generating coverage-profile plots (RPM + raw counts).")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    plot_format = getattr(args, "plot_format", "svg")
     offset_site = str(getattr(args, "offset_site", "p")).lower()
     if offset_site not in {"p", "a"}:
         offset_site = "p"
@@ -104,6 +109,7 @@ def run_igv_style_plot(
     # A) Parse the reference FASTA for transcript lengths
     # ------------------------------------------------------------------
     fasta_dict: Dict[str, SeqIO.SeqRecord] = SeqIO.to_dict(SeqIO.parse(str(fasta_file), "fasta"))
+    sequence_display_map = build_sequence_display_map(annotation_df, fasta_dict.keys())
 
     # ------------------------------------------------------------------
     # B) Prepare containers keyed by sample → transcript → numpy array
@@ -111,27 +117,46 @@ def run_igv_style_plot(
     read_cov_map: Dict[str, Dict[str, np.ndarray]] = {}
     psite_cov_map: Dict[str, Dict[str, np.ndarray]] = {}
 
-    sample_list: List[Tuple[str, Path]] = [
-        (Path(s).name, Path(s)) for s in sample_dirs
+    sample_list: List[Tuple[str, Path | None]] = [
+        (Path(s).name, (None if filtered_bed_df is not None else Path(s))) for s in sample_dirs
     ]
 
     # ------------------------------------------------------------------
     # C) Gather per‑position coverage for every sample
     # ------------------------------------------------------------------
-    for sample, sdir in sample_list:
+    for sample, sdir in iter_with_progress(
+        sample_list,
+        component="COVERAGE",
+        noun="sample",
+        labeler=lambda item: item[0],
+    ):
         read_cov_map[sample] = {}
         psite_cov_map[sample] = {}
 
-        bed_files = [f for f in os.listdir(sdir) if f.endswith(".bed")]
-        for bed in bed_files:
-            # Expect file names like  …_<READLEN>nt.bed
-            m = re.search(r"_(\d+)nt\.bed$", bed)
-            if not m:
-                continue
-            rlen = int(m.group(1))
+        if filtered_bed_df is not None:
+            sample_bed_df = filtered_bed_df[filtered_bed_df["sample_name"] == sample].copy()
+            read_length_blocks = [
+                (int(read_length), sample_bed_df[sample_bed_df["read_length"] == read_length].copy())
+                for read_length in sorted(sample_bed_df["read_length"].dropna().unique())
+            ]
+        else:
+            bed_files = [f for f in os.listdir(sdir) if f.endswith(".bed")]
+            read_length_blocks = []
+            for bed in bed_files:
+                m = re.search(r"_(\d+)nt\.bed$", bed)
+                if not m:
+                    continue
+                rlen = int(m.group(1))
+                bed_df = pd.read_csv(sdir / bed, sep="\t", header=None)
+                if bed_df.shape[1] < 3:
+                    continue
+                bed_df.columns = ["chrom", "start", "end", "name", "score", "strand"][: bed_df.shape[1]]
+                read_length_blocks.append((rlen, bed_df))
+
+        for rlen, bed_df in read_length_blocks:
 
             # Fetch offset for this read length
-            row = p_site_offsets_df[p_site_offsets_df["Read Length"] == rlen]
+            row = selected_offsets_df[selected_offsets_df["Read Length"] == rlen]
             if row.empty:
                 continue
             if offset_type == "5":
@@ -142,40 +167,39 @@ def run_igv_style_plot(
                 continue
             offset_val = int(offset_val)
 
-            # Parse BED
-            with open(sdir / bed) as fh:
-                for line in fh:
-                    if line.startswith("#"):
-                        continue
-                    chrom, start, end, *_ = line.rstrip().split("\t")
-                    if chrom not in fasta_dict:
-                        continue
-                    start, end = int(start), int(end)
-                    length = end - start
+            bed_df["start"] = pd.to_numeric(bed_df["start"], errors="coerce")
+            bed_df["end"] = pd.to_numeric(bed_df["end"], errors="coerce")
+            bed_df.dropna(subset=["start", "end"], inplace=True)
+            bed_df["start"] = bed_df["start"].astype(int)
+            bed_df["end"] = bed_df["end"].astype(int)
+            bed_df = bed_df[bed_df["end"] > bed_df["start"]].copy()
 
-                    # Update read‑coverage
-                    arr_read = read_cov_map[sample].setdefault(
-                        chrom, np.zeros(len(fasta_dict[chrom].seq), dtype=int)
-                    )
-                    arr_read[start:end] += 1
+            for chrom, local_df in bed_df.groupby("chrom", sort=False):
+                if chrom not in fasta_dict:
+                    continue
 
-                    # Update P‑site coverage
-                    if offset_type == "5":
-                        if offset_site == "p":
-                            p_pos = start + offset_val
-                        else:
-                            # Offset points to A-site in this mode; convert to P-site.
-                            p_pos = start + offset_val - 3
-                    else:  # 3′ offset
-                        if offset_site == "p":
-                            p_pos = end - offset_val - 1
-                        else:
-                            # Offset points to A-site in this mode; convert to P-site.
-                            p_pos = end - offset_val - 4
+                arr_read = read_cov_map[sample].setdefault(
+                    chrom, np.zeros(len(fasta_dict[chrom].seq), dtype=int)
+                )
+                for start, end in zip(local_df["start"], local_df["end"]):
+                    arr_read[int(start): int(end)] += 1
+
+                if offset_type == "5":
+                    if offset_site == "p":
+                        p_positions = local_df["start"] + offset_val
+                    else:
+                        p_positions = local_df["start"] + offset_val - 3
+                else:  # 3′ offset
+                    if offset_site == "p":
+                        p_positions = local_df["end"] - offset_val - 1
+                    else:
+                        p_positions = local_df["end"] - offset_val - 4
+
+                arr_psite = psite_cov_map[sample].setdefault(
+                    chrom, np.zeros(len(fasta_dict[chrom].seq), dtype=int)
+                )
+                for p_pos in p_positions.astype(int):
                     if 0 <= p_pos < len(arr_read):
-                        arr_psite = psite_cov_map[sample].setdefault(
-                            chrom, np.zeros(len(fasta_dict[chrom].seq), dtype=int)
-                        )
                         arr_psite[p_pos] += 1
 
     # ------------------------------------------------------------------
@@ -264,9 +288,13 @@ def run_igv_style_plot(
             ax.set_xticks(np.arange(0, seqlen, 100))
             ax.tick_params(axis="x", rotation=45)
 
-        fig.suptitle(f"{tr} - {title_suffix}", fontsize=16, fontweight="bold")
+        fig.suptitle(
+            f"{sequence_display_map.get(tr, tr)} - {title_suffix}",
+            fontsize=16,
+            fontweight="bold",
+        )
         fig.tight_layout()
-        out_path = out_dir / f"{tr}_{title_suffix.replace(' ', '_').lower()}.svg"
+        out_path = out_dir / f"{tr}_{title_suffix.replace(' ', '_').lower()}.{plot_format}"
         fig.savefig(out_path)
         plt.close(fig)
         return out_path
@@ -283,6 +311,9 @@ def run_igv_style_plot(
         # RAW
         out_r_raw = _plot_cov(tr, raw_read_cov_map, raw_read_global_max, read_dir_raw, "Read Coverage (Raw Counts)", "steelblue")
         out_p_raw = _plot_cov(tr, raw_psite_cov_map, raw_psite_global_max, psite_dir_raw, "P-site Density (Raw Counts)", "forestgreen")
-        print(f"[IGV] {tr} -> rpm:({out_r_rpm.name},{out_p_rpm.name}) | raw:({out_r_raw.name},{out_p_raw.name})")
+        log_info(
+            "COVERAGE",
+            f"{tr} -> rpm:({out_r_rpm.name},{out_p_rpm.name}) | raw:({out_r_raw.name},{out_p_raw.name})",
+        )
 
-    print("[IGV] ✔ All IGV‑style plots generated.")
+    log_info("COVERAGE", "All coverage-profile plots generated.")

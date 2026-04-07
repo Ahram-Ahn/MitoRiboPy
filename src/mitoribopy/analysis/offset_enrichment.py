@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-import os
-
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
-import seaborn as sns
+from ..console import log_info, log_warning
+from ..data import resolve_sequence_name
 
-from ..plotting.style import apply_publication_style
+
+def _validate_offset_mask_nt(offset_mask_nt: int) -> int:
+    """Validate the near-anchor masking window."""
+    offset_mask_nt = int(offset_mask_nt)
+    if offset_mask_nt < 0:
+        raise ValueError("offset_mask_nt must be zero or a positive integer.")
+    return offset_mask_nt
 
 
-apply_publication_style()
+def _is_masked_plot_offset(offset: int, offset_mask_nt: int) -> bool:
+    """Return True when an offset lies in the masked near-anchor window."""
+    return 0 < abs(int(offset)) <= offset_mask_nt
 
 
 def _apply_site_shift(
@@ -48,8 +53,11 @@ def compute_offsets(
             results.append((read_length, int(manual_offset), 0))
         return pd.DataFrame(results, columns=["Read Length", "5' Offset", "3' Offset"])
 
+    available_sequence_names = bed_df["chrom"].dropna().astype(str).unique()
     for _, annotation_row in annotation_df.iterrows():
-        transcript_name = annotation_row["transcript"]
+        transcript_name = resolve_sequence_name(annotation_row, available_sequence_names)
+        if transcript_name is None:
+            continue
         codon_start = (
             int(annotation_row["start_codon"])
             if align_to == "start"
@@ -106,12 +114,14 @@ def create_csv_for_offset_enrichment(
     output_csv: str,
     offset_limit: int = 23,
     manual_offset: int | None = None,
+    offset_mask_nt: int = 5,
     offset_site: str = "p",
     codon_overlap_mode: str = "full",
     strain: str = "y",
 ) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     """Create an offset enrichment summary table and write it as CSV."""
     _ = strain
+    offset_mask_nt = _validate_offset_mask_nt(offset_mask_nt)
     offsets_df = compute_offsets(
         bed_df=bed_df,
         annotation_df=annotation_df,
@@ -122,7 +132,7 @@ def create_csv_for_offset_enrichment(
     )
 
     if offsets_df.empty:
-        print("[create_csv_for_offset_enrichment] No reads overlapping codons.")
+        log_warning("OFFSET", "No reads overlapping the anchor codons were found.")
         return None, None
 
     offsets_df["File"] = "All"
@@ -138,14 +148,24 @@ def create_csv_for_offset_enrichment(
         three_offset = row["3' Offset"]
         five_axis_offset = -five_offset
 
-        if five_axis_offset in five_range:
+        if five_axis_offset in five_range and not _is_masked_plot_offset(
+            five_axis_offset, offset_mask_nt
+        ):
             summary_df.at[read_length, five_axis_offset] += 1
-        if three_offset in three_range:
+        if three_offset in three_range and not _is_masked_plot_offset(
+            three_offset, offset_mask_nt
+        ):
             summary_df.at[read_length, three_offset] += 1
 
     summary_df.reset_index(inplace=True)
     summary_df.to_csv(output_csv, index=False)
-    print(f"[create_csv_for_offset_enrichment] Offset enrichment CSV => {output_csv}")
+    if offset_mask_nt > 0:
+        log_info(
+            "OFFSET",
+            "Masked near-anchor offsets "
+            f"-{offset_mask_nt}..-1 and +1..+{offset_mask_nt} nt from enrichment counts.",
+        )
+    log_info("OFFSET", f"Offset enrichment CSV saved => {output_csv}")
     return summary_df, offsets_df
 
 
@@ -157,164 +177,32 @@ def plot_offset_enrichment(
     x_breaks: list[int] | None = None,
     line_plot_style: str = "combined",
     offset_limit: int = 20,
-    p_site_offsets: pd.DataFrame | None = None,
+    offset_mask_nt: int = 5,
+    selected_offsets: pd.DataFrame | None = None,
     offset_min: int = 11,
     offset_max: int = 20,
+    five_offset_min: int | None = None,
+    five_offset_max: int | None = None,
+    three_offset_min: int | None = None,
+    three_offset_max: int | None = None,
 ) -> None:
-    """Plot offset heatmap and per-read-length line plots."""
-    if summary_df is None or summary_df.empty:
-        print("[plot_offset_enrichment] No data available for plotting.")
-        return
+    """Backward-compatible wrapper for the visualization module."""
+    from ..plotting.visualization import plot_offset_enrichment as render_offset_enrichment
 
-    print("[plot_offset_enrichment] Plotting offset enrichment...")
-    os.makedirs(plot_dir, exist_ok=True)
-
-    offset_positions = list(range(-offset_limit, offset_limit + 1))
-    melted = summary_df.melt(
-        id_vars=["Read Length"],
-        value_vars=offset_positions,
-        var_name="Offset",
-        value_name="Count",
+    return render_offset_enrichment(
+        summary_df=summary_df,
+        align_to=align_to,
+        plot_dir=plot_dir,
+        plot_format=plot_format,
+        x_breaks=x_breaks,
+        line_plot_style=line_plot_style,
+        offset_limit=offset_limit,
+        offset_mask_nt=offset_mask_nt,
+        selected_offsets=selected_offsets,
+        offset_min=offset_min,
+        offset_max=offset_max,
+        five_offset_min=five_offset_min,
+        five_offset_max=five_offset_max,
+        three_offset_min=three_offset_min,
+        three_offset_max=three_offset_max,
     )
-    melted["Offset"] = melted["Offset"].astype(int)
-
-    heatmap_data = melted.pivot_table(
-        index="Read Length",
-        columns="Offset",
-        values="Count",
-        aggfunc="sum",
-        fill_value=0,
-    )
-    heatmap_data = heatmap_data.reindex(sorted(heatmap_data.columns), axis=1)
-
-    if x_breaks is None:
-        x_breaks = list(range(-offset_limit, offset_limit + 1, 5))
-
-    plt.figure(figsize=(12, 3))
-    sns.heatmap(
-        heatmap_data,
-        cmap="Reds",
-        linewidths=0.5,
-        cbar_kws={"label": "Read Count"},
-        vmin=0,
-    )
-    plt.title(f"Offset Enrichment ({align_to.capitalize()} Codon)", fontsize=20, fontweight="bold")
-    plt.xlabel("Offset Position (nt)", fontsize=16)
-    plt.ylabel("Read Length (nt)", fontsize=16)
-    plt.xticks(
-        ticks=np.arange(len(heatmap_data.columns)) + 0.5,
-        labels=heatmap_data.columns,
-        rotation=45,
-    )
-    plt.tight_layout()
-    heatmap_filename = f"offset_enrichment_heatmap_{align_to}.{plot_format}"
-    plt.savefig(os.path.join(plot_dir, heatmap_filename))
-    plt.close()
-    print(f"[plot_offset_enrichment] Heatmap saved => {os.path.join(plot_dir, heatmap_filename)}")
-
-    melted["Offset Type"] = np.where(melted["Offset"] < 0, "5'-offset", "3'-offset")
-
-    if line_plot_style == "combined":
-        read_lengths = sorted(melted["Read Length"].unique())
-        num_read_lengths = len(read_lengths)
-        fig, axes = plt.subplots(
-            nrows=num_read_lengths,
-            ncols=1,
-            figsize=(10, 3 * num_read_lengths),
-            sharex=True,
-        )
-        if num_read_lengths == 1:
-            axes = [axes]
-
-        for ax, read_length in zip(axes, read_lengths):
-            data = melted[melted["Read Length"] == read_length]
-            sns.lineplot(x="Offset", y="Count", hue="Offset Type", data=data, marker="o", ax=ax)
-            ax.set_title(f"Read Length ({read_length} nt)", fontsize=16, fontweight="bold")
-            ax.set_xlabel("Offset Position (nt)", fontsize=14)
-            ax.set_ylabel("Read Count", fontsize=14)
-            ax.grid(True, linestyle="--", alpha=0.5)
-            ax.set_xticks(x_breaks)
-
-            if p_site_offsets is not None:
-                row = p_site_offsets[p_site_offsets["Read Length"] == read_length]
-                if not row.empty:
-                    if "Most Enriched 5' Offset" in row:
-                        five_offset = -row["Most Enriched 5' Offset"].values[0]
-                        if offset_min <= abs(five_offset) <= offset_max:
-                            ax.axvline(
-                                x=five_offset,
-                                color="black",
-                                linestyle="--",
-                                label=f"5'-offset: {five_offset}",
-                            )
-                    if "Most Enriched 3' Offset" in row:
-                        three_offset = row["Most Enriched 3' Offset"].values[0]
-                        if offset_min <= abs(three_offset) <= offset_max:
-                            ax.axvline(
-                                x=three_offset,
-                                color="black",
-                                linestyle="--",
-                                label=f"3'-offset: {three_offset}",
-                            )
-            ax.legend()
-
-        plt.tight_layout()
-        lineplot_filename = f"offset_enrichment_combined_lineplots_{align_to}.{plot_format}"
-        plt.savefig(os.path.join(plot_dir, lineplot_filename))
-        plt.close()
-        print(
-            "[plot_offset_enrichment] Combined line plots saved => "
-            f"{os.path.join(plot_dir, lineplot_filename)}"
-        )
-    elif line_plot_style == "separate":
-        for read_length in sorted(melted["Read Length"].unique()):
-            data = melted[melted["Read Length"] == read_length]
-            plt.figure(figsize=(10, 5))
-            sns.lineplot(x="Offset", y="Count", hue="Offset Type", data=data, marker="o")
-
-            plt.title(
-                f"Offset Enrichment (Read Len {read_length} nt) vs {align_to.capitalize()} Codon",
-                fontsize=16,
-            )
-            plt.xlabel("Offset Position (nt)", fontsize=14)
-            plt.ylabel("Read Count", fontsize=14)
-            plt.xticks(ticks=x_breaks)
-            plt.grid(True, linestyle="--", alpha=0.5)
-
-            if p_site_offsets is not None:
-                row = p_site_offsets[p_site_offsets["Read Length"] == read_length]
-                if not row.empty:
-                    if "Most Enriched 5' Offset" in row:
-                        five_offset = -row["Most Enriched 5' Offset"].values[0]
-                        if offset_min <= abs(five_offset) <= offset_max:
-                            plt.axvline(
-                                x=five_offset,
-                                color="black",
-                                linestyle="--",
-                                label=f"5'-offset: {five_offset}",
-                            )
-                    if "Most Enriched 3' Offset" in row:
-                        three_offset = row["Most Enriched 3' Offset"].values[0]
-                        if offset_min <= abs(three_offset) <= offset_max:
-                            plt.axvline(
-                                x=three_offset,
-                                color="black",
-                                linestyle="--",
-                                label=f"3'-offset: {three_offset}",
-                            )
-
-            plt.legend()
-            lineplot_filename = (
-                f"offset_enrichment_lineplot_read_{read_length}_{align_to}.{plot_format}"
-            )
-            plt.savefig(os.path.join(plot_dir, lineplot_filename))
-            plt.close()
-            print(
-                f"[plot_offset_enrichment] Line plot for read_len {read_length} => "
-                f"{lineplot_filename}"
-            )
-    else:
-        print("[plot_offset_enrichment] Invalid line_plot_style. Choose 'combined' or 'separate'.")
-
-    print(f"[plot_offset_enrichment] All offset plots saved to {plot_dir}")
-

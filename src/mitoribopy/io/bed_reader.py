@@ -4,15 +4,8 @@ from __future__ import annotations
 
 import os
 
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
 import pandas as pd
-import seaborn as sns
-
-from ..plotting.style import apply_publication_style
-
-
-apply_publication_style()
+from ..console import iter_with_progress, log_info, log_warning
 
 
 def process_bed_files(
@@ -22,43 +15,49 @@ def process_bed_files(
     annotation_df: pd.DataFrame,
     rpf_range: range | list[int],
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Filter BED files by read length, split by length, and write per-sample outputs."""
+    """Filter BED files by read length and return in-memory per-sample data."""
     _ = organism
     _ = annotation_df
 
-    bed_files = [file_name for file_name in os.listdir(input_dir) if file_name.endswith(".bed")]
+    from ..plotting.visualization import plot_read_length_distribution
+
+    bed_files = sorted(
+        file_name for file_name in os.listdir(input_dir) if file_name.endswith(".bed")
+    )
     if not bed_files:
-        print("No .bed files found in the directory.")
+        log_warning("BED", f"No .bed files found in {input_dir}.")
         return pd.DataFrame(), []
 
-    print(
-        f"Found {len(bed_files)} BED files to process in '{input_dir}' "
-        f"for filtering range {rpf_range}."
+    log_info(
+        "BED",
+        f"Found {len(bed_files)} BED file(s) in {input_dir} for filtering range {list(rpf_range)}.",
     )
 
-    filtered_bed_dir = os.path.join(output_dir, "filtered_bed")
-    os.makedirs(filtered_bed_dir, exist_ok=True)
-
     all_filtered_bed: list[pd.DataFrame] = []
-    sample_dirs: list[str] = []
+    sample_names: list[str] = []
     read_length_summary: list[dict[str, object]] = []
 
-    for bed_file in bed_files:
+    for bed_file in iter_with_progress(
+        bed_files,
+        component="BED",
+        noun="BED file",
+        labeler=str,
+    ):
         if bed_file.startswith("filtered_"):
-            print(f"Skipping already filtered file: {bed_file}")
+            log_info("BED", f"Skipping previously filtered file: {bed_file}")
             continue
 
         bed_file_path = os.path.join(input_dir, bed_file)
         try:
             bed_df = pd.read_csv(bed_file_path, sep="\t", header=None)
         except Exception as exc:
-            print(f"Error reading {bed_file}: {exc}")
+            log_warning("BED", f"Error reading {bed_file}: {exc}")
             continue
 
         if bed_df.shape[1] >= 3:
             bed_columns = ["chrom", "start", "end", "name", "score", "strand"][: bed_df.shape[1]]
         else:
-            print(f"Unexpected BED file format in {bed_file}.")
+            log_warning("BED", f"Unexpected BED format in {bed_file}; skipping.")
             continue
 
         bed_df.columns = bed_columns
@@ -71,45 +70,16 @@ def process_bed_files(
 
         filtered_bed_df = bed_df[bed_df["read_length"].isin(rpf_range)].copy()
         if filtered_bed_df.empty:
-            print(f"No reads of specified lengths in {bed_file} for rpf_range={rpf_range}.")
+            log_warning("BED", f"No reads of requested lengths in {bed_file}; skipping.")
             continue
 
         sample_name = os.path.splitext(bed_file)[0]
-        sample_dir = os.path.join(filtered_bed_dir, sample_name)
-        os.makedirs(sample_dir, exist_ok=True)
-        sample_dirs.append(sample_dir)
-
-        for read_length in sorted(filtered_bed_df["read_length"].unique()):
-            sub_df = filtered_bed_df[filtered_bed_df["read_length"] == read_length]
-            out_bed_name = f"{sample_name}_{read_length}nt.bed"
-            out_bed_path = os.path.join(sample_dir, out_bed_name)
-            sub_df.to_csv(out_bed_path, sep="\t", header=False, index=False)
+        filtered_bed_df["sample_name"] = sample_name
+        sample_names.append(sample_name)
 
         read_length_counts = filtered_bed_df["read_length"].value_counts().sort_index()
         plot_path = os.path.join(output_dir, f"{sample_name}_read_length_distribution.svg")
-
-        plt.figure(figsize=(6, 4))
-        plt.bar(read_length_counts.index, read_length_counts.values, width=0.6, color="skyblue")
-        plt.xlabel("Read Length (nt)", fontsize=14, fontname="Arial", fontweight="bold")
-        plt.ylabel("Read Count", fontsize=14, fontname="Arial")
-        plt.title(
-            f"Read Length Distribution ({sample_name})",
-            fontsize=16,
-            fontweight="bold",
-            fontname="Arial",
-        )
-        plt.xticks(
-            read_length_counts.index,
-            rotation=45,
-            fontsize=10,
-            fontweight="bold",
-            fontname="Arial",
-        )
-        plt.gca().yaxis.set_major_locator(MaxNLocator(nbins=4))
-        plt.tight_layout()
-        plt.savefig(plot_path)
-        plt.close()
-        print(f"[process_bed_files] Read length distribution plot saved => {plot_path}")
+        plot_read_length_distribution(read_length_counts, sample_name, plot_path)
 
         read_length_summary.append(
             {
@@ -137,10 +107,10 @@ def process_bed_files(
 
         summary_df = pd.DataFrame(summary_rows)
         summary_df.to_csv(summary_csv_path, index=False)
-        print(f"[process_bed_files] Filtered read length summary => {summary_csv_path}")
-        return concatenated_bed, sample_dirs
+        log_info("BED", f"Filtered read-length summary saved => {summary_csv_path}")
+        return concatenated_bed, sample_names
 
-    print("[process_bed_files] No reads found in the specified range => returning empty.")
+    log_warning("BED", "No reads remained after length filtering; returning empty dataset.")
     return pd.DataFrame(), []
 
 
@@ -151,22 +121,29 @@ def compute_unfiltered_read_length_summary(
     read_length_range: tuple[int, int] = (15, 40),
 ) -> None:
     """Build unfiltered per-sample read-length summary table with optional RPM."""
-    bed_files = [file_name for file_name in os.listdir(input_dir) if file_name.endswith(".bed")]
+    bed_files = sorted(
+        file_name for file_name in os.listdir(input_dir) if file_name.endswith(".bed")
+    )
     if not bed_files:
-        print(f"[compute_unfiltered_read_length_summary] No .bed files in {input_dir}.")
+        log_warning("QC", f"No .bed files found in {input_dir}.")
         return
 
     all_rows: list[dict[str, int | float | str]] = []
     missing_norm_samples: set[str] = set()
 
-    for bed_file in bed_files:
+    for bed_file in iter_with_progress(
+        bed_files,
+        component="QC",
+        noun="BED file",
+        labeler=str,
+    ):
         bed_path = os.path.join(input_dir, bed_file)
         sample_name = os.path.splitext(bed_file)[0]
 
         try:
             df = pd.read_csv(bed_path, sep="\t", header=None)
         except Exception as exc:
-            print(f"[compute_unfiltered_read_length_summary] Error reading {bed_file}: {exc}")
+            log_warning("QC", f"Error reading {bed_file}: {exc}")
             continue
 
         if df.shape[1] >= 3:
@@ -174,9 +151,7 @@ def compute_unfiltered_read_length_summary(
         elif df.shape[1] == 2:
             colnames = ["chrom", "start"]
         else:
-            print(
-                f"[compute_unfiltered_read_length_summary] Unexpected BED format in {bed_file}, skipping."
-            )
+            log_warning("QC", f"Unexpected BED format in {bed_file}; skipping.")
             continue
 
         df.columns = colnames
@@ -221,17 +196,18 @@ def compute_unfiltered_read_length_summary(
             )
 
     if not all_rows:
-        print("[compute_unfiltered_read_length_summary] No data after filtering by length range.")
+        log_warning("QC", "No reads remained after unfiltered read-length QC filtering.")
         return
 
     result_df = pd.DataFrame(all_rows)
     result_df.to_csv(output_csv, index=False)
-    print(f"[compute_unfiltered_read_length_summary] Unfiltered summary (25-50 nt) saved => {output_csv}")
+    log_info("QC", f"Unfiltered read-length summary saved => {output_csv}")
     if missing_norm_samples:
         missing_list = ", ".join(sorted(missing_norm_samples))
-        print(
-            "[compute_unfiltered_read_length_summary] WARNING: No total read-count entry "
-            f"for sample(s): {missing_list}. RPM was set to 0 for these sample(s)."
+        log_warning(
+            "QC",
+            "No total read-count entry found for sample(s): "
+            f"{missing_list}. RPM was set to 0 for these sample(s).",
         )
 
 
@@ -240,42 +216,11 @@ def plot_unfiltered_read_length_heatmap(
     output_png_base: str,
     value_col: str = "count",
 ) -> None:
-    """Plot unfiltered read-length heatmap from summary table."""
-    if not os.path.exists(summary_csv_path):
-        print(f"[plot_unfiltered_read_length_heatmap] {summary_csv_path} not found => skip heatmap.")
-        return
+    """Backward-compatible wrapper for the visualization module."""
+    from ..plotting.visualization import plot_unfiltered_read_length_heatmap as render_heatmap
 
-    df = pd.read_csv(summary_csv_path)
-    if df.empty:
-        print("[plot_unfiltered_read_length_heatmap] No data in summary => skip.")
-        return
-
-    pivot_df = df.pivot(index="sample_name", columns="read_length", values=value_col).fillna(0)
-
-    plt.figure(figsize=(10, max(3, len(pivot_df) * 0.6)))
-    ax = sns.heatmap(
-        pivot_df,
-        cmap=("Blues" if value_col.upper() == "RPM" else "Greens"),
-        linewidths=0.5,
-        cbar_kws={"label": value_col.upper()},
+    return render_heatmap(
+        summary_csv_path=summary_csv_path,
+        output_png_base=output_png_base,
+        value_col=value_col,
     )
-    plt.title(
-        f"Read-Length Heatmap ({value_col.upper()})",
-        fontsize=16,
-        fontweight="bold",
-        fontname="Arial",
-    )
-    plt.xlabel("Read Length (nt)", fontsize=14, fontname="Arial")
-    plt.ylabel("Sample Name", fontsize=14, fontname="Arial")
-
-    cbar = ax.collections[0].colorbar
-    cbar.ax.set_ylabel(value_col.upper(), fontsize=12, fontname="Arial")
-    cbar.ax.tick_params(labelsize=10)
-
-    plt.tight_layout()
-
-    out_png = f"{output_png_base}_{value_col}.svg"
-    plt.savefig(out_png)
-    plt.close()
-    print(f"[plot_unfiltered_read_length_heatmap] Heatmap saved => {out_png}")
-

@@ -1,17 +1,4 @@
-"""MitoRiboPy command-line entrypoint.
-
-Phase I behavior:
-- forwards arguments to the existing legacy pipeline parser in ``main.py``
-- preserves current command behavior while package refactor is in progress
-
-Examples
---------
-Run with legacy arguments:
-    mitoribopy -s h -f human.fa --directory input_bed --align stop
-
-Optional compatibility subcommand form:
-    mitoribopy run -s h -f human.fa --directory input_bed --align stop
-"""
+"""MitoRiboPy command-line entrypoint."""
 
 from __future__ import annotations
 
@@ -19,7 +6,7 @@ import sys
 from typing import Iterable
 
 from . import __version__
-from .pipeline.runner import run_legacy_pipeline
+from .pipeline.runner import run_pipeline_cli
 
 
 def _normalize_args(argv: Iterable[str]) -> list[str]:
@@ -37,7 +24,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"MitoRiboPy {__version__}")
         return 0
     try:
-        return run_legacy_pipeline(args)
+        return run_pipeline_cli(args)
     except RuntimeError as exc:
         print(f"[mitoribopy] {exc}", file=sys.stderr)
         return 2

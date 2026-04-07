@@ -1,59 +1,56 @@
-"""In-frame footprint, frame-usage, and codon-usage analysis."""
+"""Translation-profile analysis for footprint density, frame usage, and codon usage."""
 
 import os
 import re
+
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from math import log2
-from ..plotting.style import apply_publication_style
-
-from Bio import SeqIO
-from ..data import (
-    yeast_mitochondrial_codon_table,
-    human_mitochondrial_codon_table
+from ..console import iter_with_progress, log_info
+from ..plotting.translation_profile_plots import (
+    plot_codon_usage_dataframe,
+    plot_frame_usage_by_transcript,
+    plot_frame_usage_total,
+    plot_site_depth_profile,
 )
 
-apply_publication_style()
+from ..data import (
+    build_sequence_display_map,
+    load_codon_table,
+    resolve_sequence_name,
+    resolve_start_codons,
+    transcript_display_title,
+)
+from Bio import SeqIO
 
-def run_inframe_codon_analysis(
+def run_translation_profile_analysis(
     sample_dirs,
-    a_site_offsets_df,
+    selected_offsets_df,
     offset_type,
     fasta_file,
     output_dir,
     args,
-    annotation_df
+    annotation_df,
+    filtered_bed_df=None,
 ):
-    """
-    Analyzes coverage in frames 0,1,2, producing codon usage CSV/plots (both P-site & A-site)
-    and frame usage plots. We respect each transcript’s start_codon when iterating over codons
-    to ensure proper in-frame alignment.
+    """Compute translation-profile summaries and write the paired plotting outputs."""
 
-    If args.merge_density == True:
-        We add coverage from the adjacent nucleotides (i - 1, i + 1) to the central position i.
-    """
-
-    print("Starting in-frame codon analysis (frames 0/1/2). merge_density =", args.merge_density)
+    log_info(
+        "PROFILE",
+        f"Starting translation-profile analysis (merge_density={args.merge_density}).",
+    )
     os.makedirs(output_dir, exist_ok=True)
 
     # 1) Load FASTA
     fasta_dict = SeqIO.to_dict(SeqIO.parse(fasta_file, "fasta"))
 
-    # 2) Pick codon table
-    if args.strain == "y":
-        codon_table = yeast_mitochondrial_codon_table
-        start_codons = {"ATG"}
-        hydrophobic = {"A", "F", "L", "I", "M", "V", "W", "Y"}
-        hydrophilic = {"S", "T", "N", "Q"}
-        ionic = {"K", "R", "H", "D", "E"}
-    else:
-        codon_table = human_mitochondrial_codon_table
-        start_codons = {"ATG", "ATA"}
-        hydrophobic = {"A", "F", "L", "I", "M", "V", "W", "Y"}
-        hydrophilic = {"S", "T", "N", "Q"}
-        ionic = {"K", "R", "H", "D", "E"}
+    # 2) Pick codon table and start codons
+    codon_table = getattr(args, "resolved_codon_table", None)
+    if codon_table is None:
+        codon_table = load_codon_table(preset=getattr(args, "strain", None))
+    start_codons = set(resolve_start_codons(getattr(args, "strain", "custom"), getattr(args, "start_codons", None)))
+    hydrophobic = {"A", "F", "L", "I", "M", "V", "W", "Y"}
+    hydrophilic = {"S", "T", "N", "Q"}
+    ionic = {"K", "R", "H", "D", "E"}
 
 
     # 3) Define codon classification
@@ -97,20 +94,92 @@ def run_inframe_codon_analysis(
     all_codon_keys = sorted(all_codon_keys, key=sort_key)
     codon_label_order = [f"{cod}-{aa}" for cod, aa, _ in all_codon_keys]
 
+    def build_codon_usage_dataframe(
+        transcript_name,
+        usage_dict,
+        freq_dict,
+        *,
+        masked_key=None,
+        aggregate_cov=None,
+        aggregate_freq=None,
+    ):
+        rows = []
+        cdf_map = {}
+
+        for key in all_codon_keys:
+            if masked_key is not None and key == masked_key:
+                c_val = 0
+                f_val = 0
+            else:
+                c_val = usage_dict.get(key, 0)
+                f_val = freq_dict.get(key, 0)
+
+            if aggregate_cov is not None:
+                aggregate_cov[key] = aggregate_cov.get(key, 0) + c_val
+            if aggregate_freq is not None:
+                aggregate_freq[key] = aggregate_freq.get(key, 0) + f_val
+
+            cdf_map[key] = c_val / f_val if f_val > 0 else 0
+
+        sum_cdf = sum(cdf_map.values())
+        for key in all_codon_keys:
+            if masked_key is not None and key == masked_key:
+                c_val = 0
+                f_val = 0
+            else:
+                c_val = usage_dict.get(key, 0)
+                f_val = freq_dict.get(key, 0)
+
+            cdf_val = cdf_map.get(key, 0)
+            normp = cdf_val / sum_cdf if sum_cdf > 0 else 0
+            rows.append({
+                "Transcript": transcript_name,
+                "Codon": key[0],
+                "AA": key[1],
+                "Category": key[2],
+                "Coverage": c_val,
+                "Frequency": f_val,
+                "CoverageDivFreq": cdf_val,
+                "NormalizedProp": normp,
+            })
+
+        return pd.DataFrame(rows)
+
+    annotation_df = annotation_df.copy()
+    if "start_codon" not in annotation_df.columns and {"l_utr5"}.issubset(annotation_df.columns):
+        annotation_df["start_codon"] = annotation_df["l_utr5"]
+    if "stop_codon" not in annotation_df.columns and {"l_tr", "l_utr3"}.issubset(annotation_df.columns):
+        annotation_df["stop_codon"] = annotation_df["l_tr"] - annotation_df["l_utr3"] - 3
+
+    available_sequence_names = set(fasta_dict.keys())
+    annotation_df["resolved_sequence_name"] = annotation_df.apply(
+        lambda row: resolve_sequence_name(row, available_sequence_names),
+        axis=1,
+    )
+    resolved_annotation_df = annotation_df[annotation_df["resolved_sequence_name"].notna()].copy()
+    annotation_lookup = resolved_annotation_df.drop_duplicates("transcript").set_index("transcript")
+    annotation_transcripts = set(annotation_lookup.index)
+    annotated_sequence_ids = set(resolved_annotation_df["resolved_sequence_name"])
+    sequence_display_map = build_sequence_display_map(resolved_annotation_df, available_sequence_names)
+
     # 5) Precompute reference codon frequency in frame0
     transcript_codon_counts = {}
-    for t_name in annotation_df["transcript"].unique():
-        if t_name not in fasta_dict:
+    for t_name in iter_with_progress(
+        list(annotation_lookup.index),
+        component="PROFILE",
+        noun="reference transcript",
+        labeler=str,
+    ):
+        ann_row = annotation_lookup.loc[t_name]
+        resolved_sequence_name = ann_row["resolved_sequence_name"]
+        if resolved_sequence_name not in fasta_dict:
             continue
-        seq_obj = fasta_dict[t_name]
+        seq_obj = fasta_dict[resolved_sequence_name]
         seq_str = str(seq_obj.seq).upper()
-
-        ann_row = annotation_df[annotation_df["transcript"] == t_name].iloc[0]
         start_pos = ann_row["start_codon"]
         stop_pos = ann_row["stop_codon"] + 3  # typically +3 to include last codon
         start_pos = max(start_pos, 0)
         stop_pos = min(stop_pos, len(seq_str))
-        print(f"{t_name}", start_pos, stop_pos)
         freq_map = {}
         for i in range(start_pos, stop_pos - 2, 3):
             cod3 = seq_str[i:i + 3]
@@ -133,9 +202,14 @@ def run_inframe_codon_analysis(
     # -----------
     # Process Each Sample
     # -----------
-    for sample_dir in sample_dirs:
+    for sample_dir in iter_with_progress(
+        list(sample_dirs),
+        component="PROFILE",
+        noun="sample",
+        labeler=os.path.basename,
+    ):
         sample_name = os.path.basename(sample_dir)
-        print(f"\nProcessing sample => {sample_name}")
+        log_info("PROFILE", f"Processing sample => {sample_name}")
 
         sample_out = os.path.join(output_dir, sample_name)
         os.makedirs(sample_out, exist_ok=True)
@@ -153,7 +227,6 @@ def run_inframe_codon_analysis(
         debug_dir = os.path.join(sample_out, "debug_csv")
         os.makedirs(debug_dir, exist_ok=True)
 
-        bed_files = [f for f in os.listdir(sample_dir) if f.endswith(".bed")]
         coverage_usage_per_sample[sample_name] = {}
         frame_usage_map[sample_name] = {}
 
@@ -162,13 +235,35 @@ def run_inframe_codon_analysis(
         #   { transcript => { "A_site": [...], "P_site": [...], "E_site": [...], "seq": <string> } }
         # ----------
         read_cov_map = {}
-        for bf in bed_files:
-            rl_match = re.search(r"_(\d+)nt\.bed$", bf)
-            if not rl_match:
-                continue
-            rl = int(rl_match.group(1))
+        if filtered_bed_df is not None:
+            sample_bed_df = filtered_bed_df[filtered_bed_df["sample_name"] == sample_name].copy()
+            read_length_blocks = [
+                (int(read_length), sample_bed_df[sample_bed_df["read_length"] == read_length].copy())
+                for read_length in sorted(sample_bed_df["read_length"].dropna().unique())
+            ]
+        else:
+            bed_files = [f for f in os.listdir(sample_dir) if f.endswith(".bed")]
+            read_length_blocks = []
+            for bf in bed_files:
+                rl_match = re.search(r"_(\d+)nt\.bed$", bf)
+                if not rl_match:
+                    continue
+                rl = int(rl_match.group(1))
+                bed_path = os.path.join(sample_dir, bf)
+                bed_df = pd.read_csv(bed_path, sep="\t", header=None)
+                if bed_df.shape[1] >= 2:
+                    std_cols = ["chrom", "start", "end", "name", "score", "strand"]
+                    if bed_df.shape[1] <= len(std_cols):
+                        bed_df.columns = std_cols[:bed_df.shape[1]]
+                    else:
+                        extras = [f"extra_{i+1}" for i in range(bed_df.shape[1] - len(std_cols))]
+                        bed_df.columns = std_cols + extras
+                else:
+                    continue
+                read_length_blocks.append((rl, bed_df))
 
-            offset_row = a_site_offsets_df[a_site_offsets_df["Read Length"] == rl]
+        for rl, bed_df in read_length_blocks:
+            offset_row = selected_offsets_df[selected_offsets_df["Read Length"] == rl]
             if offset_row.empty:
                 continue
 
@@ -187,18 +282,6 @@ def run_inframe_codon_analysis(
                 continue
             offset_ = int(offset_)
 
-            bed_path = os.path.join(sample_dir, bf)
-            bed_df = pd.read_csv(bed_path, sep="\t", header=None)
-            if bed_df.shape[1] >= 2:
-                std_cols = ["chrom", "start", "end", "name", "score", "strand"]
-                if bed_df.shape[1] <= len(std_cols):
-                    bed_df.columns = std_cols[:bed_df.shape[1]]
-                else:
-                    extras = [f"extra_{i+1}" for i in range(bed_df.shape[1] - len(std_cols))]
-                    bed_df.columns = std_cols + extras
-            else:
-                continue
-            # I should give a filtered_bed not the bed_df
             bed_df["start"] = pd.to_numeric(bed_df["start"], errors="coerce")
             bed_df["end"] = pd.to_numeric(bed_df.get("end"), errors="coerce")
             bed_df.dropna(subset=["start", "end"], inplace=True)
@@ -230,7 +313,7 @@ def run_inframe_codon_analysis(
             for t_ in bed_df["chrom"].unique():
                 if t_ not in fasta_dict:
                     continue
-                if t_ not in annotation_df["transcript"].values:
+                if t_ not in annotated_sequence_ids:
                     continue
 
                 if t_ not in read_cov_map:
@@ -251,7 +334,12 @@ def run_inframe_codon_analysis(
 
         # Save read_cov_map to CSV for debugging
         debug_rows = []
-        for t_ in read_cov_map:
+        for t_ in iter_with_progress(
+            sorted(read_cov_map),
+            component="PROFILE",
+            noun="transcript",
+            labeler=str,
+        ):
             seq_len = len(read_cov_map[t_]["seq"])
             A_cov = read_cov_map[t_]["A_site"]
             P_cov = read_cov_map[t_]["P_site"]
@@ -271,10 +359,11 @@ def run_inframe_codon_analysis(
         # Frame usage + primary-site coverage usage
         # -----------
         coverage_usage_per_sample[sample_name] = {}
+        transcript_label_map: dict[str, str] = {}
 
-        for t_ in read_cov_map:
-            seq_len = len(read_cov_map[t_]["seq"])
-            primary_depth = np.array(read_cov_map[t_][primary_site_key])
+        for sequence_id, coverage_row in read_cov_map.items():
+            seq_len = len(coverage_row["seq"])
+            primary_depth = np.array(coverage_row[primary_site_key])
             nonzero = primary_depth[primary_depth > 0]
             if len(nonzero) > 0:
                 cap_val = np.percentile(nonzero, args.cap_percentile * 100)
@@ -282,42 +371,40 @@ def run_inframe_codon_analysis(
                 cap_val = 1
             primary_clipped = np.clip(primary_depth, None, cap_val).astype(int)
 
-            # Save footprint coverage
-            p_depth = np.array(read_cov_map[t_]["P_site"])
-            a_depth = np.array(read_cov_map[t_]["A_site"])
-            e_depth = np.array(read_cov_map[t_]["E_site"])
             foot_df = pd.DataFrame({
                 "Position": range(1, seq_len + 1),
-                "Nucleotide": list(read_cov_map[t_]["seq"]),
-                "P_site": p_depth,
-                "A_site": a_depth,
-                "E_site": e_depth,
+                "Nucleotide": list(coverage_row["seq"]),
+                "P_site": np.array(coverage_row["P_site"]),
+                "A_site": np.array(coverage_row["A_site"]),
+                "E_site": np.array(coverage_row["E_site"]),
                 f"{primary_site_key}_selected_depth": primary_clipped,
             })
-            foot_csv_path = os.path.join(foot_dir, f"{t_}_footprint_density.csv")
+            foot_csv_path = os.path.join(foot_dir, f"{sequence_id}_footprint_density.csv")
             foot_df.to_csv(foot_csv_path, index=False)
-
-            plt.figure(figsize=(12, 3))
-            plt.bar(
-                foot_df["Position"],
-                foot_df[f"{primary_site_key}_selected_depth"],
+            plot_site_depth_profile(
+                foot_df,
+                os.path.join(foot_dir, f"{sequence_id}_{primary_site_key}_depth.png"),
+                site_column=f"{primary_site_key}_selected_depth",
+                site_label=primary_site_label,
+                sample_name=sample_name,
+                transcript_name=sequence_display_map.get(sequence_id, sequence_id),
                 color=primary_site_plot_color,
-                width=3.0,
             )
-            plt.title(f"{t_} - {primary_site_label} ({sample_name})")
-            plt.xlabel("Position")
-            plt.ylabel(f"{primary_site_label} Depth")
-            plt.tight_layout()
-            plt.savefig(os.path.join(foot_dir, f"{t_}_{primary_site_key}_depth.png"))
-            plt.close()
 
-            # Frame usage
-            if t_ not in annotation_df["transcript"].values:
+        for _, ann_ in resolved_annotation_df.iterrows():
+            sequence_id = ann_["resolved_sequence_name"]
+            transcript_name = ann_["transcript"]
+            if sequence_id not in read_cov_map:
                 continue
 
-            ann_ = annotation_df[annotation_df["transcript"] == t_].iloc[0]
-            start_cdn = ann_["start_codon"]
-            # identify frame0/1/2 positions relative to start_codon
+            transcript_label_map[transcript_name] = transcript_display_title(
+                ann_,
+                include_transcript=True,
+            )
+
+            seq_len = len(read_cov_map[sequence_id]["seq"])
+            primary_depth = np.array(read_cov_map[sequence_id][primary_site_key])
+            start_cdn = int(ann_["start_codon"])
             frame0_positions = []
             frame1_positions = []
             frame2_positions = []
@@ -333,16 +420,13 @@ def run_inframe_codon_analysis(
             f0_count = primary_depth[frame0_positions].sum() if frame0_positions else 0
             f1_count = primary_depth[frame1_positions].sum() if frame1_positions else 0
             f2_count = primary_depth[frame2_positions].sum() if frame2_positions else 0
-            frame_usage_map[sample_name].setdefault(t_, (f0_count, f1_count, f2_count))
+            frame_usage_map[sample_name][transcript_name] = (f0_count, f1_count, f2_count)
 
-            # Build codon coverage for the selected primary site.
-            coverage_usage_per_sample[sample_name].setdefault(t_, {})
-            seq_str = read_cov_map[t_]["seq"]
-
-            transcript_stop_codon = ann_["stop_codon"] + 3
+            coverage_usage_per_sample[sample_name].setdefault(transcript_name, {})
+            seq_str = read_cov_map[sequence_id]["seq"]
+            transcript_stop_codon = int(ann_["stop_codon"]) + 3
             upper_bound = min(transcript_stop_codon, seq_len - 2)
 
-            # step in multiples of 3
             for i in range(start_cdn, upper_bound, 3):
                 middle_pos = i + 1
                 if (middle_pos + 1) >= seq_len:
@@ -357,8 +441,11 @@ def run_inframe_codon_analysis(
                     if (middle_pos + 1) < seq_len:
                         cov_here += primary_depth[middle_pos + 1]
 
-                coverage_usage_per_sample[sample_name][t_].setdefault((codon_seq, aa_, cat_), 0)
-                coverage_usage_per_sample[sample_name][t_][(codon_seq, aa_, cat_)] += cov_here
+                coverage_usage_per_sample[sample_name][transcript_name].setdefault(
+                    (codon_seq, aa_, cat_),
+                    0,
+                )
+                coverage_usage_per_sample[sample_name][transcript_name][(codon_seq, aa_, cat_)] += cov_here
 
         # Debug: coverage_usage_per_sample -> flatten and save
         debug_cov_rows = []
@@ -378,18 +465,43 @@ def run_inframe_codon_analysis(
         # Frame Usage Summaries & Plots
         # -------------------------------------
         frame_t_path = os.path.join(frame_dir, "frame_usage_by_transcript.csv")
+        frame_usage_rows = []
         total_f0, total_f1, total_f2 = 0, 0, 0
-        with open(frame_t_path, "w") as fw_:
-            fw_.write("Transcript,Frame0_Count,Frame1_Count,Frame2_Count,Frame0_Prop,Frame1_Prop,Frame2_Prop\n")
-            for t_name, (f0c, f1c, f2c) in frame_usage_map[sample_name].items():
-                total_ = f0c + f1c + f2c
-                f0p = f0c / total_ if total_ > 0 else 0
-                f1p = f1c / total_ if total_ > 0 else 0
-                f2p = f2c / total_ if total_ > 0 else 0
-                fw_.write(f"{t_name},{f0c},{f1c},{f2c},{f0p},{f1p},{f2p}\n")
-                total_f0 += f0c
-                total_f1 += f1c
-                total_f2 += f2c
+        for t_name, (f0c, f1c, f2c) in frame_usage_map[sample_name].items():
+            total_ = f0c + f1c + f2c
+            f0p = f0c / total_ if total_ > 0 else 0
+            f1p = f1c / total_ if total_ > 0 else 0
+            f2p = f2c / total_ if total_ > 0 else 0
+            frame_usage_rows.append(
+                {
+                    "Transcript": t_name,
+                    "DisplayName": transcript_label_map.get(t_name, t_name),
+                    "Frame0_Count": f0c,
+                    "Frame1_Count": f1c,
+                    "Frame2_Count": f2c,
+                    "Frame0_Prop": f0p,
+                    "Frame1_Prop": f1p,
+                    "Frame2_Prop": f2p,
+                }
+            )
+            total_f0 += f0c
+            total_f1 += f1c
+            total_f2 += f2c
+
+        frame_usage_by_transcript_df = pd.DataFrame(
+            frame_usage_rows,
+            columns=[
+                "Transcript",
+                "DisplayName",
+                "Frame0_Count",
+                "Frame1_Count",
+                "Frame2_Count",
+                "Frame0_Prop",
+                "Frame1_Prop",
+                "Frame2_Prop",
+            ],
+        )
+        frame_usage_by_transcript_df.to_csv(frame_t_path, index=False)
 
         total_all = total_f0 + total_f1 + total_f2
         f0_prop = total_f0 / total_all if total_all > 0 else 0
@@ -397,44 +509,33 @@ def run_inframe_codon_analysis(
         f2_prop = total_f2 / total_all if total_all > 0 else 0
 
         sample_frame_out = os.path.join(frame_dir, "frame_usage_total.csv")
-        with open(sample_frame_out, "w") as fw_:
-            fw_.write("Frame,Count,Proportion\n")
-            fw_.write(f"Frame0,{total_f0},{f0_prop}\n")
-            fw_.write(f"Frame1,{total_f1},{f1_prop}\n")
-            fw_.write(f"Frame2,{total_f2},{f2_prop}\n")
-
-        # Frame usage total plot
         frame_df = pd.DataFrame({
             "Frame": ["Frame0", "Frame1", "Frame2"],
             "Count": [total_f0, total_f1, total_f2],
             "Proportion": [f0_prop, f1_prop, f2_prop]
         })
-        plt.figure(figsize=(6, 6))
-        sns.barplot(x="Frame", y="Proportion", data=frame_df, hue="Frame", dodge=False, palette="Set2", legend=False)
-        plt.title(f"Total Frame Usage Proportion ({primary_site_label}) - {sample_name}")
-        plt.tight_layout()
-        plt.savefig(os.path.join(frame_dir, "frame_usage_total_plot.png"))
-        plt.close()
+        frame_df.to_csv(sample_frame_out, index=False)
+        plot_frame_usage_total(
+            frame_df,
+            os.path.join(frame_dir, "frame_usage_total_plot.png"),
+            primary_site_label=primary_site_label,
+            sample_name=sample_name,
+        )
 
-        # By-transcript frame usage
-        frame_t_data = []
-        with open(frame_t_path) as fin:
-            next(fin)  # skip header
-            for line in fin:
-                t_name, f0c, f1c, f2c, f0p, f1p, f2p = line.strip().split(",")
-                f0p, f1p, f2p = float(f0p), float(f1p), float(f2p)
-                frame_t_data.append((t_name, "Frame0", f0p))
-                frame_t_data.append((t_name, "Frame1", f1p))
-                frame_t_data.append((t_name, "Frame2", f2p))
-
-        frame_t_df = pd.DataFrame(frame_t_data, columns=["Transcript", "Frame", "Proportion"])
-        plt.figure(figsize=(12, 6))
-        sns.barplot(x="Transcript", y="Proportion", hue="Frame", data=frame_t_df, palette="Set3")
-        plt.title(f"Frame Usage Proportion by Transcript ({primary_site_label}) - {sample_name}")
-        plt.xticks(rotation=90)
-        plt.tight_layout()
-        plt.savefig(os.path.join(frame_dir, "frame_usage_by_transcript_plot.png"))
-        plt.close()
+        frame_t_df = frame_usage_by_transcript_df.melt(
+            id_vars=["Transcript", "DisplayName"],
+            value_vars=["Frame0_Prop", "Frame1_Prop", "Frame2_Prop"],
+            var_name="Frame",
+            value_name="Proportion",
+        )
+        frame_t_df["Frame"] = frame_t_df["Frame"].str.replace("_Prop", "", regex=False)
+        frame_t_df["Transcript"] = frame_t_df["DisplayName"]
+        plot_frame_usage_by_transcript(
+            frame_t_df,
+            os.path.join(frame_dir, "frame_usage_by_transcript_plot.png"),
+            primary_site_label=primary_site_label,
+            sample_name=sample_name,
+        )
 
         # -------------------------------------
         # Process and plot primary-site codon usage (Per-transcript & Overall)
@@ -443,102 +544,42 @@ def run_inframe_codon_analysis(
         sample_ov_cov = {}
         sample_ov_freq = {}
         usage_dict_for_sample = coverage_usage_per_sample[sample_name]
-
-        # For each transcript, mask (i.e. completely remove) the final translating codon 
-        # so that its P-site coverage is not included in the analysis.
-        for t, usage_dict in usage_dict_for_sample.items():
-            if (t in annotation_df["transcript"].values) and (t in fasta_dict):
-                ann_row = annotation_df[annotation_df["transcript"] == t].iloc[0]
-                transcript_stop_codon = ann_row["stop_codon"] + 3
-                seq_str = str(fasta_dict[t].seq).upper()
-                if transcript_stop_codon > len(seq_str):
-                    transcript_stop_codon = len(seq_str)
-                last_codon_seq = seq_str[transcript_stop_codon - 3: transcript_stop_codon]
-                aa, cat = classify_codon(last_codon_seq)
-                masked_key = (last_codon_seq, aa, cat)
-                # Remove the masked codon from the usage dictionary.
-                if masked_key in usage_dict:
-                    usage_dict.pop(masked_key)
+        mask_primary_stop_codon = primary_site_key == "P_site"
 
         # Now process each transcript for primary-site codon usage analysis.
-        rows_list = []
         for t, usage_dict in usage_dict_for_sample.items():
-            # Get the transcript frequency dictionary (as computed from the full transcript)
             freq_dict = transcript_codon_counts.get(t, {})
-            # Create a local copy so that we can remove the masked codon frequency as well.
-            local_freq_dict = freq_dict.copy()
-            
-            # Compute the masked key again for this transcript.
             masked_key = None
-            if (t in annotation_df["transcript"].values) and (t in fasta_dict):
-                ann_row = annotation_df[annotation_df["transcript"] == t].iloc[0]
+            if mask_primary_stop_codon and (t in annotation_transcripts):
+                ann_row = annotation_lookup.loc[t]
+                resolved_sequence_name = ann_row["resolved_sequence_name"]
+                if resolved_sequence_name not in fasta_dict:
+                    continue
                 transcript_stop_codon = ann_row["stop_codon"] + 3
-                seq_str = str(fasta_dict[t].seq).upper()
+                seq_str = str(fasta_dict[resolved_sequence_name].seq).upper()
                 if transcript_stop_codon > len(seq_str):
                     transcript_stop_codon = len(seq_str)
                 last_codon_seq = seq_str[transcript_stop_codon - 3: transcript_stop_codon]
                 aa, cat = classify_codon(last_codon_seq)
                 masked_key = (last_codon_seq, aa, cat)
-                # Remove the masked key from the frequency dictionary so that the codon is not counted.
-                if masked_key in local_freq_dict:
-                    local_freq_dict.pop(masked_key)
-            
-            rows = []
-            cdf_map = {}
-            # Loop over all codon keys. For the masked codon, keep it in output
-            # but force zero values so plots still show a complete codon axis.
-            for key in all_codon_keys:
-                if masked_key is not None and key == masked_key:
-                    c_val = 0
-                    f_val = 0
-                else:
-                    c_val = usage_dict.get(key, 0)
-                    f_val = local_freq_dict.get(key, 0)
-                # Aggregate overall values.
-                sample_ov_cov[key] = sample_ov_cov.get(key, 0) + c_val
-                sample_ov_freq[key] = sample_ov_freq.get(key, 0) + f_val
-                cdf_map[key] = c_val / f_val if f_val > 0 else 0
 
-            sum_cdf = sum(cdf_map.values())
-            for key in all_codon_keys:
-                if masked_key is not None and key == masked_key:
-                    c_val = 0
-                    f_val = 0
-                else:
-                    c_val = usage_dict.get(key, 0)
-                    f_val = local_freq_dict.get(key, 0)
-                cdf_val = cdf_map.get(key, 0)
-                normp = cdf_val / sum_cdf if sum_cdf > 0 else 0
-                rows.append({
-                    "Transcript": t,
-                    "Codon": key[0],
-                    "AA": key[1],
-                    "Category": key[2],
-                    "Coverage": c_val,
-                    "Frequency": f_val,
-                    "CoverageDivFreq": cdf_val,
-                    "NormalizedProp": normp
-                })
-            
-            out_csv = os.path.join(codon_usage_dir, f"codon_usage_{t}.csv")
-            df_rows = pd.DataFrame(rows)
-            df_rows.to_csv(out_csv, index=False)
-            df_rows["Label"] = df_rows["Codon"] + "-" + df_rows["AA"]
-            plt.figure(figsize=(20, 6))
-            sns.barplot(x="Label", y="CoverageDivFreq", hue="Category",
-                        data=df_rows, dodge=False, order=codon_label_order)
-            plt.xticks(rotation=90)
-            y_max = df_rows["CoverageDivFreq"].max() * 1.2 if not df_rows.empty else 1
-            plt.ylim(0, y_max)            
-            plt.title(
-                f"{t} - {primary_site_label} Codon Usage "
-                f"(Frame0{', Merged' if args.merge_density else ''}) - {sample_name}"
+            df_rows = build_codon_usage_dataframe(
+                t,
+                usage_dict,
+                freq_dict,
+                masked_key=masked_key,
+                aggregate_cov=sample_ov_cov,
+                aggregate_freq=sample_ov_freq,
             )
-            plt.tight_layout()
-            out_fig = os.path.join(codon_usage_dir, f"codon_usage_{t}_plot.png")
-            plt.savefig(out_fig)
-            plt.close()
-            rows_list.append(df_rows)
+            out_csv = os.path.join(codon_usage_dir, f"codon_usage_{t}.csv")
+            df_rows.to_csv(out_csv, index=False)
+            plot_codon_usage_dataframe(
+                df_rows,
+                os.path.join(codon_usage_dir, f"codon_usage_{t}_plot.png"),
+                f"{transcript_label_map.get(t, t)} - {primary_site_label} Codon Usage "
+                f"(Frame0{', Merged' if args.merge_density else ''}) - {sample_name}",
+                codon_label_order,
+            )
 
         # Overall A-site usage aggregation and plotting.
         ov_rows = []
@@ -570,40 +611,33 @@ def run_inframe_codon_analysis(
         ov_df = pd.DataFrame(ov_rows)
         ov_csv = os.path.join(codon_usage_dir, "codon_usage_total.csv")
         ov_df.to_csv(ov_csv, index=False)
-        ov_df["Label"] = ov_df["Codon"] + "-" + ov_df["AA"]
-        plt.figure(figsize=(20, 6))
-        sns.barplot(x="Label", y="CoverageDivFreq", hue="Category",
-                    data=ov_df, dodge=False, order=codon_label_order)
-        plt.xticks(rotation=90)
-        overall_y_max = ov_df["CoverageDivFreq"].max() * 1.2 if not ov_df.empty else 1
-        plt.ylim(0, overall_y_max)        
-        plt.title(
+        plot_codon_usage_dataframe(
+            ov_df,
+            os.path.join(codon_usage_dir, "codon_usage_total_plot.png"),
             f"Overall {primary_site_label} Codon Usage "
-            f"(Frame0{', Merged' if args.merge_density else ''}) - {sample_name}"
+            f"(Frame0{', Merged' if args.merge_density else ''}) - {sample_name}",
+            codon_label_order,
         )
-        plt.tight_layout()
-        ov_plot = os.path.join(codon_usage_dir, "codon_usage_total_plot.png")
-        plt.savefig(ov_plot)
-        plt.close()
 
         # ----------------------------------------
         # A-site Codon Usage (Per-transcript & Overall)
         # Note: For A-site usage, we do NOT mask the stop codon.
         # ----------------------------------------
         coverage_usage_a_site = {}
-        for t in read_cov_map:
-            seq_len = len(read_cov_map[t]["seq"])
-            a_depth = np.array(read_cov_map[t]["A_site"])
-            coverage_usage_a_site[t] = {}
-            if t not in annotation_df["transcript"].values:
+        for _, ann_ in resolved_annotation_df.iterrows():
+            t = ann_["transcript"]
+            sequence_id = ann_["resolved_sequence_name"]
+            if sequence_id not in read_cov_map:
                 continue
-            ann_ = annotation_df[annotation_df["transcript"] == t].iloc[0]
-            start_cdn = ann_["start_codon"]
-            transcript_stop_codon = ann_["stop_codon"] + 3
-            if transcript_stop_codon > len(read_cov_map[t]["seq"]):
-                transcript_stop_codon = len(read_cov_map[t]["seq"])
+            seq_len = len(read_cov_map[sequence_id]["seq"])
+            a_depth = np.array(read_cov_map[sequence_id]["A_site"])
+            coverage_usage_a_site[t] = {}
+            start_cdn = int(ann_["start_codon"])
+            transcript_stop_codon = int(ann_["stop_codon"]) + 3
+            if transcript_stop_codon > len(read_cov_map[sequence_id]["seq"]):
+                transcript_stop_codon = len(read_cov_map[sequence_id]["seq"])
             upper_bound = min(transcript_stop_codon, seq_len - 2)
-            seq_str = read_cov_map[t]["seq"]
+            seq_str = read_cov_map[sequence_id]["seq"]
             for i in range(start_cdn, upper_bound, 3):
                 mid = i + 1
                 if (mid + 1) >= seq_len:
@@ -633,14 +667,26 @@ def run_inframe_codon_analysis(
         dbg_a_df = pd.DataFrame(debug_a_rows)
         dbg_a_df.to_csv(os.path.join(debug_dir, f"coverage_usage_a_site_{sample_name}.csv"), index=False)
 
-        # Build A-site codon summary files used by correlation analysis.
         a_site_ov_cov = {}
         a_site_ov_freq = {}
         for t, usage_dict in coverage_usage_a_site.items():
             freq_dict = transcript_codon_counts.get(t, {})
-            for key in all_codon_keys:
-                a_site_ov_cov[key] = a_site_ov_cov.get(key, 0) + usage_dict.get(key, 0)
-                a_site_ov_freq[key] = a_site_ov_freq.get(key, 0) + freq_dict.get(key, 0)
+            a_site_df_rows = build_codon_usage_dataframe(
+                t,
+                usage_dict,
+                freq_dict,
+                aggregate_cov=a_site_ov_cov,
+                aggregate_freq=a_site_ov_freq,
+            )
+            a_site_transcript_csv = os.path.join(codon_usage_dir, f"a_site_codon_usage_{t}.csv")
+            a_site_df_rows.to_csv(a_site_transcript_csv, index=False)
+            plot_codon_usage_dataframe(
+                a_site_df_rows,
+                os.path.join(codon_usage_dir, f"a_site_codon_usage_{t}_plot.png"),
+                f"{transcript_label_map.get(t, t)} - A-site Codon Usage "
+                f"(Frame0{', Merged' if args.merge_density else ''}) - {sample_name}",
+                codon_label_order,
+            )
 
         a_site_rows = []
         a_site_cdf_map = {}
@@ -669,23 +715,14 @@ def run_inframe_codon_analysis(
         a_site_df = pd.DataFrame(a_site_rows)
         a_site_csv = os.path.join(codon_usage_dir, "a_site_codon_usage_total.csv")
         a_site_df.to_csv(a_site_csv, index=False)
-        a_site_df["Label"] = a_site_df["Codon"] + "-" + a_site_df["AA"]
-        plt.figure(figsize=(20, 6))
-        sns.barplot(
-            x="Label",
-            y="CoverageDivFreq",
-            hue="Category",
-            data=a_site_df,
-            dodge=False,
-            order=codon_label_order,
+        plot_codon_usage_dataframe(
+            a_site_df,
+            os.path.join(codon_usage_dir, "a_site_codon_usage_total_plot.png"),
+            f"Overall A-site Codon Usage (Frame0{', Merged' if args.merge_density else ''}) - {sample_name}",
+            codon_label_order,
         )
-        plt.xticks(rotation=90)
-        a_site_y_max = a_site_df["CoverageDivFreq"].max() * 1.2 if not a_site_df.empty else 1
-        plt.ylim(0, a_site_y_max)
-        plt.title(f"Overall A-site Codon Usage (Frame0{', Merged' if args.merge_density else ''}) - {sample_name}")
-        plt.tight_layout()
-        a_site_plot = os.path.join(codon_usage_dir, "a_site_codon_usage_total_plot.png")
-        plt.savefig(a_site_plot)
-        plt.close()
 
-        print("In-frame codon analysis complete. merge_density =", args.merge_density)
+    log_info(
+        "PROFILE",
+        f"Translation-profile analysis complete (merge_density={args.merge_density}).",
+    )

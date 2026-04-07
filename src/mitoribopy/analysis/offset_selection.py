@@ -4,6 +4,16 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ..console import log_dataframe_preview, log_info, log_warning
+
+
+def _validate_offset_mask_nt(offset_mask_nt: int) -> int:
+    """Validate the near-anchor masking window."""
+    offset_mask_nt = int(offset_mask_nt)
+    if offset_mask_nt < 0:
+        raise ValueError("offset_mask_nt must be zero or a positive integer.")
+    return offset_mask_nt
+
 
 def _convert_offsets_between_sites(
     offsets_df: pd.DataFrame, from_site: str, to_site: str
@@ -57,6 +67,11 @@ def determine_p_site_offsets(
     out_file: str,
     offset_min: int = 11,
     offset_max: int = 20,
+    five_offset_min: int | None = None,
+    five_offset_max: int | None = None,
+    three_offset_min: int | None = None,
+    three_offset_max: int | None = None,
+    offset_mask_nt: int = 5,
     offset_site: str = "p",
     selection_reference: str = "p_site",
 ) -> pd.DataFrame | None:
@@ -75,36 +90,53 @@ def determine_p_site_offsets(
             + selection_reference
             + "'. Use 'selected_site' or 'p_site'."
         )
+    offset_mask_nt = _validate_offset_mask_nt(offset_mask_nt)
+    five_offset_min = offset_min if five_offset_min is None else int(five_offset_min)
+    five_offset_max = offset_max if five_offset_max is None else int(five_offset_max)
+    three_offset_min = offset_min if three_offset_min is None else int(three_offset_min)
+    three_offset_max = offset_max if three_offset_max is None else int(three_offset_max)
 
-    working_df = offsets_df.copy()
+    reported_df = offsets_df.copy()
+    working_df = reported_df.copy()
     if selection_reference == "p_site" and offset_site == "a":
         # Pick in canonical P-site space, then convert chosen offsets back to A-site.
-        working_df = _convert_offsets_between_sites(working_df, from_site="a", to_site="p")
+        working_df = _convert_offsets_between_sites(reported_df, from_site="a", to_site="p")
 
-    five_df = working_df[
-        (working_df["5' Offset"].abs() >= offset_min)
-        & (working_df["5' Offset"].abs() <= offset_max)
-    ]
-    three_df = working_df[
-        (working_df["3' Offset"].abs() >= offset_min)
-        & (working_df["3' Offset"].abs() <= offset_max)
-    ]
+    five_mask = (
+        (reported_df["5' Offset"].abs() >= five_offset_min)
+        & (reported_df["5' Offset"].abs() <= five_offset_max)
+        & (reported_df["5' Offset"].abs() > offset_mask_nt)
+    )
+    three_mask = (
+        (reported_df["3' Offset"].abs() >= three_offset_min)
+        & (reported_df["3' Offset"].abs() <= three_offset_max)
+        & (reported_df["3' Offset"].abs() > offset_mask_nt)
+    )
+
+    five_df = working_df.loc[five_mask].copy()
+    three_df = working_df.loc[three_mask].copy()
 
     if five_df.empty and three_df.empty:
-        print("[determine_p_site_offsets] No offsets found in range => skipping.")
+        log_warning("OFFSET", "No offsets were found inside the requested selection ranges.")
         return None
 
-    five_counts = (
-        five_df.groupby(["Read Length", "5' Offset"]).size().reset_index(name="Count")
-    )
-    five_pick = _pick_most_enriched_with_tiebreak(five_counts, "5' Offset")
-    five_pick.rename(columns={"5' Offset": "Most Enriched 5' Offset"}, inplace=True)
+    if five_df.empty:
+        five_pick = pd.DataFrame(columns=["Read Length", "Most Enriched 5' Offset"])
+    else:
+        five_counts = (
+            five_df.groupby(["Read Length", "5' Offset"]).size().reset_index(name="Count")
+        )
+        five_pick = _pick_most_enriched_with_tiebreak(five_counts, "5' Offset")
+        five_pick.rename(columns={"5' Offset": "Most Enriched 5' Offset"}, inplace=True)
 
-    three_counts = (
-        three_df.groupby(["Read Length", "3' Offset"]).size().reset_index(name="Count")
-    )
-    three_pick = _pick_most_enriched_with_tiebreak(three_counts, "3' Offset")
-    three_pick.rename(columns={"3' Offset": "Most Enriched 3' Offset"}, inplace=True)
+    if three_df.empty:
+        three_pick = pd.DataFrame(columns=["Read Length", "Most Enriched 3' Offset"])
+    else:
+        three_counts = (
+            three_df.groupby(["Read Length", "3' Offset"]).size().reset_index(name="Count")
+        )
+        three_pick = _pick_most_enriched_with_tiebreak(three_counts, "3' Offset")
+        three_pick.rename(columns={"3' Offset": "Most Enriched 3' Offset"}, inplace=True)
 
     selected_offsets = pd.merge(
         five_pick[["Read Length", "Most Enriched 5' Offset"]],
@@ -122,10 +154,11 @@ def determine_p_site_offsets(
         )
 
     selected_offsets.to_csv(out_file, index=False)
-    print(
-        "[determine_p_site_offsets] Selected offsets => "
+    log_info(
+        "OFFSET",
+        "Selected offsets saved => "
         f"{out_file} (align_to={align_to}, offset_site={offset_site}, "
-        f"selection_reference={selection_reference})"
+        f"selection_reference={selection_reference})",
     )
+    log_dataframe_preview("OFFSET", "Selected offsets by read length", selected_offsets)
     return selected_offsets
-

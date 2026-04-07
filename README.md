@@ -1,355 +1,241 @@
-# MitoRiboPy: Mitochondrial Ribo-seq Analysis Pipeline
+# MitoRiboPy
 
-MitoRiboPy processes mitochondrial ribosome profiling (Ribo-seq) BED files and generates:
-- Read-length QC summaries
-- Start/stop codon offset enrichment tables and plots
-- Selected offsets by read length
-- Footprint density tracks (P-site, A-site, E-site)
-- Frame usage summaries
-- Codon usage summaries
-- IGV-style RPM/raw coverage plots
-- Optional VARNA-ready exports
-- Optional codon-correlation plots between samples
-- Optional RNA-seq integration
+MitoRiboPy is a package for mitochondrial ribosome profiling analysis. It runs a package-native pipeline from BED inputs through offset selection, translation-profile analysis, codon usage, coverage-profile plotting, and optional downstream modules such as structure-density export, codon correlation, and RNA-seq integration.
 
-This repository is currently in transition from script-style analysis code to the formal Python package **MitoRiboPy**. The full packaging scheme is documented in:
-- [`docs/PACKAGE_REFACTOR_SCHEME.md`](docs/PACKAGE_REFACTOR_SCHEME.md)
+## Highlights
 
----
+- Standalone package CLI with no runtime dependency on legacy pipeline scripts
+- Built-in human and yeast reference data loaded from packaged CSV and JSON files
+- End-specific offset selection with separate 5' and 3' bounds
+- P-site and A-site workflows with explicit offset-picking behavior
+- In-memory BED filtering with no duplicated filtered BED output files
+- Persistent per-run logging in `<output>/mitoribopy.log`
+- Custom organism support through user-supplied annotation CSV and codon-table JSON files
+- Bicistronic transcript handling for ATP8/ATP6 and ND4L/ND4 with configurable baseline sequence IDs
 
-## 1) Current Status
+## Installation
 
-What is stable now:
-- Human and yeast pipelines run from CLI with explicit arguments.
-- P-site vs A-site behavior is implemented and validated.
-- mt-mRNA-only RPM normalization is available.
-- Offset selection strategy now supports canonical P-site-linked picking for robust A/P coupling.
-- Phase II package migration is complete for active pipeline modules.
-- Phase III readability cleanup is complete for the package path used by the CLI.
-
-What is in progress:
-- Expanding tests and CI.
-- Formal public API docs.
-
----
-
-## 2) Requirements
-
-- Python 3.10+
-- pandas
-- numpy
-- matplotlib
-- seaborn
-- biopython
-- scipy
-
-If you are using a clean environment:
+From the repository root:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install pandas numpy matplotlib seaborn biopython scipy
+python -m pip install -e .
 ```
 
----
-
-## 3) Quick Start
-
-### Human example (stop-aligned, P-site, mt-mRNA normalization)
+For development and tests:
 
 ```bash
-python main.py \
-  -s h \
-  -f human_riboseq_mt_entire_genome_withND6.fasta \
-  -rpf 29 34 \
-  --directory human_test_input \
-  --align stop \
-  --offset_type 5 \
-  --offset_site p \
-  --offset_pick_reference p_site \
-  --min_offset 10 \
-  --max_offset 22 \
-  --read_counts_file human_read_counts.txt \
-  --read_counts_sample_col sample \
-  --read_counts_reads_col read_count \
-  --read_counts_reference_col reference \
-  --rpm_norm_mode mt_mrna \
-  --mrna_ref_patterns mt_genome \
-  --codon_overlap_mode full \
-  --order_samples NT3 NT5 \
-  --cap_percentile 0.999 \
-  --plot_format svg \
-  -m \
-  --output analysis_results_human
+python -m pip install -e ".[dev]"
 ```
 
-### Enable optional VARNA and codon correlation
-
-```bash
-python main.py ... -v --cor_plot --base_sample NT3
-```
-
-### Phase I package entrypoint
-
-During Phase I, package CLI calls are forwarded to the current legacy parser:
-
-```bash
-PYTHONPATH=src python -m mitoribopy --help
-PYTHONPATH=src python -m mitoribopy -s h -f human.fa --directory input_dir
-```
-
-After editable install, use:
+Then confirm the CLI is available:
 
 ```bash
 mitoribopy --help
 ```
 
----
+If you prefer not to install the package yet:
 
-## 4) Core CLI Options
-
-### Input and organism
-- `--fasta`: FASTA file path (required)
-- `--directory`: BED input directory
-- `--strain y|h`: yeast or human
-- `-rpf <min> <max>`: read-length filter range
-
-### Offset analysis
-- `--align start|stop`: codon anchor for offset enrichment
-- `--offset_type 5|3`: downstream offset type
-- `--offset_site p|a`: interpret selected offsets as P-site or A-site
-- `--offset_pick_reference p_site|selected_site`:
-  - `p_site` (recommended): pick offsets in canonical P-site space, then transform for A-site if needed
-  - `selected_site` (legacy): pick directly in selected site space
-- `--min_offset`, `--max_offset`: absolute offset filter range for selection
-- `--codon_overlap_mode full|any`: full codon overlap recommended
-
-### Normalization and read-count table
-- `--read_counts_file`: count table path
-- `--read_counts_sample_col`: sample column name
-- `--read_counts_reads_col`: read-count column name
-- `--rpm_norm_mode total|mt_mrna`:
-  - `total`: denominator = total reads in count file
-  - `mt_mrna`: denominator = rows matching mt-mRNA reference patterns
-- `--read_counts_reference_col`: reference column name for `mt_mrna` mode
-- `--mrna_ref_patterns`: list of substrings for mt-mRNA row matching
-
-### Outputs and plotting
-- `--output`: output directory
-- `--plot_format png|pdf|svg`
-- `--plot_dir`: subdirectory for offset CSV/plots
-- `--line_plot_style combined|separate`
-- `--cap_percentile`: upper clipping percentile for coverage plots
-- `-m/--merge_density`: merge adjacent nt into codon-center density
-
-### Optional modules
-- `-v/--varna`: generate VARNA exports
-- `--cor_plot --base_sample <sample>`: codon-correlation plots
-- `--use_rna_seq`: run RNA-seq module (requires RNA args)
-
----
-
-## 5) Input File Formats
-
-### BED files
-Expected columns (minimum 3):
-1. `chrom` (transcript name)
-2. `start` (0-based)
-3. `end` (end-exclusive)
-Additional columns are tolerated.
-
-### FASTA
-- FASTA headers must match transcript names in BED/annotation logic.
-
-### Read-count file
-Delimited text (CSV/TSV autodetected). Typical columns:
-- sample column (`sample`, `Sample`, etc.)
-- read-count column (`read_count`, `Reads`, etc.)
-- optional reference column (`reference`) for `mt_mrna` mode
-
-Example:
-
-```text
-sample,reference,read_count
-NT3,mt_genome.aligned,1685015
-NT3,sapiens_mito_rRNA.aligned,3895562
-...
+```bash
+PYTHONPATH=src python -m mitoribopy --help
 ```
 
----
+## Quick Start
 
-## 6) Output Structure
+Recommended CLI entrypoint:
 
-Typical run directory:
+```bash
+mitoribopy \
+  -s h \
+  -f human_test_input/human_riboseq_mt_entire_genome_withND6.fasta \
+  --directory human_test_input \
+  -rpf 29 34 \
+  --align stop \
+  --offset_type 5 \
+  --offset_site p \
+  --offset_pick_reference p_site \
+  --offset_mask_nt 5 \
+  --min_5_offset 10 \
+  --max_5_offset 22 \
+  --min_3_offset 10 \
+  --max_3_offset 22 \
+  --read_counts_file human_test_input/oligo_control_read_counts_summary.csv \
+  --read_counts_sample_col sample \
+  --read_counts_reads_col reads \
+  --read_counts_reference_col reference \
+  --rpm_norm_mode total \
+  --plot_format svg \
+  --output output \
+  -m
+```
+
+Compatibility wrapper:
+
+```bash
+python main.py --help
+```
+
+## Built-In References
+
+MitoRiboPy ships with packaged reference data for:
+
+- Human mitochondrial translation using the `vertebrate_mitochondrial` codon table
+- Yeast mitochondrial translation using the `yeast_mitochondrial` codon table
+
+Built-in annotation tables are stored as CSV and built-in codon tables are stored as JSON under [src/mitoribopy/data](/Users/ahramahn/Library/CloudStorage/OneDrive-UniversityofMiami/1.Research/1.Ribosome_Profiling/01.Ribo-seq_v1/src/mitoribopy/data).
+
+For bicistronic transcript regions:
+
+- Titles stay consistent as `ATP8/ATP6` and `ND4L/ND4`
+- The default sequence baselines are `ATP6` and `ND4`
+- You can switch them with `--atp8_atp6_baseline ATP8|ATP6` and `--nd4l_nd4_baseline ND4L|ND4`
+
+Legacy FASTA/BED identifiers such as `ATP86` and `ND4L4` are still recognized through built-in aliases.
+
+## Custom Organisms
+
+Custom organisms are supported through:
+
+- `--annotation_file`
+- `--codon_tables_file`
+- `--codon_table_name`
+- `--start_codons`
+
+For `--strain custom`, provide an explicit RPF range as well:
+
+```bash
+mitoribopy \
+  -s custom \
+  -f custom_reference.fa \
+  --directory input_beds \
+  -rpf 28 34 \
+  --annotation_file examples/custom_reference/annotation_template.csv \
+  --codon_tables_file examples/custom_reference/codon_tables_template.json \
+  --codon_table_name custom_example \
+  --start_codons ATG GTG \
+  --output custom_results
+```
+
+Example templates are included here:
+
+- [examples/custom_reference/annotation_template.csv](/Users/ahramahn/Library/CloudStorage/OneDrive-UniversityofMiami/1.Research/1.Ribosome_Profiling/01.Ribo-seq_v1/examples/custom_reference/annotation_template.csv)
+- [examples/custom_reference/codon_tables_template.json](/Users/ahramahn/Library/CloudStorage/OneDrive-UniversityofMiami/1.Research/1.Ribosome_Profiling/01.Ribo-seq_v1/examples/custom_reference/codon_tables_template.json)
+- [examples/custom_reference/README.md](/Users/ahramahn/Library/CloudStorage/OneDrive-UniversityofMiami/1.Research/1.Ribosome_Profiling/01.Ribo-seq_v1/examples/custom_reference/README.md)
+
+## Input Files
+
+### BED
+
+Expected columns:
+
+1. `chrom`
+2. `start`
+3. `end`
+
+Additional BED columns are tolerated. Coordinates are treated as standard 0-based, end-exclusive intervals.
+
+### FASTA
+
+FASTA headers should match the annotation `sequence_name` or one of its `sequence_aliases`.
+
+### Annotation CSV
+
+Required columns:
+
+- `transcript`
+- `l_tr`
+- `l_utr5`
+- `l_utr3`
+
+Optional columns:
+
+- `l_cds`
+- `sequence_name`
+- `sequence_aliases`
+- `display_name`
+
+Meaning:
+
+- `transcript` is the logical CDS name used in frame and codon outputs
+- `sequence_name` is the FASTA/BED sequence ID that the row maps onto
+- `sequence_aliases` contains alternate FASTA/BED names separated by semicolons
+- `display_name` controls plot titles and grouped transcript labels
+
+If `l_cds` is omitted, it is computed as `l_tr - l_utr5 - l_utr3`.
+
+### Codon-Table JSON
+
+Two formats are supported:
+
+- One flat 64-codon mapping
+- A dictionary of named 64-codon mappings
+
+When multiple named tables are present, choose one with `--codon_table_name`.
+
+### Read-Count Table
+
+`.csv`, `.tsv`, and `.txt` are supported. Column matching is flexible and case-insensitive, with fallback to positional matching:
+
+- first column: sample
+- second column: reference
+- third column: read count
+
+## Output Overview
+
+Typical output structure:
 
 ```text
 <output>/
+  mitoribopy.log
   plots_and_csv/
-    offset_<align>.csv
-    p_site_offsets_<align>.csv
-    offset_enrichment_heatmap_<align>.<fmt>
-    offset_enrichment_combined_lineplots_<align>.<fmt>
-    read_length_summary.csv
-    unfiltered_read_length_summary_15_50.csv
-    unfiltered_heatmap_15_50_count.svg
-    unfiltered_heatmap_15_50_RPM.svg
-
   <sample>/
     footprint_density/
-      <transcript>_footprint_density.csv
-      <transcript>_P_site_depth.png or <transcript>_A_site_depth.png
     translating_frame/
-      frame_usage_total.csv
-      frame_usage_by_transcript.csv
-      frame_usage_total_plot.png
-      frame_usage_by_transcript_plot.png
     codon_usage/
-      codon_usage_total.csv
-      a_site_codon_usage_total.csv
-      codon_usage_total_plot.png
-
-  igv_style_plots/
-    read_coverage_rpm/
-    p_site_coverage_rpm/
-    read_coverage_raw/
-    p_site_coverage_raw/
-
-  varna/                      # if --varna
-  codon_correlation/          # if --cor_plot
-  rna_seq_results/            # if --use_rna_seq
+    debug_csv/
+  coverage_profile_plots/
+  structure_density/      # if --structure_density
+  codon_correlation/      # if --cor_plot
+  rna_seq_results/        # if --use_rna_seq
 ```
 
----
+Key outputs include:
 
-## 7) Coordinate and Biological Assumptions
+- offset enrichment CSVs and plots
+- selected offset tables by read length
+- footprint-density CSVs for P-site, A-site, and E-site
+- frame-usage summaries
+- transcript-level and total codon-usage summaries
+- RPM and raw coverage-profile plots
+- optional structure-density exports from footprint-density tables
 
-- BED is treated as standard 0-based, end-exclusive.
-- Read length is `end - start`.
-- `start_codon` is derived from transcript annotation UTR lengths.
-- `stop_codon` is represented as the first base of stop codon in 0-based indexing.
-- P/A/E site assignment uses selected offsets and `offset_type` rules.
+## Common Options
 
----
+Important runtime controls:
 
-## 8) P-site vs A-site Behavior
+- `--offset_type 5|3`: downstream site placement from the read 5' or 3' end
+- `--offset_site p|a`: whether reported offsets represent P-site or A-site positions
+- `--offset_pick_reference p_site|selected_site`: how the best offset is chosen
+- `--min_5_offset`, `--max_5_offset`, `--min_3_offset`, `--max_3_offset`: recommended end-specific selection bounds
+- `--offset_mask_nt`: mask near-anchor bins from enrichment summaries and plots
+- `--rpm_norm_mode total|mt_mrna`: read-count normalization mode
+- `--structure_density`: export log2 and scaled density values from footprint-density tables
 
-- `--offset_site p`: selected offset corresponds to P-site position.
-- `--offset_site a`: selected offset corresponds to A-site position.
-- In downstream analysis, primary output site follows `offset_site`.
-
-### Recommended robust mode
-Use:
-- `--offset_pick_reference p_site`
-
-Why:
-- Offset picking happens in canonical P-site geometry first.
-- A-site selected offsets are transformed from P-site picks.
-- This preserves codon-consistent +3/-3 A/P relationship.
-
-Legacy behavior can be restored with:
-- `--offset_pick_reference selected_site`
-
-Detailed refinement notes:
-- [`docs/reports/OFFSET_PICKING_REFINEMENT_2026-03-29.txt`](docs/reports/OFFSET_PICKING_REFINEMENT_2026-03-29.txt)
-
----
-
-## 9) Reproducible Debug Runs
-
-For fast, deterministic testing, create subsampled BED files:
+For the full interface, run:
 
 ```bash
-python -m mitoribopy.tools.subsample \
-  --input NT3.bed \
-  --output debug_subsample/NT3_subsample.bed \
-  --n 200000 \
-  --seed 42
+mitoribopy --help
 ```
 
----
+## Development
 
-## 10) Run Reports
-
-Project reports and migration logs are stored in:
-- `docs/reports/`
-
----
-
-## 11) Configuration Files
-
-You can run with a JSON config file and override from CLI.
-
-Template:
-- `pipeline_config.example.json`
-
-Use:
+Run the test suite with:
 
 ```bash
-python main.py --config pipeline_config.example.json --fasta <path_to_fasta>
+PYTHONPATH=src pytest
 ```
 
----
+This repository also includes package migration notes and release materials under [docs](/Users/ahramahn/Library/CloudStorage/OneDrive-UniversityofMiami/1.Research/1.Ribosome_Profiling/01.Ribo-seq_v1/docs).
 
-## 12) Testing
+## License
 
-Yes, having a `tests/` folder is standard for Python packages.
-
-Install test dependency and run:
-
-```bash
-pip install -e .[dev]
-python -m pytest
-```
-
-CI runs the same test suite on every push/pull request to `main` via:
-- `.github/workflows/ci.yml`
-
----
-
-## 13) Troubleshooting
-
-### No reads survive filtering
-- Check `-rpf` range and input BED coordinate validity.
-- Inspect `<output>/plots_and_csv/read_length_summary.csv`.
-
-### RPM looks too small/large
-- Confirm `--rpm_norm_mode` choice.
-- Confirm sample names in BED and read-count table match.
-- For mt-only denominator, set `--rpm_norm_mode mt_mrna` and correct `--mrna_ref_patterns`.
-
-### A-site/P-site offsets look inconsistent
-- Use `--offset_pick_reference p_site`.
-- Verify `--min_offset/--max_offset` are biologically appropriate for your data.
-
-### Missing plots for some transcripts
-- Confirm transcript names match between BED and FASTA.
-
----
-
-## 14) Development and Contribution
-
-Current best practice for edits:
-- Keep behavior-preserving refactors separate from scientific-logic changes.
-- Add docstrings and type hints for public functions.
-- Prefer explicit names over short abbreviations.
-- Keep plotting style centralized in `src/mitoribopy/plotting/style.py`.
-
-Planned packaging roadmap:
-- [`docs/PACKAGE_REFACTOR_SCHEME.md`](docs/PACKAGE_REFACTOR_SCHEME.md)
-
----
-
-## 15) Changelog and Release Notes
-
-- Changelog: [`CHANGELOG.md`](CHANGELOG.md)
-- Release notes: [`docs/release-notes/`](docs/release-notes/)
-
----
-
-## 16) Citation and Versioning (Planned)
-
-For public package release, this repository will include:
-- Semantic versioning
-- Changelog
-- Citation metadata
-- DOI-friendly release notes
+MIT. See [LICENSE](/Users/ahramahn/Library/CloudStorage/OneDrive-UniversityofMiami/1.Research/1.Ribosome_Profiling/01.Ribo-seq_v1/LICENSE).

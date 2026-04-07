@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 import pandas as pd
+
+from ..console import log_dataframe_preview, log_info, log_warning
+
+
+def _normalize_column_name(name: object) -> str:
+    """Normalize a column name for flexible matching."""
+    return re.sub(r"[^a-z0-9]+", "", str(name).strip().lower())
 
 
 def _resolve_column_name(
@@ -12,13 +20,14 @@ def _resolve_column_name(
     requested_name: str | None,
     fallback_names: list[str],
     label: str,
+    fallback_index: int | None = None,
 ) -> str:
-    """Resolve a column by explicit name or from case-insensitive fallbacks."""
+    """Resolve a column by explicit name, flexible fallback names, or column order."""
     cols = list(columns)
-    lower_map = {str(col).lower(): col for col in cols}
+    normalized_map = {_normalize_column_name(col): col for col in cols}
 
     if requested_name:
-        match = lower_map.get(str(requested_name).lower())
+        match = normalized_map.get(_normalize_column_name(requested_name))
         if match is None:
             raise ValueError(
                 f"{label} column '{requested_name}' not found. Available columns: {cols}"
@@ -26,9 +35,17 @@ def _resolve_column_name(
         return match
 
     for candidate in fallback_names:
-        match = lower_map.get(str(candidate).lower())
+        match = normalized_map.get(_normalize_column_name(candidate))
         if match is not None:
             return match
+
+    if fallback_index is not None and 0 <= fallback_index < len(cols):
+        chosen = cols[fallback_index]
+        log_info(
+            "COUNTS",
+            f"Falling back to column index {fallback_index + 1} for {label}: '{chosen}'",
+        )
+        return chosen
 
     raise ValueError(
         f"Could not auto-detect {label} column. Available columns: {cols}. "
@@ -40,6 +57,14 @@ def _match_any_substring(value: object, patterns: Iterable[str]) -> bool:
     """Return True if any pattern appears in the provided value string."""
     text = str(value).lower()
     return any(str(pattern).lower() in text for pattern in patterns)
+
+
+def _read_count_table(count_summary_path: str) -> pd.DataFrame:
+    """Read a count-summary table from CSV, TSV, or generic delimited text."""
+    counts_df = pd.read_csv(count_summary_path, sep=None, engine="python", comment="#")
+    if len(counts_df.columns) == 1:
+        counts_df = pd.read_csv(count_summary_path, sep=r"\s+", engine="python", comment="#")
+    return counts_df
 
 
 def compute_total_counts(
@@ -60,22 +85,24 @@ def compute_total_counts(
     if not mrna_ref_patterns:
         mrna_ref_patterns = ["mt_genome", "mt-mrna", "mt_mrna"]
 
-    counts_df = pd.read_csv(count_summary_path, sep=None, engine="python")
+    counts_df = _read_count_table(count_summary_path)
     if counts_df.empty:
-        print(f"[compute_total_counts] {count_summary_path} is empty or invalid.")
+        log_warning("COUNTS", f"{count_summary_path} is empty or invalid.")
         return {}, pd.DataFrame()
 
     sample_col = _resolve_column_name(
         counts_df.columns,
         requested_name=sample_col,
-        fallback_names=["Sample", "sample", "sample_name", "Sample_name"],
+        fallback_names=["Sample", "sample", "sample_name", "sampleid"],
         label="sample",
+        fallback_index=0,
     )
     reads_col = _resolve_column_name(
         counts_df.columns,
         requested_name=reads_col,
-        fallback_names=["Reads", "reads", "read_count", "read_counts", "count"],
+        fallback_names=["Reads", "reads", "read_count", "read_counts", "count", "counts"],
         label="read-count",
+        fallback_index=(2 if len(counts_df.columns) >= 3 else 1),
     )
 
     selected_cols = [sample_col, reads_col]
@@ -83,8 +110,9 @@ def compute_total_counts(
         reference_col = _resolve_column_name(
             counts_df.columns,
             requested_name=reference_col,
-            fallback_names=["reference", "Reference", "ref", "target", "gene", "feature"],
+            fallback_names=["reference", "ref", "target", "gene", "feature"],
             label="reference",
+            fallback_index=1,
         )
         selected_cols.append(reference_col)
 
@@ -103,9 +131,10 @@ def compute_total_counts(
 
     work_df.dropna(subset=[sample_col, reads_col], inplace=True)
     if work_df.empty:
-        print(
-            "[compute_total_counts] No rows remain after applying "
-            f"normalization_mode='{normalization_mode}'."
+        log_warning(
+            "COUNTS",
+            "No rows remain after applying "
+            f"normalization_mode='{normalization_mode}'.",
         )
         return {}, pd.DataFrame(columns=["Sample", "Total_reads"])
 
@@ -124,15 +153,12 @@ def compute_total_counts(
         total_counts_map[str(sample_name)] = int(total_reads)
         total_counts_map[str(sample_name).lower()] = int(total_reads)
 
-    print(
-        "[compute_total_counts] Successfully computed read counts "
-        f"(mode={normalization_mode}):"
-    )
+    log_info("COUNTS", f"Computed read totals successfully (mode={normalization_mode}).")
     if normalization_mode == "mt_mrna":
-        print(
-            "[compute_total_counts] Reference filter substrings: "
-            + ", ".join(str(pattern) for pattern in mrna_ref_patterns)
+        log_info(
+            "COUNTS",
+            "Reference filter substrings: "
+            + ", ".join(str(pattern) for pattern in mrna_ref_patterns),
         )
-    print(total_counts_df)
+    log_dataframe_preview("COUNTS", "Read-total summary", total_counts_df)
     return total_counts_map, total_counts_df
-

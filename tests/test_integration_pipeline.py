@@ -5,11 +5,13 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pandas as pd
 
 from mitoribopy.analysis.offset_enrichment import create_csv_for_offset_enrichment
 from mitoribopy.analysis.offset_selection import determine_p_site_offsets
+from mitoribopy.analysis.translation_profile_analysis import run_translation_profile_analysis
 from mitoribopy.data.transcript_annotations import human_annotation_df
 
 
@@ -165,6 +167,181 @@ def test_offset_selection_psite_vs_asite_shifts_by_three_nt(tmp_path: Path) -> N
     assert delta_3 == [-3]
 
 
+def test_offset_mask_excludes_near_anchor_bins_from_summary_and_selection(tmp_path: Path) -> None:
+    annotation = _human_annotation_with_codon_positions()
+    bed_df = pd.DataFrame(
+        [
+            {"chrom": "ND1", "start": 925, "end": 958, "read_length": 33},
+            {"chrom": "ND1", "start": 925, "end": 960, "read_length": 35},
+        ]
+    )
+
+    generated_summary, _ = create_csv_for_offset_enrichment(
+        bed_df=bed_df,
+        annotation_df=annotation,
+        align_to="stop",
+        rpf_range=range(33, 36),
+        output_csv=str(tmp_path / "masked_offsets.csv"),
+        offset_limit=10,
+        offset_mask_nt=5,
+        offset_site="p",
+        codon_overlap_mode="full",
+        strain="h",
+    )
+
+    assert generated_summary is not None
+    row_33 = generated_summary[generated_summary["Read Length"] == 33].iloc[0]
+    row_35 = generated_summary[generated_summary["Read Length"] == 35].iloc[0]
+    assert row_33[4] == 0
+    assert row_35[6] == 1
+
+    offsets_df = pd.DataFrame(
+        {
+            "Read Length": [30] * 6,
+            "5' Offset": [13, 13, 13, 13, 13, 13],
+            "3' Offset": [4, 4, 4, 6, 6, 6],
+        }
+    )
+    selected = determine_p_site_offsets(
+        offsets_df=offsets_df,
+        align_to="stop",
+        out_file=str(tmp_path / "masked_selected.csv"),
+        offset_min=1,
+        offset_max=10,
+        offset_mask_nt=5,
+        offset_site="p",
+        selection_reference="selected_site",
+    )
+
+    assert selected is not None
+    assert selected["Most Enriched 3' Offset"].tolist() == [6]
+
+
+def test_determine_p_site_offsets_supports_separate_five_and_three_ranges(tmp_path: Path) -> None:
+    offsets_df = pd.DataFrame(
+        {
+            "Read Length": [30] * 6,
+            "5' Offset": [8, 8, 8, 13, 13, 13],
+            "3' Offset": [16, 16, 16, 16, 16, 16],
+        }
+    )
+
+    selected = determine_p_site_offsets(
+        offsets_df=offsets_df,
+        align_to="stop",
+        out_file=str(tmp_path / "separate_ranges.csv"),
+        five_offset_min=12,
+        five_offset_max=20,
+        three_offset_min=15,
+        three_offset_max=20,
+        offset_site="p",
+        selection_reference="selected_site",
+    )
+
+    assert selected is not None
+    assert selected["Most Enriched 5' Offset"].tolist() == [13]
+    assert selected["Most Enriched 3' Offset"].tolist() == [16]
+
+
+def test_determine_p_site_offsets_respects_requested_output_range_for_asite_reporting(
+    tmp_path: Path,
+) -> None:
+    offsets_df = pd.DataFrame(
+        {
+            "Read Length": [30] * 6,
+            "5' Offset": [21, 21, 21, 18, 18, 18],
+            "3' Offset": [15, 15, 15, 12, 12, 12],
+        }
+    )
+
+    selected = determine_p_site_offsets(
+        offsets_df=offsets_df,
+        align_to="stop",
+        out_file=str(tmp_path / "asite_ranges.csv"),
+        five_offset_min=14,
+        five_offset_max=20,
+        three_offset_min=10,
+        three_offset_max=20,
+        offset_site="a",
+        selection_reference="p_site",
+    )
+
+    assert selected is not None
+    assert selected["Most Enriched 5' Offset"].tolist() == [18]
+    assert selected["Most Enriched 3' Offset"].tolist() == [12]
+
+
+def test_translation_profile_analysis_writes_transcript_level_asite_stop_codon_usage(
+    tmp_path: Path,
+) -> None:
+    fasta_path = tmp_path / "tiny_tx.fa"
+    tx_seq = ("A" * 9) + "ATG" + "AAA" + "AAA" + "AGA" + "TTT"
+    fasta_path.write_text(f">TX1\n{tx_seq}\n", encoding="utf-8")
+
+    annotation_df = pd.DataFrame(
+        [
+            {
+                "transcript": "TX1",
+                "start_codon": 9,
+                "stop_codon": 18,
+            }
+        ]
+    )
+    filtered_bed_df = pd.DataFrame(
+        [
+            {
+                "chrom": "TX1",
+                "start": 3,
+                "end": 33,
+                "read_length": 30,
+                "sample_name": "S1",
+            }
+        ]
+    )
+    offsets_df = pd.DataFrame(
+        {
+            "Read Length": [30],
+            "Most Enriched 5' Offset": [13],
+            "Most Enriched 3' Offset": [17],
+        }
+    )
+    args = SimpleNamespace(
+        merge_density=False,
+        strain="h",
+        cap_percentile=0.999,
+        offset_site="p",
+    )
+    output_dir = tmp_path / "analysis"
+
+    run_translation_profile_analysis(
+        sample_dirs=["S1"],
+        selected_offsets_df=offsets_df,
+        offset_type="5",
+        fasta_file=str(fasta_path),
+        output_dir=str(output_dir),
+        args=args,
+        annotation_df=annotation_df,
+        filtered_bed_df=filtered_bed_df,
+    )
+
+    a_site_tx_csv = output_dir / "S1" / "codon_usage" / "a_site_codon_usage_TX1.csv"
+    a_site_total_csv = output_dir / "S1" / "codon_usage" / "a_site_codon_usage_total.csv"
+
+    assert a_site_tx_csv.exists()
+    assert a_site_total_csv.exists()
+
+    transcript_df = pd.read_csv(a_site_tx_csv)
+    total_df = pd.read_csv(a_site_total_csv)
+
+    tx_stop = transcript_df[(transcript_df["Codon"] == "AGA") & (transcript_df["AA"] == "*")]
+    total_stop = total_df[(total_df["Codon"] == "AGA") & (total_df["AA"] == "*")]
+
+    assert not tx_stop.empty
+    assert not total_stop.empty
+    assert tx_stop["Coverage"].iloc[0] > 0
+    assert total_stop["Coverage"].iloc[0] >= tx_stop["Coverage"].iloc[0]
+
+
 def test_end_to_end_cli_smoke_generates_codon_usage_outputs(tmp_path: Path) -> None:
     fixture_dir = tmp_path / "fixture"
     output_dir = tmp_path / "out"
@@ -176,16 +353,24 @@ def test_end_to_end_cli_smoke_generates_codon_usage_outputs(tmp_path: Path) -> N
         f"STDERR:\n{result.stderr}"
     )
 
+    for step_number in range(1, 8):
+        assert f"[PIPELINE] Step {step_number}/7" in result.stdout
+
     offsets_csv = output_dir / "plots_and_csv" / "p_site_offsets_stop.csv"
     footprint_csv = output_dir / "S1" / "footprint_density" / "ND1_footprint_density.csv"
     codon_usage_csv = output_dir / "S1" / "codon_usage" / "codon_usage_total.csv"
-    igv_plot_dir = output_dir / "igv_style_plots"
+    coverage_plot_dir = output_dir / "coverage_profile_plots"
+    filtered_bed_dir = output_dir / "plots_and_csv" / "filtered_bed"
+    log_file = output_dir / "mitoribopy.log"
 
     assert offsets_csv.exists()
     assert footprint_csv.exists()
     assert codon_usage_csv.exists()
-    assert igv_plot_dir.exists()
-    assert list(igv_plot_dir.rglob("*.svg")), "Expected at least one IGV-style SVG output"
+    assert coverage_plot_dir.exists()
+    assert not filtered_bed_dir.exists()
+    assert list(coverage_plot_dir.rglob("*.svg")), "Expected at least one coverage-profile SVG output"
+    assert log_file.exists()
+    assert "[PIPELINE] Step 7/7" in log_file.read_text(encoding="utf-8")
 
     codon_df = pd.read_csv(codon_usage_csv)
     codon_col = next((col for col in codon_df.columns if col.lower() == "codon"), None)
