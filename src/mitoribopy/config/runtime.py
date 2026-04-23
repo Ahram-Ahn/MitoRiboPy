@@ -60,6 +60,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "rna_order": None,
     "rna_out_dir": "rna_seq_results",
     "do_rna_ribo_ratio": False,
+    "bam_mapq": 10,
 }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pandas as pd
 from ..console import iter_with_progress, log_info, log_warning
@@ -14,40 +15,77 @@ def process_bed_files(
     organism: str,
     annotation_df: pd.DataFrame,
     rpf_range: range | list[int],
+    *,
+    bam_mapq: int = 0,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Filter BED files by read length and return in-memory per-sample data."""
+    """Filter BED / BAM inputs by read length and return in-memory per-sample data.
+
+    Accepts two kinds of input files side-by-side in ``input_dir``:
+
+    * ``*.bed`` - BED3 / BED4 / BED6 files (pre-existing path; unchanged).
+    * ``*.bam`` - coordinate-sorted or unsorted BAM files. Each is
+      converted to BED6 via
+      :func:`mitoribopy.io.bam_reader.prepare_bam_inputs` into
+      ``<output_dir>/bam_converted/``. The converted BEDs then flow
+      through the same filtering + summary logic as native BEDs.
+
+    ``bam_mapq`` (default ``0`` = off) applies a pysam MAPQ filter
+    before the BAM -> BED6 conversion. Values around 10 are the
+    recommended NUMT-suppression default used by ``mitoribopy align``.
+    """
     _ = organism
     _ = annotation_df
 
     from ..plotting.visualization import plot_read_length_distribution
+    from .bam_reader import prepare_bam_inputs
 
-    bed_files = sorted(
+    converted_bed_paths = prepare_bam_inputs(
+        input_dir=Path(input_dir),
+        converted_dir=Path(output_dir) / "bam_converted",
+        mapq_threshold=bam_mapq,
+    )
+
+    native_bed_files = sorted(
         file_name for file_name in os.listdir(input_dir) if file_name.endswith(".bed")
     )
-    if not bed_files:
-        log_warning("BED", f"No .bed files found in {input_dir}.")
+    bed_sources: list[tuple[str, str]] = []  # (display_name, absolute_path)
+    for bed_file in native_bed_files:
+        bed_sources.append((bed_file, os.path.join(input_dir, bed_file)))
+    for bed_path in converted_bed_paths:
+        # Converted BEDs sit in a separate directory so their names do not
+        # collide with the native-BED filenames above; their sample names
+        # come from the BAM stem.
+        bed_sources.append((bed_path.name, str(bed_path)))
+
+    # Deterministic processing order by display name so sample ordering is
+    # reproducible regardless of whether input was BAM, BED, or mixed.
+    bed_sources.sort(key=lambda item: item[0])
+
+    if not bed_sources:
+        log_warning("BED", f"No .bed or .bam files found in {input_dir}.")
         return pd.DataFrame(), []
 
     log_info(
         "BED",
-        f"Found {len(bed_files)} BED file(s) in {input_dir} for filtering range {list(rpf_range)}.",
+        f"Found {len(bed_sources)} input file(s) in {input_dir} "
+        f"(native BED: {len(native_bed_files)}, BAM-converted: "
+        f"{len(converted_bed_paths)}) for filtering range "
+        f"{list(rpf_range)}.",
     )
 
     all_filtered_bed: list[pd.DataFrame] = []
     sample_names: list[str] = []
     read_length_summary: list[dict[str, object]] = []
 
-    for bed_file in iter_with_progress(
-        bed_files,
+    for bed_file, bed_file_path in iter_with_progress(
+        bed_sources,
         component="BED",
         noun="BED file",
-        labeler=str,
+        labeler=lambda item: item[0],
     ):
         if bed_file.startswith("filtered_"):
             log_info("BED", f"Skipping previously filtered file: {bed_file}")
             continue
-
-        bed_file_path = os.path.join(input_dir, bed_file)
         try:
             bed_df = pd.read_csv(bed_file_path, sep="\t", header=None)
         except Exception as exc:

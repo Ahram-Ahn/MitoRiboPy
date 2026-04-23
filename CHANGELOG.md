@@ -46,6 +46,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `docs/environment/Dockerfile`: miniconda3-based image; `ENTRYPOINT mitoribopy`.
 - `tests/test_align_integration.py` (@pytest.mark.requires_tools): end-to-end run on a tiny synthetic library, auto-skipped when cutadapt / bowtie2 / bowtie2-build / samtools are absent via `conftest.py::pytest_collection_modifyitems`.
 
+#### Phase 4 (BAM input for `mitoribopy rpf`)
+- `mitoribopy rpf` now accepts BAM files alongside BED files under `--directory`. Each `<sample>.bam` is converted to BED6 in `<output>/bam_converted/<sample>.bed` via pysam and then flows through the unchanged BED pipeline. No samtools / bedtools PATH dependency (pysam bundles htslib).
+- New CLI flag `--bam_mapq Q` on the `rpf` subcommand (default `10`; matches `mitoribopy align --mapq`). Set `0` to disable the pre-conversion MAPQ filter. Filtering defaults to `10` to preserve NUMT-suppression semantics when a raw alignment BAM is passed in from a non-MitoRiboPy source.
+- `src/mitoribopy/io/bam_reader.py` (new module):
+  - `convert_bam_to_bed(bam_in, bed_out, mapq_threshold)` - single-file BAM -> BED6 conversion, optionally MAPQ-filtered.
+  - `prepare_bam_inputs(input_dir, converted_dir, mapq_threshold)` - batch conversion for every `*.bam` in `input_dir`; skips with a warning when a `<sample>.bed` already exists (explicit BED wins on name conflict).
+  - Module docstring documents the exact BAM -> BED6 field mapping (`chrom`, `start`, `end`, `name`, `score`, `strand`) so downstream consumers can audit it.
+- `src/mitoribopy/io/bed_reader.process_bed_files` gains an optional `bam_mapq` kwarg and now accepts a mixed `.bed` + `.bam` input directory. Sample-name ordering is deterministic regardless of source type.
+- `src/mitoribopy/config/runtime.DEFAULT_CONFIG` gains a `bam_mapq: 10` entry so JSON / YAML / TOML configs can set the threshold declaratively.
+- `tests/test_bam_reader.py` (10 tests): conversion happy path, MAPQ filter, mixed BED + BAM ingestion, name-conflict precedence, `bam_mapq` plumbing through `process_bed_files`, empty-directory handling.
+
 ### Changed
 - `mitoribopy <flags>` (no subcommand) still works in v0.3.x but now emits a stderr `DEPRECATION` warning and routes to `mitoribopy rpf <flags>`. This fallback will be removed in v0.4.0.
 - The `src/mitoribopy/cli.py` module has been replaced by a `src/mitoribopy/cli/` package. The public names `mitoribopy.cli.main`, `mitoribopy.cli._normalize_args`, and `mitoribopy.cli.run_pipeline_cli` are preserved.

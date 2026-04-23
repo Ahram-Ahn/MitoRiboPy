@@ -100,9 +100,24 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         "--directory",
         default=defaults["directory"],
         metavar="BED_DIR",
-        help="Directory containing the input Ribo-seq BED files.",
+        help=(
+            "Directory containing Ribo-seq input files.\n"
+            "Both .bed and .bam are accepted; BAM files are auto-converted\n"
+            "to BED6 under <output>/bam_converted/ via pysam."
+        ),
     )
     directory_action.default_display = "current working directory"
+    core_group.add_argument(
+        "--bam_mapq",
+        type=int,
+        default=defaults["bam_mapq"],
+        metavar="Q",
+        help=(
+            "MAPQ threshold applied to BAM inputs before BAM->BED6 conversion.\n"
+            "Set to 0 to disable. Default 10 is the same NUMT-suppression\n"
+            "default used by 'mitoribopy align'."
+        ),
+    )
     rpf_action = core_group.add_argument(
         "-rpf",
         nargs=2,

@@ -167,13 +167,14 @@ def _order_sample_dirs(sample_dirs: list[str], requested_order: list[str] | None
 
 
 def filter_bed_inputs(context: PipelineContext, emit_status: StatusWriter) -> bool:
-    """Filter BED inputs and resolve the sample order for downstream steps."""
+    """Filter BED/BAM inputs and resolve the sample order for downstream steps."""
     filtered_bed_df, sample_dirs = process_bed_files(
         input_dir=context.args.directory,
         output_dir=str(context.plot_output_dir),
         organism=context.args.strain,
         annotation_df=context.annotation_df,
         rpf_range=context.rpf_range,
+        bam_mapq=int(getattr(context.args, "bam_mapq", 0) or 0),
     )
     context.filtered_bed_df = filtered_bed_df
 
