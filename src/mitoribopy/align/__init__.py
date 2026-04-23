@@ -37,6 +37,11 @@ from .tool_check import (
     ensure_tools_available,
     get_tool_version,
 )
+from .trim import (
+    parse_cutadapt_json,
+    resolve_kit_settings,
+    run_cutadapt,
+)
 
 __all__ = [
     "KIT_PRESETS",
@@ -55,4 +60,7 @@ __all__ = [
     "check_tool",
     "ensure_tools_available",
     "get_tool_version",
+    "parse_cutadapt_json",
+    "resolve_kit_settings",
+    "run_cutadapt",
 ]
