@@ -37,6 +37,7 @@ from .tool_check import (
     ensure_tools_available,
     get_tool_version,
 )
+from .align import align_mt
 from .contam import (
     parse_bowtie2_stderr,
     subtract_contaminants,
@@ -64,6 +65,7 @@ __all__ = [
     "check_tool",
     "ensure_tools_available",
     "get_tool_version",
+    "align_mt",
     "parse_bowtie2_stderr",
     "parse_cutadapt_json",
     "resolve_kit_settings",
