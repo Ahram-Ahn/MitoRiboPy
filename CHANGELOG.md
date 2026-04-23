@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- `mitoribopy align --adapter-detection {auto|off|strict}` (default `auto`):
+  scans the head of the first input FASTQ for known adapter signatures
+  from `KIT_PRESETS` and either auto-selects the matching preset (when
+  `--kit-preset` is left at `custom`) or hard-fails on mismatch
+  (`strict` mode). Catches the silent failure mode where the supplied
+  `--kit-preset` does not match the actual library chemistry and ~99%
+  of reads are filtered as too-long without any error. New module
+  `mitoribopy.align.adapter_detect` exposes `detect_adapter` and
+  `DetectionResult` for programmatic use. The chosen mode is recorded
+  under `adapter_detection_mode` in `run_settings.json`.
 
 ## [0.3.0] - Unreleased
 ### Added

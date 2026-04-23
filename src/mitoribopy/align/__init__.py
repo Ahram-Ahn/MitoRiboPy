@@ -7,14 +7,15 @@ transcriptome reference).
 
 Modules:
 
-* :mod:`mitoribopy.align._types`       shared dataclasses and literals
-* :mod:`mitoribopy.align.tool_check`   PATH + version verification
-* :mod:`mitoribopy.align.trim`         cutadapt wrapper with kit presets
-* :mod:`mitoribopy.align.contam`       bowtie2 contaminant subtraction
-* :mod:`mitoribopy.align.align`        bowtie2 mt-transcriptome alignment
-* :mod:`mitoribopy.align.dedup`        umi_tools / skip / mark-duplicates
-* :mod:`mitoribopy.align.bam_utils`    pysam-based MAPQ filter + BAM -> BED6
-* :mod:`mitoribopy.align.read_counts`  per-sample provenance table
+* :mod:`mitoribopy.align._types`         shared dataclasses and literals
+* :mod:`mitoribopy.align.tool_check`     PATH + version verification
+* :mod:`mitoribopy.align.adapter_detect` FASTQ-head adapter sanity check
+* :mod:`mitoribopy.align.trim`           cutadapt wrapper with kit presets
+* :mod:`mitoribopy.align.contam`         bowtie2 contaminant subtraction
+* :mod:`mitoribopy.align.align`          bowtie2 mt-transcriptome alignment
+* :mod:`mitoribopy.align.dedup`          umi_tools / skip / mark-duplicates
+* :mod:`mitoribopy.align.bam_utils`      pysam-based MAPQ filter + BAM -> BED6
+* :mod:`mitoribopy.align.read_counts`    per-sample provenance table
 """
 
 from ._types import (
@@ -36,6 +37,11 @@ from .tool_check import (
     check_tool,
     ensure_tools_available,
     get_tool_version,
+)
+from .adapter_detect import (
+    DetectionResult,
+    detect_adapter,
+    format_per_kit_rates,
 )
 from .align import align_mt
 from .bam_utils import (
@@ -85,11 +91,14 @@ __all__ = [
     "ensure_tools_available",
     "get_tool_version",
     "CONFIRM_MARK_DUPLICATES_FLAG",
+    "DetectionResult",
     "align_mt",
     "assemble_sample_counts",
     "bam_to_bed6",
     "count_mapped_reads",
+    "detect_adapter",
     "filter_bam_mapq",
+    "format_per_kit_rates",
     "format_row",
     "parse_bowtie2_stderr",
     "parse_cutadapt_json",

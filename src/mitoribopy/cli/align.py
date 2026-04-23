@@ -25,6 +25,7 @@ from typing import Iterable
 
 from .. import __version__
 from ..align import (
+    adapter_detect,
     align as align_step,
     bam_utils,
     contam as contam_step,
@@ -34,6 +35,7 @@ from ..align import (
     trim as trim_step,
 )
 from ..align._types import KIT_PRESETS, SampleCounts
+from ..console import log_info, log_warning
 from . import common
 
 
@@ -139,6 +141,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["5p", "3p"],
         default=None,
         help="UMI position within the insert (overrides kit preset).",
+    )
+    library.add_argument(
+        "--adapter-detection",
+        choices=["auto", "off", "strict"],
+        default="auto",
+        metavar="MODE",
+        help=(
+            "Sanity-check the supplied --kit-preset against the data. "
+            "'auto' (default): scan the head of the first FASTQ; pick "
+            "the matching preset when --kit-preset is left at 'custom', "
+            "warn on mismatch otherwise. 'strict': always scan and "
+            "HARD-FAIL on any disagreement (best for batch / CI runs). "
+            "'off': trust --kit-preset / --adapter without inspection."
+        ),
     )
     library.add_argument(
         "--library-strandedness",
@@ -316,6 +332,7 @@ def _write_run_settings(
         "mitoribopy_version": __version__,
         "kit_preset": resolved_kit.kit,
         "adapter": resolved_kit.adapter,
+        "adapter_detection_mode": args.adapter_detection,
         "umi_length": resolved_kit.umi_length,
         "umi_position": resolved_kit.umi_position,
         "library_strandedness": args.library_strandedness,
@@ -422,11 +439,123 @@ def _process_one_sample(
     )
 
 
+def _apply_adapter_detection(
+    args: argparse.Namespace,
+    first_fastq: Path,
+) -> int | None:
+    """Scan ``first_fastq`` and apply ``--adapter-detection`` policy to ``args``.
+
+    May mutate ``args.kit_preset`` when the user left it at ``custom`` and
+    detection succeeded. Returns ``None`` to continue, or a non-zero exit
+    code to abort (strict-mode hard fail).
+    """
+    if not first_fastq.exists():
+        log_warning(
+            "ADAPTER",
+            f"Cannot scan {first_fastq} (file not found); skipping detection.",
+        )
+        return None
+
+    try:
+        detection = adapter_detect.detect_adapter(first_fastq)
+    except OSError as exc:
+        log_warning(
+            "ADAPTER",
+            f"Could not scan {first_fastq.name}: {exc}; skipping detection.",
+        )
+        return None
+
+    user_specified_preset = args.kit_preset != "custom" or args.adapter is not None
+    detected = detection.preset_name
+    rates_str = adapter_detect.format_per_kit_rates(detection.per_kit_rates)
+
+    if args.adapter_detection == "strict":
+        if detected is None:
+            print(
+                "[mitoribopy align] ERROR: --adapter-detection strict could not "
+                f"identify a known adapter in {first_fastq.name} "
+                f"({detection.n_reads_scanned} reads scanned). "
+                f"Per-kit match rates: {rates_str}. "
+                "Re-run with --adapter-detection off to bypass.",
+                file=sys.stderr,
+            )
+            return 2
+        if user_specified_preset and detected != args.kit_preset:
+            print(
+                "[mitoribopy align] ERROR: --adapter-detection strict: "
+                f"data looks like '{detected}' "
+                f"({detection.match_rate * 100:.1f}% match) but you supplied "
+                f"--kit-preset {args.kit_preset}. "
+                f"Per-kit match rates: {rates_str}. "
+                f"Re-run with --kit-preset {detected} "
+                "(or --adapter-detection off).",
+                file=sys.stderr,
+            )
+            return 2
+        if not user_specified_preset:
+            args.kit_preset = detected
+            log_info(
+                "ADAPTER",
+                f"Auto-selected --kit-preset {detected} "
+                f"({detection.match_rate * 100:.1f}% match, "
+                f"{detection.n_reads_scanned} reads scanned).",
+            )
+        return None
+
+    # auto mode (off mode never enters this function)
+    if detected is None:
+        if not user_specified_preset:
+            log_warning(
+                "ADAPTER",
+                f"No known adapter detected in {first_fastq.name} "
+                "and --kit-preset is 'custom' with no --adapter. "
+                f"Per-kit match rates: {rates_str}. "
+                "Pass --kit-preset / --adapter explicitly or use "
+                "--adapter-detection off.",
+            )
+        return None
+
+    if not user_specified_preset:
+        args.kit_preset = detected
+        log_info(
+            "ADAPTER",
+            f"Auto-selected --kit-preset {detected} "
+            f"({detection.match_rate * 100:.1f}% match, "
+            f"{detection.n_reads_scanned} reads scanned).",
+        )
+    elif detected != args.kit_preset:
+        log_warning(
+            "ADAPTER",
+            f"--kit-preset {args.kit_preset} disagrees with adapter scan "
+            f"(detected '{detected}' at {detection.match_rate * 100:.1f}%). "
+            f"Per-kit match rates: {rates_str}. "
+            "Re-run with --adapter-detection strict to fail-fast on this.",
+        )
+    return None
+
+
 def run(argv: Iterable[str]) -> int:
     """Entry point for ``mitoribopy align <args>``."""
     parser = build_parser()
     args = parser.parse_args(list(argv))
     common.apply_common_arguments(args)
+
+    # Enumerate FASTQs first so adapter detection can sanity-check
+    # --kit-preset against the actual data before any expensive resolution
+    # or subprocess work.
+    inputs: list[Path]
+    try:
+        inputs = _enumerate_fastqs(args.fastq_dir, args.fastq)
+    except FileNotFoundError as exc:
+        print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    # Adapter sanity check. Skipped in dry-run (no real data inspection)
+    # and when no FASTQ paths exist yet (validation will fail loudly later).
+    if args.adapter_detection != "off" and not args.dry_run and inputs:
+        bail = _apply_adapter_detection(args, inputs[0])
+        if bail is not None:
+            return bail
 
     # Resolve configuration up front so invalid combinations fail before
     # any subprocess runs.
@@ -448,13 +577,6 @@ def run(argv: Iterable[str]) -> int:
             confirm_mark_duplicates=args.confirm_mark_duplicates,
         )
     except ValueError as exc:
-        print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
-        return 2
-
-    inputs: list[Path]
-    try:
-        inputs = _enumerate_fastqs(args.fastq_dir, args.fastq)
-    except FileNotFoundError as exc:
         print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
         return 2
 
