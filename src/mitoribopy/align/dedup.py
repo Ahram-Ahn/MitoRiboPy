@@ -34,6 +34,7 @@ from pathlib import Path
 import pysam
 
 from ._types import DedupResult, DedupStrategy
+from .bam_utils import count_mapped_reads as _count_mapped_reads
 from .tool_check import ToolNotFoundError
 
 
@@ -114,18 +115,6 @@ def resolve_dedup_strategy(
 # ---------------------------------------------------------------------------
 # Per-strategy implementations
 # ---------------------------------------------------------------------------
-
-
-def _count_mapped_reads(bam_path: Path) -> int:
-    """Count primary mapped records in a BAM using pysam."""
-    with pysam.AlignmentFile(str(bam_path), "rb") as handle:
-        return sum(
-            1
-            for read in handle
-            if not read.is_unmapped
-            and not read.is_secondary
-            and not read.is_supplementary
-        )
 
 
 def run_umi_tools_dedup(

@@ -38,6 +38,11 @@ from .tool_check import (
     get_tool_version,
 )
 from .align import align_mt
+from .bam_utils import (
+    bam_to_bed6,
+    count_mapped_reads,
+    filter_bam_mapq,
+)
 from .contam import (
     parse_bowtie2_stderr,
     subtract_contaminants,
@@ -75,6 +80,9 @@ __all__ = [
     "get_tool_version",
     "CONFIRM_MARK_DUPLICATES_FLAG",
     "align_mt",
+    "bam_to_bed6",
+    "count_mapped_reads",
+    "filter_bam_mapq",
     "parse_bowtie2_stderr",
     "parse_cutadapt_json",
     "resolve_dedup_strategy",
