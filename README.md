@@ -1,17 +1,26 @@
 # MitoRiboPy
 
-MitoRiboPy is a package for mitochondrial ribosome profiling analysis. It runs a package-native pipeline from BED inputs through offset selection, translation-profile analysis, codon usage, coverage-profile plotting, and optional downstream modules such as structure-density export, codon correlation, and RNA-seq integration.
+MitoRiboPy is a Python package for mitochondrial ribosome profiling (mt-Ribo-seq) analysis. Starting in v0.3.0 it spans the full pipeline from raw FASTQ through translation-efficiency integration with paired RNA-seq:
+
+- `mitoribopy align` &mdash; FASTQ &rarr; BAM &rarr; BED6 + per-sample read counts (cutadapt + bowtie2 + umi_tools + pysam)
+- `mitoribopy rpf` &mdash; BED/BAM &rarr; offsets, translation-profile, codon usage, coverage plots
+- `mitoribopy rnaseq` &mdash; DE table (DESeq2 / Xtail / Anota2Seq) + rpf outputs &rarr; TE and &Delta;TE tables + plots, SHA256 reference-consistency gate
+- `mitoribopy all` &mdash; end-to-end orchestrator with a shared config file and a composed `run_manifest.json`
 
 ## Highlights
 
-- Standalone package CLI with no runtime dependency on legacy pipeline scripts
-- Built-in human and yeast reference data loaded from packaged CSV and JSON files
-- End-specific offset selection with separate 5' and 3' bounds
-- P-site and A-site workflows with explicit offset-picking behavior
-- In-memory BED filtering with no duplicated filtered BED output files
+- Subcommand CLI (`align` / `rpf` / `rnaseq` / `all`) with shared `--config`, `--dry-run`, `--threads`, `--log-level`
+- Config files in JSON, YAML, or TOML (auto-detected by path suffix)
+- Kit-aware FASTQ trimming: `truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, `qiaseq_mirna`, or explicit `--adapter`
+- Strand-aware mt-transcriptome alignment (`--library-strandedness forward` by default) so ND5 / ND6 antisense overlap is resolved by construction on Path A (transcriptome reference)
+- Deduplication safe by default: `--dedup-strategy auto` picks UMI-aware when UMIs are present and skips otherwise; `mark-duplicates` is behind a long confirmation flag because coordinate-only dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries
+- BAM input to `rpf` via pysam (no samtools / bedtools PATH dependency)
+- SHA256 reference-consistency gate on `rnaseq`: Ribo-seq and RNA-seq sides must be aligned to the identical transcript reference; mismatches are a hard fail
+- Built-in human and yeast reference data (annotation CSVs + codon tables)
+- End-specific 5'/3' offset selection, P-site vs A-site workflows, bicistronic ATP8/ATP6 and ND4L/ND4 handling
+- Custom organism support via `--annotation_file`, `--codon_tables_file`, `--codon_table_name`, `--start_codons`
 - Persistent per-run logging in `<output>/mitoribopy.log`
-- Custom organism support through user-supplied annotation CSV and codon-table JSON files
-- Bicistronic transcript handling for ATP8/ATP6 and ND4L/ND4 with configurable baseline sequence IDs
+- Provenance: every stage writes a `run_settings.json`; `mitoribopy all` composes them into `run_manifest.json`
 
 ## Installation
 
@@ -41,17 +50,55 @@ PYTHONPATH=src python -m mitoribopy --help
 
 ## Quick Start
 
-
-Minimal example:
+### `mitoribopy rpf` &mdash; BED/BAM through the analysis pipeline
 
 ```bash
-mitoribopy \
+mitoribopy rpf \
   -s h \
   -f <reference.fa> \
   --directory <ribo_bed_dir> \
   -rpf 29 34 \
   --output <results_dir>
 ```
+
+Plain `mitoribopy <flags>` still works in v0.3.x but routes to `rpf` with a deprecation warning. Use the explicit subcommand form.
+
+### `mitoribopy align` &mdash; FASTQ &rarr; BAM + BED
+
+```bash
+mitoribopy align \
+  --kit-preset nebnext_smallrna \
+  --library-strandedness forward \
+  --fastq-dir <fastqs_dir> \
+  --contam-index <bowtie2_rRNA_index_prefix> \
+  --mt-index <bowtie2_mt_transcriptome_index_prefix> \
+  --output <align_results_dir>
+```
+
+Use `--kit-preset custom --adapter <SEQ>` when your library isn't one of the built-in presets. External tools (`cutadapt`, `bowtie2`, `umi_tools`) must be on `$PATH`; see [docs/environment/environment.yml](docs/environment/environment.yml) for a ready-made bioconda env.
+
+### `mitoribopy rnaseq` &mdash; DE table + rpf &rarr; TE / &Delta;TE
+
+```bash
+mitoribopy rnaseq \
+  --de-table <deseq2_or_xtail_or_anota2seq_output.tsv> \
+  --gene-id-convention hgnc \
+  --ribo-dir <rpf_results_dir> \
+  --reference-gtf <shared_reference.fa> \
+  --condition-map <samples_to_conditions.tsv> \
+  --condition-a control --condition-b knockdown \
+  --output <rnaseq_results_dir>
+```
+
+`--gene-id-convention` is required (no default). The reference-consistency gate will hard-fail unless the hash of `--reference-gtf` matches the hash the prior `rpf` run recorded.
+
+### `mitoribopy all` &mdash; end-to-end orchestrator
+
+```bash
+mitoribopy all --config pipeline_config.yaml --output <run_root>
+```
+
+Where `pipeline_config.yaml` has `align:`, `rpf:`, and optional `rnaseq:` sections; each section's keys correspond to the subcommand's CLI flag names. See [docs/tutorials/01_end_to_end_fastq.md](docs/tutorials/01_end_to_end_fastq.md) for a worked example.
 
 ## Built-In References
 

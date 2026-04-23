@@ -1,0 +1,114 @@
+%% MitoRiboPy v0.3.0 pipeline architecture.
+%% Four subcommands (align / rpf / rnaseq / all) and their data flow.
+
+graph TD
+  classDef entry fill:#e9f5ff,stroke:#2a7ab0,color:#083
+  classDef module fill:#eef,stroke:#336,color:#003
+  classDef fs fill:#fff7e6,stroke:#b85c00,color:#600
+  classDef external fill:#f5f5f5,stroke:#555,color:#111,stroke-dasharray: 3 2
+
+  subgraph TOP["mitoribopy (cli/)"]
+    cli_main["cli.main dispatcher<br/>+ legacy fallback -> rpf"]
+    cli_align["cli.align"]
+    cli_rpf["cli.rpf"]
+    cli_rnaseq["cli.rnaseq"]
+    cli_all["cli.all_"]
+    cli_common["cli.common<br/>--config / --dry-run<br/>--threads / --log-level"]
+  end
+  class cli_main entry
+
+  cli_main --> cli_align
+  cli_main --> cli_rpf
+  cli_main --> cli_rnaseq
+  cli_main --> cli_all
+
+  cli_align -.-> cli_common
+  cli_rpf -.-> cli_common
+  cli_rnaseq -.-> cli_common
+  cli_all -.-> cli_common
+
+  subgraph ALIGN_PKG["mitoribopy.align"]
+    a_tool_check["tool_check<br/>bowtie2_strand_flag"]
+    a_trim["trim<br/>cutadapt kit presets"]
+    a_contam["contam<br/>bowtie2 contam subtract"]
+    a_align["align<br/>bowtie2 mt-transcriptome"]
+    a_dedup["dedup<br/>umi_tools / skip / mark-duplicates"]
+    a_bam_utils["bam_utils (pysam)<br/>MAPQ filter + BAM->BED6"]
+    a_read_counts["read_counts<br/>SampleCounts + TSV"]
+  end
+  class a_tool_check,a_trim,a_contam,a_align,a_dedup,a_bam_utils,a_read_counts module
+
+  cli_align --> a_tool_check
+  cli_align --> a_trim
+  cli_align --> a_contam
+  cli_align --> a_align
+  cli_align --> a_bam_utils
+  cli_align --> a_dedup
+  cli_align --> a_read_counts
+
+  subgraph RPF_PKG["mitoribopy rpf (pipeline + io + analysis + plotting)"]
+    rpf_runner["pipeline.runner<br/>argparse build_parser"]
+    rpf_steps["pipeline.steps<br/>+ write_rpf_counts_table<br/>+ write_rpf_run_settings"]
+    rpf_io_bed["io.bed_reader<br/>+ bam_mapq"]
+    rpf_io_bam["io.bam_reader<br/>BAM->BED6 preprocessor"]
+    rpf_analysis["analysis.*<br/>offsets + translation profile"]
+    rpf_plotting["plotting.*<br/>coverage + structure density"]
+  end
+  class rpf_runner,rpf_steps,rpf_io_bed,rpf_io_bam,rpf_analysis,rpf_plotting module
+
+  cli_rpf --> rpf_runner
+  rpf_runner --> rpf_steps
+  rpf_steps --> rpf_io_bed
+  rpf_io_bed --> rpf_io_bam
+  rpf_io_bam -.-> a_bam_utils
+  rpf_steps --> rpf_analysis
+  rpf_steps --> rpf_plotting
+
+  subgraph RNASEQ_PKG["mitoribopy.rnaseq"]
+    r_types["_types + gene_ids<br/>mt-mRNA registry"]
+    r_de_loader["de_loader<br/>DESeq2 / Xtail / Anota2Seq auto-detect"]
+    r_ref_gate["reference_gate<br/>SHA256 consistency gate"]
+    r_counts["counts<br/>loads rpf_counts.tsv"]
+    r_te["te<br/>TE + delta-TE + 0.5 pseudocount"]
+    r_plots["plots<br/>scatter + volcano"]
+  end
+  class r_types,r_de_loader,r_ref_gate,r_counts,r_te,r_plots module
+
+  cli_rnaseq --> r_types
+  cli_rnaseq --> r_de_loader
+  cli_rnaseq --> r_ref_gate
+  cli_rnaseq --> r_counts
+  cli_rnaseq --> r_te
+  cli_rnaseq --> r_plots
+
+  %% data flow on disk
+  fs_fastq["FASTQ/<br/>input reads"]
+  fs_align_bed["align/bed/<br/>BED6 strand-aware"]
+  fs_align_counts["align/read_counts.tsv"]
+  fs_align_settings["align/run_settings.json"]
+  fs_rpf_counts["rpf/rpf_counts.tsv"]
+  fs_rpf_settings["rpf/run_settings.json<br/>reference_checksum"]
+  fs_rpf_outputs["rpf/{footprint_density,<br/>translating_frame,<br/>codon_usage, ...}"]
+  fs_de_table["DE table<br/>(external)"]
+  fs_rnaseq_out["rnaseq/{te.tsv,<br/>delta_te.tsv, plots/}"]
+  fs_manifest["run_manifest.json<br/>(composed by 'all')"]
+  class fs_fastq,fs_align_bed,fs_align_counts,fs_align_settings,fs_rpf_counts,fs_rpf_settings,fs_rpf_outputs,fs_rnaseq_out,fs_manifest fs
+  class fs_de_table external
+
+  fs_fastq --> cli_align
+  cli_align --> fs_align_bed
+  cli_align --> fs_align_counts
+  cli_align --> fs_align_settings
+  fs_align_bed --> cli_rpf
+  cli_rpf --> fs_rpf_counts
+  cli_rpf --> fs_rpf_settings
+  cli_rpf --> fs_rpf_outputs
+  fs_rpf_counts --> cli_rnaseq
+  fs_rpf_settings --> cli_rnaseq
+  fs_de_table --> cli_rnaseq
+  cli_rnaseq --> fs_rnaseq_out
+
+  cli_all --> cli_align
+  cli_all --> cli_rpf
+  cli_all --> cli_rnaseq
+  cli_all --> fs_manifest
