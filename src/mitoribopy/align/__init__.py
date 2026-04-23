@@ -55,6 +55,12 @@ from .dedup import (
     run_umi_tools_dedup,
     skip_dedup,
 )
+from .read_counts import (
+    assemble_sample_counts,
+    format_row,
+    read_counts_columns,
+    write_read_counts_table,
+)
 from .trim import (
     parse_cutadapt_json,
     resolve_kit_settings,
@@ -80,11 +86,14 @@ __all__ = [
     "get_tool_version",
     "CONFIRM_MARK_DUPLICATES_FLAG",
     "align_mt",
+    "assemble_sample_counts",
     "bam_to_bed6",
     "count_mapped_reads",
     "filter_bam_mapq",
+    "format_row",
     "parse_bowtie2_stderr",
     "parse_cutadapt_json",
+    "read_counts_columns",
     "resolve_dedup_strategy",
     "resolve_kit_settings",
     "run_cutadapt",
@@ -93,4 +102,5 @@ __all__ = [
     "run_umi_tools_dedup",
     "skip_dedup",
     "subtract_contaminants",
+    "write_read_counts_table",
 ]

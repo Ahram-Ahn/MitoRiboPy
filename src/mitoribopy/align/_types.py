@@ -194,14 +194,18 @@ class DedupResult:
 class SampleCounts:
     """Per-sample stage counts written into ``read_counts.tsv``.
 
-    This is the provenance spine: every downstream analysis that wants to
-    know "how many reads made it to mt-aligned?" reads this table.
+    This is the provenance spine: every downstream analysis that wants
+    to know "how many reads made it to mt-aligned?" reads this table.
+    Column order below is preserved verbatim in the TSV header so
+    downstream consumers can index by position or by name.
     """
 
     sample: str
     total_reads: int
     post_trim: int
-    post_rrna_filter: int
-    mt_aligned: int
+    rrna_aligned: int  # reads removed by the contam subtract step
+    post_rrna_filter: int  # reads entering mt-transcriptome alignment
+    mt_aligned: int  # reads aligned to the mt-transcriptome
+    unaligned_to_mt: int  # post_rrna_filter minus mt_aligned
     mt_aligned_after_mapq: int
     mt_aligned_after_dedup: int
