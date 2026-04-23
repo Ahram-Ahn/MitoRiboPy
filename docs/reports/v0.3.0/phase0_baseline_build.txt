@@ -1,0 +1,439 @@
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=68
+  - wheel
+* Getting build dependencies for sdist...
+/tmp/build-env-oh773f6e/lib/python3.11/site-packages/setuptools/config/_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+/tmp/build-env-oh773f6e/lib/python3.11/site-packages/setuptools/config/_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+/tmp/build-env-oh773f6e/lib/python3.11/site-packages/setuptools/dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running egg_info
+writing src/MitoRiboPy.egg-info/PKG-INFO
+writing dependency_links to src/MitoRiboPy.egg-info/dependency_links.txt
+writing entry points to src/MitoRiboPy.egg-info/entry_points.txt
+writing requirements to src/MitoRiboPy.egg-info/requires.txt
+writing top-level names to src/MitoRiboPy.egg-info/top_level.txt
+reading manifest file 'src/MitoRiboPy.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'src/MitoRiboPy.egg-info/SOURCES.txt'
+* Building sdist...
+/tmp/build-env-oh773f6e/lib/python3.11/site-packages/setuptools/config/_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+/tmp/build-env-oh773f6e/lib/python3.11/site-packages/setuptools/config/_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+/tmp/build-env-oh773f6e/lib/python3.11/site-packages/setuptools/dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running sdist
+running egg_info
+writing src/MitoRiboPy.egg-info/PKG-INFO
+writing dependency_links to src/MitoRiboPy.egg-info/dependency_links.txt
+writing entry points to src/MitoRiboPy.egg-info/entry_points.txt
+writing requirements to src/MitoRiboPy.egg-info/requires.txt
+writing top-level names to src/MitoRiboPy.egg-info/top_level.txt
+reading manifest file 'src/MitoRiboPy.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'src/MitoRiboPy.egg-info/SOURCES.txt'
+running check
+creating mitoribopy-0.2.0
+creating mitoribopy-0.2.0/src/MitoRiboPy.egg-info
+creating mitoribopy-0.2.0/src/mitoribopy
+creating mitoribopy-0.2.0/src/mitoribopy/analysis
+creating mitoribopy-0.2.0/src/mitoribopy/config
+creating mitoribopy-0.2.0/src/mitoribopy/data
+creating mitoribopy-0.2.0/src/mitoribopy/io
+creating mitoribopy-0.2.0/src/mitoribopy/pipeline
+creating mitoribopy-0.2.0/src/mitoribopy/plotting
+creating mitoribopy-0.2.0/src/mitoribopy/tools
+creating mitoribopy-0.2.0/src/mitoribopy/utils
+creating mitoribopy-0.2.0/tests
+copying files to mitoribopy-0.2.0...
+copying LICENSE -> mitoribopy-0.2.0
+copying README.md -> mitoribopy-0.2.0
+copying pyproject.toml -> mitoribopy-0.2.0
+copying src/MitoRiboPy.egg-info/PKG-INFO -> mitoribopy-0.2.0/src/MitoRiboPy.egg-info
+copying src/MitoRiboPy.egg-info/SOURCES.txt -> mitoribopy-0.2.0/src/MitoRiboPy.egg-info
+copying src/MitoRiboPy.egg-info/dependency_links.txt -> mitoribopy-0.2.0/src/MitoRiboPy.egg-info
+copying src/MitoRiboPy.egg-info/entry_points.txt -> mitoribopy-0.2.0/src/MitoRiboPy.egg-info
+copying src/MitoRiboPy.egg-info/requires.txt -> mitoribopy-0.2.0/src/MitoRiboPy.egg-info
+copying src/MitoRiboPy.egg-info/top_level.txt -> mitoribopy-0.2.0/src/MitoRiboPy.egg-info
+copying src/mitoribopy/__init__.py -> mitoribopy-0.2.0/src/mitoribopy
+copying src/mitoribopy/__main__.py -> mitoribopy-0.2.0/src/mitoribopy
+copying src/mitoribopy/cli.py -> mitoribopy-0.2.0/src/mitoribopy
+copying src/mitoribopy/console.py -> mitoribopy-0.2.0/src/mitoribopy
+copying src/mitoribopy/analysis/__init__.py -> mitoribopy-0.2.0/src/mitoribopy/analysis
+copying src/mitoribopy/analysis/codon_correlation.py -> mitoribopy-0.2.0/src/mitoribopy/analysis
+copying src/mitoribopy/analysis/offset_enrichment.py -> mitoribopy-0.2.0/src/mitoribopy/analysis
+copying src/mitoribopy/analysis/offset_selection.py -> mitoribopy-0.2.0/src/mitoribopy/analysis
+copying src/mitoribopy/analysis/rna_seq.py -> mitoribopy-0.2.0/src/mitoribopy/analysis
+copying src/mitoribopy/analysis/translation_profile_analysis.py -> mitoribopy-0.2.0/src/mitoribopy/analysis
+copying src/mitoribopy/config/__init__.py -> mitoribopy-0.2.0/src/mitoribopy/config
+copying src/mitoribopy/config/defaults.py -> mitoribopy-0.2.0/src/mitoribopy/config
+copying src/mitoribopy/config/loader.py -> mitoribopy-0.2.0/src/mitoribopy/config
+copying src/mitoribopy/config/models.py -> mitoribopy-0.2.0/src/mitoribopy/config
+copying src/mitoribopy/config/runtime.py -> mitoribopy-0.2.0/src/mitoribopy/config
+copying src/mitoribopy/data/__init__.py -> mitoribopy-0.2.0/src/mitoribopy/data
+copying src/mitoribopy/data/codon_tables.json -> mitoribopy-0.2.0/src/mitoribopy/data
+copying src/mitoribopy/data/codon_tables.py -> mitoribopy-0.2.0/src/mitoribopy/data
+copying src/mitoribopy/data/human_annotation.csv -> mitoribopy-0.2.0/src/mitoribopy/data
+copying src/mitoribopy/data/reference_data.py -> mitoribopy-0.2.0/src/mitoribopy/data
+copying src/mitoribopy/data/transcript_annotations.py -> mitoribopy-0.2.0/src/mitoribopy/data
+copying src/mitoribopy/data/yeast_annotation.csv -> mitoribopy-0.2.0/src/mitoribopy/data
+copying src/mitoribopy/io/__init__.py -> mitoribopy-0.2.0/src/mitoribopy/io
+copying src/mitoribopy/io/bed_reader.py -> mitoribopy-0.2.0/src/mitoribopy/io
+copying src/mitoribopy/io/read_counts.py -> mitoribopy-0.2.0/src/mitoribopy/io
+copying src/mitoribopy/pipeline/__init__.py -> mitoribopy-0.2.0/src/mitoribopy/pipeline
+copying src/mitoribopy/pipeline/context.py -> mitoribopy-0.2.0/src/mitoribopy/pipeline
+copying src/mitoribopy/pipeline/runner.py -> mitoribopy-0.2.0/src/mitoribopy/pipeline
+copying src/mitoribopy/pipeline/steps.py -> mitoribopy-0.2.0/src/mitoribopy/pipeline
+copying src/mitoribopy/plotting/__init__.py -> mitoribopy-0.2.0/src/mitoribopy/plotting
+copying src/mitoribopy/plotting/coverage_profile_plots.py -> mitoribopy-0.2.0/src/mitoribopy/plotting
+copying src/mitoribopy/plotting/structure_density_export.py -> mitoribopy-0.2.0/src/mitoribopy/plotting
+copying src/mitoribopy/plotting/style.py -> mitoribopy-0.2.0/src/mitoribopy/plotting
+copying src/mitoribopy/plotting/translation_profile_plots.py -> mitoribopy-0.2.0/src/mitoribopy/plotting
+copying src/mitoribopy/plotting/visualization.py -> mitoribopy-0.2.0/src/mitoribopy/plotting
+copying src/mitoribopy/tools/__init__.py -> mitoribopy-0.2.0/src/mitoribopy/tools
+copying src/mitoribopy/tools/read_composition.py -> mitoribopy-0.2.0/src/mitoribopy/tools
+copying src/mitoribopy/tools/subsample.py -> mitoribopy-0.2.0/src/mitoribopy/tools
+copying src/mitoribopy/utils/__init__.py -> mitoribopy-0.2.0/src/mitoribopy/utils
+copying tests/test_cli.py -> mitoribopy-0.2.0/tests
+copying tests/test_codon_tables.py -> mitoribopy-0.2.0/tests
+copying tests/test_config_runtime.py -> mitoribopy-0.2.0/tests
+copying tests/test_integration_pipeline.py -> mitoribopy-0.2.0/tests
+copying tests/test_read_counts.py -> mitoribopy-0.2.0/tests
+copying tests/test_reference_data.py -> mitoribopy-0.2.0/tests
+copying tests/test_subsample.py -> mitoribopy-0.2.0/tests
+copying tests/test_visualization.py -> mitoribopy-0.2.0/tests
+copying src/MitoRiboPy.egg-info/SOURCES.txt -> mitoribopy-0.2.0/src/MitoRiboPy.egg-info
+Writing mitoribopy-0.2.0/setup.cfg
+Creating tar archive
+removing 'mitoribopy-0.2.0' (and everything under it)
+* Building wheel from sdist
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=68
+  - wheel
+* Getting build dependencies for wheel...
+/tmp/build-env-b_lk0f6w/lib/python3.11/site-packages/setuptools/config/_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+/tmp/build-env-b_lk0f6w/lib/python3.11/site-packages/setuptools/config/_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+/tmp/build-env-b_lk0f6w/lib/python3.11/site-packages/setuptools/dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running egg_info
+writing src/MitoRiboPy.egg-info/PKG-INFO
+writing dependency_links to src/MitoRiboPy.egg-info/dependency_links.txt
+writing entry points to src/MitoRiboPy.egg-info/entry_points.txt
+writing requirements to src/MitoRiboPy.egg-info/requires.txt
+writing top-level names to src/MitoRiboPy.egg-info/top_level.txt
+reading manifest file 'src/MitoRiboPy.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'src/MitoRiboPy.egg-info/SOURCES.txt'
+* Building wheel...
+/tmp/build-env-b_lk0f6w/lib/python3.11/site-packages/setuptools/config/_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+/tmp/build-env-b_lk0f6w/lib/python3.11/site-packages/setuptools/config/_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+/tmp/build-env-b_lk0f6w/lib/python3.11/site-packages/setuptools/dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running bdist_wheel
+running build
+running build_py
+creating build/lib/mitoribopy
+copying src/mitoribopy/cli.py -> build/lib/mitoribopy
+copying src/mitoribopy/__init__.py -> build/lib/mitoribopy
+copying src/mitoribopy/console.py -> build/lib/mitoribopy
+copying src/mitoribopy/__main__.py -> build/lib/mitoribopy
+creating build/lib/mitoribopy/config
+copying src/mitoribopy/config/loader.py -> build/lib/mitoribopy/config
+copying src/mitoribopy/config/__init__.py -> build/lib/mitoribopy/config
+copying src/mitoribopy/config/defaults.py -> build/lib/mitoribopy/config
+copying src/mitoribopy/config/runtime.py -> build/lib/mitoribopy/config
+copying src/mitoribopy/config/models.py -> build/lib/mitoribopy/config
+creating build/lib/mitoribopy/pipeline
+copying src/mitoribopy/pipeline/__init__.py -> build/lib/mitoribopy/pipeline
+copying src/mitoribopy/pipeline/runner.py -> build/lib/mitoribopy/pipeline
+copying src/mitoribopy/pipeline/steps.py -> build/lib/mitoribopy/pipeline
+copying src/mitoribopy/pipeline/context.py -> build/lib/mitoribopy/pipeline
+creating build/lib/mitoribopy/data
+copying src/mitoribopy/data/transcript_annotations.py -> build/lib/mitoribopy/data
+copying src/mitoribopy/data/__init__.py -> build/lib/mitoribopy/data
+copying src/mitoribopy/data/reference_data.py -> build/lib/mitoribopy/data
+copying src/mitoribopy/data/codon_tables.py -> build/lib/mitoribopy/data
+creating build/lib/mitoribopy/plotting
+copying src/mitoribopy/plotting/__init__.py -> build/lib/mitoribopy/plotting
+copying src/mitoribopy/plotting/visualization.py -> build/lib/mitoribopy/plotting
+copying src/mitoribopy/plotting/structure_density_export.py -> build/lib/mitoribopy/plotting
+copying src/mitoribopy/plotting/style.py -> build/lib/mitoribopy/plotting
+copying src/mitoribopy/plotting/coverage_profile_plots.py -> build/lib/mitoribopy/plotting
+copying src/mitoribopy/plotting/translation_profile_plots.py -> build/lib/mitoribopy/plotting
+creating build/lib/mitoribopy/tools
+copying src/mitoribopy/tools/__init__.py -> build/lib/mitoribopy/tools
+copying src/mitoribopy/tools/read_composition.py -> build/lib/mitoribopy/tools
+copying src/mitoribopy/tools/subsample.py -> build/lib/mitoribopy/tools
+creating build/lib/mitoribopy/io
+copying src/mitoribopy/io/bed_reader.py -> build/lib/mitoribopy/io
+copying src/mitoribopy/io/__init__.py -> build/lib/mitoribopy/io
+copying src/mitoribopy/io/read_counts.py -> build/lib/mitoribopy/io
+creating build/lib/mitoribopy/analysis
+copying src/mitoribopy/analysis/offset_selection.py -> build/lib/mitoribopy/analysis
+copying src/mitoribopy/analysis/translation_profile_analysis.py -> build/lib/mitoribopy/analysis
+copying src/mitoribopy/analysis/__init__.py -> build/lib/mitoribopy/analysis
+copying src/mitoribopy/analysis/offset_enrichment.py -> build/lib/mitoribopy/analysis
+copying src/mitoribopy/analysis/codon_correlation.py -> build/lib/mitoribopy/analysis
+copying src/mitoribopy/analysis/rna_seq.py -> build/lib/mitoribopy/analysis
+creating build/lib/mitoribopy/utils
+copying src/mitoribopy/utils/__init__.py -> build/lib/mitoribopy/utils
+running egg_info
+writing src/MitoRiboPy.egg-info/PKG-INFO
+writing dependency_links to src/MitoRiboPy.egg-info/dependency_links.txt
+writing entry points to src/MitoRiboPy.egg-info/entry_points.txt
+writing requirements to src/MitoRiboPy.egg-info/requires.txt
+writing top-level names to src/MitoRiboPy.egg-info/top_level.txt
+reading manifest file 'src/MitoRiboPy.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'src/MitoRiboPy.egg-info/SOURCES.txt'
+copying src/mitoribopy/data/codon_tables.json -> build/lib/mitoribopy/data
+copying src/mitoribopy/data/human_annotation.csv -> build/lib/mitoribopy/data
+copying src/mitoribopy/data/yeast_annotation.csv -> build/lib/mitoribopy/data
+installing to build/bdist.linux-x86_64/wheel
+running install
+running install_lib
+creating build/bdist.linux-x86_64/wheel
+creating build/bdist.linux-x86_64/wheel/mitoribopy
+copying build/lib/mitoribopy/cli.py -> build/bdist.linux-x86_64/wheel/./mitoribopy
+creating build/bdist.linux-x86_64/wheel/mitoribopy/config
+copying build/lib/mitoribopy/config/loader.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/config
+copying build/lib/mitoribopy/config/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/config
+copying build/lib/mitoribopy/config/defaults.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/config
+copying build/lib/mitoribopy/config/runtime.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/config
+copying build/lib/mitoribopy/config/models.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/config
+copying build/lib/mitoribopy/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy
+creating build/bdist.linux-x86_64/wheel/mitoribopy/pipeline
+copying build/lib/mitoribopy/pipeline/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/pipeline
+copying build/lib/mitoribopy/pipeline/runner.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/pipeline
+copying build/lib/mitoribopy/pipeline/steps.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/pipeline
+copying build/lib/mitoribopy/pipeline/context.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/pipeline
+copying build/lib/mitoribopy/console.py -> build/bdist.linux-x86_64/wheel/./mitoribopy
+creating build/bdist.linux-x86_64/wheel/mitoribopy/data
+copying build/lib/mitoribopy/data/codon_tables.json -> build/bdist.linux-x86_64/wheel/./mitoribopy/data
+copying build/lib/mitoribopy/data/human_annotation.csv -> build/bdist.linux-x86_64/wheel/./mitoribopy/data
+copying build/lib/mitoribopy/data/transcript_annotations.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/data
+copying build/lib/mitoribopy/data/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/data
+copying build/lib/mitoribopy/data/reference_data.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/data
+copying build/lib/mitoribopy/data/codon_tables.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/data
+copying build/lib/mitoribopy/data/yeast_annotation.csv -> build/bdist.linux-x86_64/wheel/./mitoribopy/data
+creating build/bdist.linux-x86_64/wheel/mitoribopy/plotting
+copying build/lib/mitoribopy/plotting/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/plotting
+copying build/lib/mitoribopy/plotting/visualization.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/plotting
+copying build/lib/mitoribopy/plotting/structure_density_export.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/plotting
+copying build/lib/mitoribopy/plotting/style.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/plotting
+copying build/lib/mitoribopy/plotting/coverage_profile_plots.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/plotting
+copying build/lib/mitoribopy/plotting/translation_profile_plots.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/plotting
+creating build/bdist.linux-x86_64/wheel/mitoribopy/tools
+copying build/lib/mitoribopy/tools/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/tools
+copying build/lib/mitoribopy/tools/read_composition.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/tools
+copying build/lib/mitoribopy/tools/subsample.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/tools
+copying build/lib/mitoribopy/__main__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy
+creating build/bdist.linux-x86_64/wheel/mitoribopy/io
+copying build/lib/mitoribopy/io/bed_reader.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/io
+copying build/lib/mitoribopy/io/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/io
+copying build/lib/mitoribopy/io/read_counts.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/io
+creating build/bdist.linux-x86_64/wheel/mitoribopy/analysis
+copying build/lib/mitoribopy/analysis/offset_selection.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/analysis
+copying build/lib/mitoribopy/analysis/translation_profile_analysis.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/analysis
+copying build/lib/mitoribopy/analysis/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/analysis
+copying build/lib/mitoribopy/analysis/offset_enrichment.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/analysis
+copying build/lib/mitoribopy/analysis/codon_correlation.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/analysis
+copying build/lib/mitoribopy/analysis/rna_seq.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/analysis
+creating build/bdist.linux-x86_64/wheel/mitoribopy/utils
+copying build/lib/mitoribopy/utils/__init__.py -> build/bdist.linux-x86_64/wheel/./mitoribopy/utils
+running install_egg_info
+Copying src/MitoRiboPy.egg-info to build/bdist.linux-x86_64/wheel/./MitoRiboPy-0.2.0-py3.11.egg-info
+running install_scripts
+creating build/bdist.linux-x86_64/wheel/mitoribopy-0.2.0.dist-info/WHEEL
+creating '/home/user/MitoRiboPy/dist/.tmp-5brlpzr2/mitoribopy-0.2.0-py3-none-any.whl' and adding 'build/bdist.linux-x86_64/wheel' to it
+adding 'mitoribopy/__init__.py'
+adding 'mitoribopy/__main__.py'
+adding 'mitoribopy/cli.py'
+adding 'mitoribopy/console.py'
+adding 'mitoribopy/analysis/__init__.py'
+adding 'mitoribopy/analysis/codon_correlation.py'
+adding 'mitoribopy/analysis/offset_enrichment.py'
+adding 'mitoribopy/analysis/offset_selection.py'
+adding 'mitoribopy/analysis/rna_seq.py'
+adding 'mitoribopy/analysis/translation_profile_analysis.py'
+adding 'mitoribopy/config/__init__.py'
+adding 'mitoribopy/config/defaults.py'
+adding 'mitoribopy/config/loader.py'
+adding 'mitoribopy/config/models.py'
+adding 'mitoribopy/config/runtime.py'
+adding 'mitoribopy/data/__init__.py'
+adding 'mitoribopy/data/codon_tables.json'
+adding 'mitoribopy/data/codon_tables.py'
+adding 'mitoribopy/data/human_annotation.csv'
+adding 'mitoribopy/data/reference_data.py'
+adding 'mitoribopy/data/transcript_annotations.py'
+adding 'mitoribopy/data/yeast_annotation.csv'
+adding 'mitoribopy/io/__init__.py'
+adding 'mitoribopy/io/bed_reader.py'
+adding 'mitoribopy/io/read_counts.py'
+adding 'mitoribopy/pipeline/__init__.py'
+adding 'mitoribopy/pipeline/context.py'
+adding 'mitoribopy/pipeline/runner.py'
+adding 'mitoribopy/pipeline/steps.py'
+adding 'mitoribopy/plotting/__init__.py'
+adding 'mitoribopy/plotting/coverage_profile_plots.py'
+adding 'mitoribopy/plotting/structure_density_export.py'
+adding 'mitoribopy/plotting/style.py'
+adding 'mitoribopy/plotting/translation_profile_plots.py'
+adding 'mitoribopy/plotting/visualization.py'
+adding 'mitoribopy/tools/__init__.py'
+adding 'mitoribopy/tools/read_composition.py'
+adding 'mitoribopy/tools/subsample.py'
+adding 'mitoribopy/utils/__init__.py'
+adding 'mitoribopy-0.2.0.dist-info/licenses/LICENSE'
+adding 'mitoribopy-0.2.0.dist-info/METADATA'
+adding 'mitoribopy-0.2.0.dist-info/WHEEL'
+adding 'mitoribopy-0.2.0.dist-info/entry_points.txt'
+adding 'mitoribopy-0.2.0.dist-info/top_level.txt'
+adding 'mitoribopy-0.2.0.dist-info/RECORD'
+removing build/bdist.linux-x86_64/wheel
+Successfully built mitoribopy-0.2.0.tar.gz and mitoribopy-0.2.0-py3-none-any.whl

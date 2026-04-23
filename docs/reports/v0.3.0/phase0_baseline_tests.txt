@@ -1,0 +1,39 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.0.3, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /home/user/MitoRiboPy
+configfile: pyproject.toml
+testpaths: tests
+collecting ... collected 29 items
+
+tests/test_cli.py::test_normalize_args_strips_run_and_separator PASSED   [  3%]
+tests/test_cli.py::test_normalize_args_leaves_standard_argv PASSED       [  6%]
+tests/test_cli.py::test_main_delegates_to_package_runner PASSED          [ 10%]
+tests/test_cli.py::test_build_parser_help_groups_and_key_guidance PASSED [ 13%]
+tests/test_cli.py::test_run_pipeline_cli_help_exits_before_plot_setup PASSED [ 17%]
+tests/test_cli.py::test_custom_strain_requires_annotation_and_rpf PASSED [ 20%]
+tests/test_codon_tables.py::test_all_codon_tables_have_full_64_codon_space PASSED [ 24%]
+tests/test_codon_tables.py::test_mito_specific_reassignments_are_present PASSED [ 27%]
+tests/test_config_runtime.py::test_resolve_rpf_range_from_cli_values PASSED [ 31%]
+tests/test_config_runtime.py::test_resolve_rpf_range_defaults_by_strain PASSED [ 34%]
+tests/test_config_runtime.py::test_resolve_rpf_range_rejects_invalid_interval PASSED [ 37%]
+tests/test_config_runtime.py::test_load_user_config_keeps_known_keys_and_ignores_unknown PASSED [ 41%]
+tests/test_integration_pipeline.py::test_offset_selection_psite_vs_asite_shifts_by_three_nt PASSED [ 44%]
+tests/test_integration_pipeline.py::test_offset_mask_excludes_near_anchor_bins_from_summary_and_selection PASSED [ 48%]
+tests/test_integration_pipeline.py::test_determine_p_site_offsets_supports_separate_five_and_three_ranges PASSED [ 51%]
+tests/test_integration_pipeline.py::test_determine_p_site_offsets_respects_requested_output_range_for_asite_reporting PASSED [ 55%]
+tests/test_integration_pipeline.py::test_translation_profile_analysis_writes_transcript_level_asite_stop_codon_usage PASSED [ 58%]
+tests/test_integration_pipeline.py::test_end_to_end_cli_smoke_generates_codon_usage_outputs PASSED [ 62%]
+tests/test_read_counts.py::test_compute_total_counts_accepts_flexible_column_names PASSED [ 65%]
+tests/test_read_counts.py::test_compute_total_counts_falls_back_to_column_order_for_txt PASSED [ 68%]
+tests/test_reference_data.py::test_packaged_codon_tables_are_loaded_from_json PASSED [ 72%]
+tests/test_reference_data.py::test_builtin_human_annotation_splits_bicistronic_pairs_with_default_baselines PASSED [ 75%]
+tests/test_reference_data.py::test_builtin_annotation_baselines_can_be_overridden PASSED [ 79%]
+tests/test_reference_data.py::test_resolve_sequence_name_uses_legacy_bicistronic_aliases PASSED [ 82%]
+tests/test_subsample.py::test_reservoir_sample_is_deterministic_for_seed PASSED [ 86%]
+tests/test_subsample.py::test_reservoir_sample_n_larger_than_file_returns_all_lines PASSED [ 89%]
+tests/test_subsample.py::test_reservoir_sample_rejects_nonpositive_n PASSED [ 93%]
+tests/test_visualization.py::test_selected_offset_guides_use_plot_axis_positions_but_keep_true_offset_labels PASSED [ 96%]
+tests/test_visualization.py::test_selected_offset_guides_skip_offsets_outside_plotted_axis_range PASSED [100%]
+
+============================= 29 passed in 16.59s ==============================

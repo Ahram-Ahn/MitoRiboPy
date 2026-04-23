@@ -1,0 +1,143 @@
+%% MitoRiboPy v0.3.0 Phase 0 baseline module dependency graph.
+%% Edges are `from X import Y` relationships resolved inside the package.
+%% Source: static scan of src/mitoribopy as of branch
+%% claude/mitoribopy-v0.3.0-refactor-rUWcy at commit 7babcf5.
+
+graph TD
+  %% ---- entrypoints ----
+  ep_main["(repo root) main.py"]
+  __main__["mitoribopy.__main__"]
+  cli["mitoribopy.cli"]
+  __init__["mitoribopy.__init__"]
+
+  ep_main --> pipeline_runner
+  __main__ --> cli
+  cli --> __init__
+  cli --> pipeline_runner
+
+  %% ---- pipeline ----
+  subgraph pipeline["mitoribopy.pipeline"]
+    pipeline_pkg["mitoribopy.pipeline (__init__)"]
+    pipeline_context["mitoribopy.pipeline.context"]
+    pipeline_runner["mitoribopy.pipeline.runner"]
+    pipeline_steps["mitoribopy.pipeline.steps"]
+  end
+  pipeline_pkg --> pipeline_context
+  pipeline_pkg --> pipeline_runner
+  pipeline_runner --> config_pkg
+  pipeline_runner --> console
+  pipeline_runner --> data_pkg
+  pipeline_runner --> pipeline_steps
+  pipeline_runner --> plotting_pkg
+  pipeline_steps --> analysis_pkg
+  pipeline_steps --> config_pkg
+  pipeline_steps --> data_pkg
+  pipeline_steps --> io_pkg
+  pipeline_steps --> pipeline_context
+  pipeline_steps --> plotting_pkg
+
+  %% ---- analysis ----
+  subgraph analysis["mitoribopy.analysis"]
+    analysis_pkg["mitoribopy.analysis (__init__)"]
+    codon_correlation["analysis.codon_correlation"]
+    offset_enrichment["analysis.offset_enrichment"]
+    offset_selection["analysis.offset_selection"]
+    rna_seq_mod["analysis.rna_seq"]
+    tpa["analysis.translation_profile_analysis"]
+  end
+  analysis_pkg --> codon_correlation
+  analysis_pkg --> offset_enrichment
+  analysis_pkg --> offset_selection
+  analysis_pkg --> rna_seq_mod
+  analysis_pkg --> tpa
+  codon_correlation --> console
+  codon_correlation --> plotting_style
+  offset_enrichment --> console
+  offset_enrichment --> data_pkg
+  offset_enrichment --> plotting_visualization
+  offset_selection --> console
+  rna_seq_mod --> console
+  rna_seq_mod --> plotting_style
+  tpa --> console
+  tpa --> data_pkg
+  tpa --> plotting_translation_profile_plots
+
+  %% ---- config ----
+  subgraph config["mitoribopy.config"]
+    config_pkg["mitoribopy.config (__init__)"]
+    config_loader["config.loader"]
+    config_models["config.models"]
+    config_runtime["config.runtime"]
+    config_defaults["config.defaults (unused)"]
+  end
+  config_pkg --> config_loader
+  config_pkg --> config_models
+  config_pkg --> config_runtime
+  config_loader --> config_models
+  config_runtime --> console
+
+  %% ---- data ----
+  subgraph data["mitoribopy.data"]
+    data_pkg["mitoribopy.data (__init__)"]
+    data_reference["data.reference_data"]
+    data_codon_tables["data.codon_tables"]
+    data_transcript["data.transcript_annotations"]
+  end
+  data_pkg --> data_reference
+  data_pkg --> data_codon_tables
+  data_pkg --> data_transcript
+  data_codon_tables --> data_reference
+  data_transcript --> data_reference
+
+  %% ---- io ----
+  subgraph io["mitoribopy.io"]
+    io_pkg["mitoribopy.io (__init__)"]
+    io_bed_reader["io.bed_reader"]
+    io_read_counts["io.read_counts"]
+  end
+  io_pkg --> io_bed_reader
+  io_pkg --> io_read_counts
+  io_bed_reader --> console
+  io_bed_reader --> plotting_visualization
+  io_read_counts --> console
+
+  %% ---- plotting ----
+  subgraph plotting["mitoribopy.plotting"]
+    plotting_pkg["mitoribopy.plotting (__init__)"]
+    plotting_coverage["plotting.coverage_profile_plots"]
+    plotting_structure_density["plotting.structure_density_export"]
+    plotting_style["plotting.style"]
+    plotting_translation_profile_plots["plotting.translation_profile_plots"]
+    plotting_visualization["plotting.visualization"]
+  end
+  plotting_pkg --> plotting_coverage
+  plotting_pkg --> plotting_structure_density
+  plotting_pkg --> plotting_style
+  plotting_pkg --> plotting_translation_profile_plots
+  plotting_pkg --> plotting_visualization
+  plotting_coverage --> console
+  plotting_coverage --> data_pkg
+  plotting_coverage --> plotting_style
+  plotting_structure_density --> console
+  plotting_translation_profile_plots --> plotting_style
+  plotting_visualization --> console
+  plotting_visualization --> plotting_coverage
+  plotting_visualization --> plotting_structure_density
+  plotting_visualization --> plotting_style
+
+  %% ---- tools (utility; not on the runtime path) ----
+  subgraph tools["mitoribopy.tools"]
+    tools_pkg["mitoribopy.tools (__init__)"]
+    tools_read_composition["tools.read_composition"]
+    tools_subsample["tools.subsample"]
+  end
+  tools_pkg --> tools_read_composition
+  tools_pkg --> tools_subsample
+
+  %% ---- shared leaf ----
+  console["mitoribopy.console"]
+
+  classDef leaf fill:#eef,stroke:#336,color:#003
+  class console,data_reference,plotting_style,config_models,config_defaults,tools_subsample,tools_read_composition leaf
+  classDef vestigial fill:#fde,stroke:#a33,color:#600,stroke-dasharray: 4 2
+  class config_defaults,config_loader,config_models vestigial
