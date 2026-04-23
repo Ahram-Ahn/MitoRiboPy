@@ -42,6 +42,14 @@ from .contam import (
     parse_bowtie2_stderr,
     subtract_contaminants,
 )
+from .dedup import (
+    CONFIRM_MARK_DUPLICATES_FLAG,
+    resolve_dedup_strategy,
+    run_dedup,
+    run_mark_duplicates,
+    run_umi_tools_dedup,
+    skip_dedup,
+)
 from .trim import (
     parse_cutadapt_json,
     resolve_kit_settings,
@@ -65,10 +73,16 @@ __all__ = [
     "check_tool",
     "ensure_tools_available",
     "get_tool_version",
+    "CONFIRM_MARK_DUPLICATES_FLAG",
     "align_mt",
     "parse_bowtie2_stderr",
     "parse_cutadapt_json",
+    "resolve_dedup_strategy",
     "resolve_kit_settings",
     "run_cutadapt",
+    "run_dedup",
+    "run_mark_duplicates",
+    "run_umi_tools_dedup",
+    "skip_dedup",
     "subtract_contaminants",
 ]
