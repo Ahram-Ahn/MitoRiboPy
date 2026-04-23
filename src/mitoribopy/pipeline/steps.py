@@ -184,12 +184,102 @@ def filter_bed_inputs(context: PipelineContext, emit_status: StatusWriter) -> bo
         return False
 
     context.sample_dirs = _order_sample_dirs(sample_dirs, context.args.order_samples, emit_status)
+
+    # Emit the per-sample per-gene RPF count table consumed by
+    # 'mitoribopy rnaseq'. This is the provenance spine that ties rpf
+    # outputs to the downstream TE / delta-TE step.
+    write_rpf_counts_table(
+        filtered_bed_df=filtered_bed_df,
+        output_path=context.base_output_dir / "rpf_counts.tsv",
+    )
+
+    # Emit run_settings.json with reference_checksum so the Phase 5
+    # rnaseq subcommand's reference-consistency gate can verify that
+    # the Ribo-seq and RNA-seq sides used the same transcript set.
+    write_rpf_run_settings(context)
+
     _emit_step_ok(
         4,
         f"retained {len(filtered_bed_df)} filtered reads across {len(context.sample_dirs)} sample(s).",
         emit_status,
     )
     return True
+
+
+def write_rpf_run_settings(context: PipelineContext) -> Path | None:
+    """Write ``<output>/run_settings.json`` with the rpf-side provenance.
+
+    Key field for downstream rnaseq: ``reference_checksum`` is the
+    SHA-256 of the FASTA passed via ``-f / --fasta``. The rnaseq
+    subcommand's reference-consistency gate reads this and refuses to
+    proceed unless the rnaseq side matches.
+    """
+    import hashlib
+    import json
+
+    from .. import __version__
+
+    fasta_path = Path(context.args.fasta)
+    if not fasta_path.is_file():
+        # Do not emit a manifest with a bogus hash; rnaseq will fail
+        # loudly on missing checksum, which is the correct behavior.
+        return None
+
+    digest = hashlib.sha256()
+    with fasta_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+
+    settings = {
+        "subcommand": "rpf",
+        "mitoribopy_version": __version__,
+        "reference_fasta": str(fasta_path),
+        "reference_checksum": digest.hexdigest(),
+        "strain": context.args.strain,
+        "rpf_range": list(context.rpf_range),
+        "align": context.args.align,
+        "offset_type": context.args.offset_type,
+        "offset_site": context.args.offset_site,
+        "codon_overlap_mode": context.args.codon_overlap_mode,
+        "bam_mapq": int(getattr(context.args, "bam_mapq", 0) or 0),
+    }
+
+    out_path = context.base_output_dir / "run_settings.json"
+    out_path.write_text(
+        json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return out_path
+
+
+def write_rpf_counts_table(
+    *,
+    filtered_bed_df,
+    output_path,
+) -> None:
+    """Write the per-sample per-gene RPF read-count TSV.
+
+    Columns: ``sample``, ``gene``, ``count``. One row per unique
+    (sample_name, chrom) pair. Used by ``mitoribopy rnaseq`` to load
+    Ribo-seq counts for TE / delta-TE computation.
+    """
+    from pathlib import Path
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if filtered_bed_df is None or filtered_bed_df.empty:
+        output_path.write_text("sample\tgene\tcount\n", encoding="utf-8")
+        return
+
+    grouped = (
+        filtered_bed_df.groupby(["sample_name", "chrom"]).size().reset_index(name="count")
+    )
+    grouped = grouped.rename(columns={"sample_name": "sample", "chrom": "gene"})
+    grouped = grouped.sort_values(["sample", "gene"]).reset_index(drop=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        handle.write("sample\tgene\tcount\n")
+        for _, row in grouped.iterrows():
+            handle.write(f"{row['sample']}\t{row['gene']}\t{int(row['count'])}\n")
 
 
 def compute_offset_enrichment_step(context: PipelineContext, emit_status: StatusWriter) -> bool:

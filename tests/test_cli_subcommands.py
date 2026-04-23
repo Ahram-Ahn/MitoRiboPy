@@ -130,7 +130,7 @@ def test_rpf_dry_run_prints_plan_and_exits_zero(capsys, monkeypatch) -> None:
 # ---------- align / rnaseq / all stubs ---------------------------------------
 
 
-@pytest.mark.parametrize("subcommand", ["rnaseq", "all"])
+@pytest.mark.parametrize("subcommand", ["all"])
 def test_stub_subcommand_help_mentions_future_phase(subcommand, capsys) -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main([subcommand, "--help"])
@@ -142,7 +142,7 @@ def test_stub_subcommand_help_mentions_future_phase(subcommand, capsys) -> None:
 
 @pytest.mark.parametrize(
     "subcommand,phase",
-    [("rnaseq", "Phase 5"), ("all", "Phase 6")],
+    [("all", "Phase 6")],
 )
 def test_stub_subcommand_run_exits_two_with_message(subcommand, phase, capsys) -> None:
     exit_code = cli.main([subcommand])
@@ -151,7 +151,7 @@ def test_stub_subcommand_run_exits_two_with_message(subcommand, phase, capsys) -
     assert phase in captured.err
 
 
-@pytest.mark.parametrize("subcommand", ["rnaseq", "all"])
+@pytest.mark.parametrize("subcommand", ["all"])
 def test_stub_subcommand_dry_run_prints_plan_and_exits_zero(subcommand, capsys) -> None:
     exit_code = cli.main([subcommand, "--dry-run"])
     captured = capsys.readouterr()

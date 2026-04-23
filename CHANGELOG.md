@@ -57,6 +57,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `src/mitoribopy/config/runtime.DEFAULT_CONFIG` gains a `bam_mapq: 10` entry so JSON / YAML / TOML configs can set the threshold declaratively.
 - `tests/test_bam_reader.py` (10 tests): conversion happy path, MAPQ filter, mixed BED + BAM ingestion, name-conflict precedence, `bam_mapq` plumbing through `process_bed_files`, empty-directory handling.
 
+#### Phase 5 (`mitoribopy rnaseq`)
+- New `mitoribopy rnaseq` subcommand integrates a pre-computed differential-expression table (DESeq2 / Xtail / Anota2Seq auto-detected, or user-supplied column mapping via `--de-format custom`) with a prior `mitoribopy rpf` run and emits TE + ΔTE tables and plots.
+- SHA256 reference-consistency gate: `rpf` now writes `<output>/run_settings.json` with a `reference_checksum` (SHA-256 of the `-f / --fasta` file). `rnaseq` verifies the caller-supplied `--reference-gtf` (hashed locally) or `--reference-checksum` against that recorded hash and HARD-FAILS on mismatch. This prevents the silently-invalid TE comparisons that happen when Ribo-seq and RNA-seq were aligned to different references.
+- Required CLI flags (no defaults): `--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}`, `--de-table`, `--ribo-dir`, `--output`, and exactly one of `--reference-gtf` / `--reference-checksum`. Optional: `--de-format`, `--de-gene-col / --de-log2fc-col / --de-padj-col / --de-basemean-col` for custom DE schemas, `--condition-map / --condition-a / --condition-b` for replicate-based ΔTE, `--organism {h,y}`.
+- `src/mitoribopy/rnaseq/` modules:
+  - `_types.py`: `DeFormat`, `GeneIdConvention`, `DeColumnMap`, `DeTable`, `TeRow`, `DTeRow`, plus the `DE_COLUMN_ALIASES` registry pinning the DESeq2 / Xtail / Anota2Seq column names.
+  - `gene_ids.py`: curated `HUMAN_MT_MRNAS` (13 genes, Ensembl + RefSeq + HGNC + bare) and `YEAST_MT_MRNAS` (8 genes). `match_mt_mrnas(de_ids, convention, organism)` returns matched + missing lists; a partial-match WARNING names every missing gene so the user can see which IDs got lost.
+  - `de_loader.py`: `detect_de_format(header)` keyed on the log2FC column name; `load_de_table(path, column_map)` auto-detects CSV/TSV delimiter and canonicalizes NA / Inf values.
+  - `reference_gate.py`: `compute_reference_checksum(path)` (stdlib sha256), `verify_reference_consistency(ribo_dir, reference_path|reference_checksum)`, `ReferenceMismatchError` on any disagreement or missing recorded hash.
+  - `counts.py`: `load_ribo_counts(path)` reads the new `<rpf>/rpf_counts.tsv` into `{gene: {sample: count}}`.
+  - `te.py`: `compute_te` with a 0.5 pseudocount (Laplace-style); `compute_delta_te` uses the DE table's mRNA log2FC and computes an internal Ribo-seq log2FC from replicate means when `--condition-map` is provided, else emits per-gene rows with a `single_replicate_no_statistics` note.
+  - `plots.py`: `plot_mrna_vs_rpf_scatter` (four-quadrant log2FC scatter with per-gene labels) and `plot_delta_te_volcano` (ΔTE_log2 vs −log10(padj)).
+- `rpf` now emits `<output>/rpf_counts.tsv` (columns: `sample`, `gene`, `count`) at the end of the BED-filter step so `rnaseq` has deterministic input. Emitted regardless of whether any downstream modules were requested.
+- `--use_rna_seq` flag on `mitoribopy rpf` is now marked DEPRECATED in the help text and emits a stderr deprecation warning at invocation. Scheduled for removal in v0.4.0. Users should migrate to `mitoribopy rnaseq`.
+- `tests/test_rnaseq.py` (24 tests) + `tests/test_rnaseq_cli.py` (5 end-to-end tests): gene ID matching across all five conventions and both organisms, DE format auto-detection for every supported schema + `custom` fallback, reference-consistency match/mismatch/no-digest paths, ribo-counts loader, TE + ΔTE math (single-replicate note, replicate-based log2FC recovery to within 0.05, missing-gene-from-DE handling), full CLI orchestrator producing `te.tsv`, `delta_te.tsv`, scatter + volcano plots, and the reference-mismatch HARD FAIL path.
+
+### Explicitly excluded
+- Dispersion-based statistics (DESeq2 shrinkage, Xtail modeling) over only the 13 mt-mRNAs. `rnaseq` consumes pre-computed DE output rather than running its own DE; the small gene universe violates the assumptions those methods need. Users should run DE on the full transcriptome and hand the resulting table to `rnaseq`.
+
 ### Changed
 - `mitoribopy <flags>` (no subcommand) still works in v0.3.x but now emits a stderr `DEPRECATION` warning and routes to `mitoribopy rpf <flags>`. This fallback will be removed in v0.4.0.
 - The `src/mitoribopy/cli.py` module has been replaced by a `src/mitoribopy/cli/` package. The public names `mitoribopy.cli.main`, `mitoribopy.cli._normalize_args`, and `mitoribopy.cli.run_pipeline_cli` are preserved.

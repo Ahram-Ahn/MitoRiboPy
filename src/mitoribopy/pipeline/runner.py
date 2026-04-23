@@ -460,7 +460,12 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         "--use_rna_seq",
         action="store_true",
         default=defaults["use_rna_seq"],
-        help="Run the optional RNA-seq analysis module.",
+        help=(
+            "[DEPRECATED in v0.3.0; removed in v0.4.0] Run the legacy\n"
+            "RNA-seq ratio module. Use the dedicated 'mitoribopy rnaseq'\n"
+            "subcommand instead for DE-based TE and delta-TE analysis\n"
+            "with a SHA256 reference-consistency gate."
+        ),
     )
     optional_group.add_argument(
         "--rna_seq_dir",
@@ -584,7 +589,16 @@ def run_pipeline(
 
 def run_pipeline_cli(argv: Iterable[str] | None = None) -> int:
     """Parse arguments and run the standalone package-native pipeline."""
+    import sys as _sys
+
     args = parse_pipeline_args(argv)
+    if getattr(args, "use_rna_seq", False):
+        _sys.stderr.write(
+            "[mitoribopy rpf] DEPRECATION: --use_rna_seq is deprecated in "
+            "v0.3.0 and will be removed in v0.4.0. Use 'mitoribopy rnaseq' "
+            "instead - it enforces a SHA256 reference-consistency gate and "
+            "runs on DE output (DESeq2 / Xtail / Anota2Seq).\n"
+        )
     log_path = configure_file_logging(Path(args.output) / "mitoribopy.log")
     log_message(f"[PIPELINE] Log file: {log_path}")
     configure_plot_defaults()
