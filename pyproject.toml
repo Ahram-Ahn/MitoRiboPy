@@ -35,6 +35,7 @@ dependencies = [
   "seaborn>=0.12",
   "biopython>=1.81",
   "scipy>=1.10",
+  "PyYAML>=6.0",
 ]
 
 [project.urls]
@@ -46,6 +47,9 @@ Changelog = "https://github.com/Ahram-Ahn/MitoRiboPy/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 dev = [
   "pytest>=7.4",
+]
+toml-py310 = [
+  "tomli>=2.0;python_version<'3.11'",
 ]
 
 [project.scripts]

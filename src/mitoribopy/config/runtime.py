@@ -64,7 +64,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 def load_user_config(config_path: str | None) -> dict[str, Any]:
-    """Load JSON config and keep only recognized keys."""
+    """Load a JSON, YAML, or TOML config file and keep only recognized keys.
+
+    The file format is auto-detected from the path suffix:
+
+    * ``.json`` (or unknown extension) - stdlib :mod:`json`
+    * ``.yaml`` / ``.yml``              - :mod:`yaml` (PyYAML, required dep)
+    * ``.toml``                         - stdlib :mod:`tomllib` (Py 3.11+)
+                                          or the optional :mod:`tomli` fallback
+
+    Unknown keys are reported as a ``CONFIG`` warning and ignored.
+    """
     if not config_path:
         return {}
 
@@ -72,11 +82,38 @@ def load_user_config(config_path: str | None) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
-    with path.open("r", encoding="utf-8") as config_file:
-        raw = json.load(config_file)
+    suffix = path.suffix.lower()
+    text = path.read_text(encoding="utf-8")
+
+    if suffix in {".yaml", ".yml"}:
+        try:
+            import yaml
+        except ImportError as exc:  # pragma: no cover - PyYAML is a core dep
+            raise RuntimeError(
+                "PyYAML is required to read YAML config files. "
+                "Install with: pip install PyYAML"
+            ) from exc
+        raw = yaml.safe_load(text) or {}
+    elif suffix == ".toml":
+        try:
+            import tomllib  # Python 3.11+
+        except ImportError:  # pragma: no cover - Python 3.10 fallback
+            try:
+                import tomli as tomllib  # type: ignore[no-redef]
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Reading TOML config files on Python < 3.11 requires the "
+                    "'tomli' package. Install with: pip install tomli"
+                ) from exc
+        raw = tomllib.loads(text)
+    else:
+        raw = json.loads(text) if text.strip() else {}
 
     if not isinstance(raw, dict):
-        raise ValueError("Config file must be a JSON object (key/value dictionary).")
+        raise ValueError(
+            "Config file must parse to a mapping/object; got "
+            f"{type(raw).__name__}."
+        )
 
     allowed = set(DEFAULT_CONFIG.keys())
     unknown = sorted(key for key in raw.keys() if key not in allowed)
