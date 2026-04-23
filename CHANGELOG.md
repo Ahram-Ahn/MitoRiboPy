@@ -73,6 +73,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `--use_rna_seq` flag on `mitoribopy rpf` is now marked DEPRECATED in the help text and emits a stderr deprecation warning at invocation. Scheduled for removal in v0.4.0. Users should migrate to `mitoribopy rnaseq`.
 - `tests/test_rnaseq.py` (24 tests) + `tests/test_rnaseq_cli.py` (5 end-to-end tests): gene ID matching across all five conventions and both organisms, DE format auto-detection for every supported schema + `custom` fallback, reference-consistency match/mismatch/no-digest paths, ribo-counts loader, TE + ΔTE math (single-replicate note, replicate-based log2FC recovery to within 0.05, missing-gene-from-DE handling), full CLI orchestrator producing `te.tsv`, `delta_te.tsv`, scatter + volcano plots, and the reference-mismatch HARD FAIL path.
 
+#### Phase 6 (`mitoribopy all`)
+- New `mitoribopy all` subcommand wires `align -> rpf -> (optional) rnaseq` behind a single shared config file (YAML / JSON / TOML). Each stage's flags live under a top-level section (`align:`, `rpf:`, `rnaseq:`) matching the subcommand's own CLI; the orchestrator serializes the section into an argv list and calls the subcommand's `run()` entry point.
+- Auto-wiring: `<output>/align/`, `<output>/rpf/`, `<output>/rnaseq/` stage directories are populated automatically; `rpf`'s `--directory` defaults to `<output>/align/bed/`; `rnaseq`'s `--ribo-dir` defaults to `<output>/rpf/` so downstream stages pick up upstream outputs without extra configuration.
+- `--resume` skips stages whose sentinel output already exists (`align/read_counts.tsv`, `rpf/rpf_counts.tsv`, `rnaseq/delta_te.tsv`).
+- `--skip-align / --skip-rpf / --skip-rnaseq` toggle individual stages even when the config has that section.
+- Writes `<output>/run_manifest.json` at the end with the full composition: per-stage `run_settings.json` payloads, `stages_run`, `stages_skipped`, and a promoted top-level `reference_checksum` from the rpf stage so future rnaseq runs reading this manifest can find it without drilling.
+- The `rnaseq` section is auto-activated only when it has a `de_table` entry; otherwise it is skipped with a log line.
+- `tests/test_all_cli.py` (11 tests): dict-to-argv serializer covers scalars, bools, lists, and `None`; help text lists every toggle; dry-run prints per-stage argv; required-args aggregation; end-to-end orchestration (mocked subcommands) records three stages in the manifest and promotes `reference_checksum`; `--resume` skips align when `read_counts.tsv` is present; non-zero exit from any stage propagates upward; rnaseq section without `de_table` is skipped; `--skip-rpf` honored.
+
 ### Explicitly excluded
 - Dispersion-based statistics (DESeq2 shrinkage, Xtail modeling) over only the 13 mt-mRNAs. `rnaseq` consumes pre-computed DE output rather than running its own DE; the small gene universe violates the assumptions those methods need. Users should run DE on the full transcriptome and hand the resulting table to `rnaseq`.
 

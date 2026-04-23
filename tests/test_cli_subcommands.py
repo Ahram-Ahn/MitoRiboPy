@@ -127,36 +127,10 @@ def test_rpf_dry_run_prints_plan_and_exits_zero(capsys, monkeypatch) -> None:
     assert "offset enrichment" in captured.out
 
 
-# ---------- align / rnaseq / all stubs ---------------------------------------
-
-
-@pytest.mark.parametrize("subcommand", ["all"])
-def test_stub_subcommand_help_mentions_future_phase(subcommand, capsys) -> None:
-    with pytest.raises(SystemExit) as exc:
-        cli.main([subcommand, "--help"])
-    captured = capsys.readouterr()
-    assert exc.value.code == 0
-    assert f"mitoribopy {subcommand}" in captured.out
-    assert "Phase" in captured.out
-
-
-@pytest.mark.parametrize(
-    "subcommand,phase",
-    [("all", "Phase 6")],
-)
-def test_stub_subcommand_run_exits_two_with_message(subcommand, phase, capsys) -> None:
-    exit_code = cli.main([subcommand])
-    captured = capsys.readouterr()
-    assert exit_code == 2
-    assert phase in captured.err
-
-
-@pytest.mark.parametrize("subcommand", ["all"])
-def test_stub_subcommand_dry_run_prints_plan_and_exits_zero(subcommand, capsys) -> None:
-    exit_code = cli.main([subcommand, "--dry-run"])
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "dry-run" in captured.out
+# Subcommand stubs retired: 'align', 'rnaseq', and 'all' are now fully
+# implemented and have their own dedicated test modules
+# (tests/test_align_cli.py, tests/test_rnaseq_cli.py,
+# tests/test_all_cli.py).
 
 
 # ---------- common args: --threads, --log-level ------------------------------
