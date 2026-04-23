@@ -49,4 +49,7 @@ dependencies:
   # --- Dev tooling ---------------------------------------------------
   - pytest>=7.4
   - pip:
-      - -e ..
+      # Editable install of MitoRiboPy itself. Path is relative to THIS
+      # file (docs/environment/environment.yml), so '../..' resolves to
+      # the repo root where pyproject.toml lives.
+      - -e ../..
