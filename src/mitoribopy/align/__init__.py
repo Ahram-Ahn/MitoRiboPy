@@ -37,6 +37,10 @@ from .tool_check import (
     ensure_tools_available,
     get_tool_version,
 )
+from .contam import (
+    parse_bowtie2_stderr,
+    subtract_contaminants,
+)
 from .trim import (
     parse_cutadapt_json,
     resolve_kit_settings,
@@ -60,7 +64,9 @@ __all__ = [
     "check_tool",
     "ensure_tools_available",
     "get_tool_version",
+    "parse_bowtie2_stderr",
     "parse_cutadapt_json",
     "resolve_kit_settings",
     "run_cutadapt",
+    "subtract_contaminants",
 ]
