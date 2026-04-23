@@ -36,6 +36,7 @@ dependencies = [
   "biopython>=1.81",
   "scipy>=1.10",
   "PyYAML>=6.0",
+  "pysam>=0.22",
 ]
 
 [project.urls]
@@ -66,3 +67,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "requires_tools: integration tests that invoke real external bioinformatics tools (cutadapt, bowtie2, samtools, umi_tools) and are skipped when those are not on PATH.",
+]
