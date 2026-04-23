@@ -21,7 +21,7 @@
   "rpm_norm_mode": "total",
   "read_counts_reference_col": null,
   "mrna_ref_patterns": ["mt_genome", "mt-mrna", "mt_mrna"],
-  "varna": false,
+  "structure_density": false,
   "cor_mask_method": "percentile",
   "cor_mask_percentile": 0.99,
   "use_rna_seq": false

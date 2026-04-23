@@ -413,21 +413,6 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Upper percentile used to cap and scale structure-density values.",
     )
     optional_group.add_argument(
-        "-v",
-        "--varna",
-        dest="structure_density",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
-    )
-    optional_group.add_argument(
-        "--varna_norm_perc",
-        dest="structure_density_norm_perc",
-        type=float,
-        default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
-    )
-    optional_group.add_argument(
         "--cor_plot",
         action="store_true",
         default=defaults["cor_plot"],

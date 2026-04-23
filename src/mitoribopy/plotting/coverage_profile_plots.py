@@ -20,7 +20,7 @@ The directory layout after a successful run looks like this::
 
 Usage
 -----
-Call the exported helper from *main.py*::
+Call the exported helper from the package pipeline::
 
     run_coverage_profile_plots(
         sample_dirs,
@@ -211,7 +211,6 @@ def run_coverage_profile_plots(
     # ------------------------------------------------------------------
     # E) Convert coverage → RPM (reads per million mRNA‑aligned)
     # ------------------------------------------------------------------
-    # For simplicity we assume args.total_mrna_map exists (e.g. populated in main.py)
     if not hasattr(args, "total_mrna_map"):
         raise AttributeError("args.total_mrna_map missing – cannot compute RPM!")
 

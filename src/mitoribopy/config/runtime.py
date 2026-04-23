@@ -78,28 +78,12 @@ def load_user_config(config_path: str | None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("Config file must be a JSON object (key/value dictionary).")
 
-    legacy_key_map = {
-        "varna": "structure_density",
-        "varna_norm_perc": "structure_density_norm_perc",
-    }
-    normalized_raw = dict(raw)
-    for legacy_key, new_key in legacy_key_map.items():
-        if legacy_key not in normalized_raw:
-            continue
-        if new_key not in normalized_raw:
-            normalized_raw[new_key] = normalized_raw[legacy_key]
-        log_warning(
-            "CONFIG",
-            f"Config key '{legacy_key}' is deprecated; use '{new_key}' instead.",
-        )
-        normalized_raw.pop(legacy_key, None)
-
     allowed = set(DEFAULT_CONFIG.keys())
-    unknown = sorted(key for key in normalized_raw.keys() if key not in allowed)
+    unknown = sorted(key for key in raw.keys() if key not in allowed)
     if unknown:
         log_warning("CONFIG", f"Ignoring unknown keys: {', '.join(unknown)}")
 
-    return {key: value for key, value in normalized_raw.items() if key in allowed}
+    return {key: value for key, value in raw.items() if key in allowed}
 
 
 def resolve_rpf_range(strain: str, rpf_arg: list[int] | tuple[int, int] | None) -> list[int]:

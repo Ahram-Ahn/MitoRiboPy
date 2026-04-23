@@ -41,6 +41,7 @@ PYTHONPATH=src python -m mitoribopy --help
 
 ## Quick Start
 
+
 Minimal example:
 
 ```bash
@@ -50,12 +51,6 @@ mitoribopy \
   --directory <ribo_bed_dir> \
   -rpf 29 34 \
   --output <results_dir>
-```
-
-Compatibility wrapper:
-
-```bash
-python main.py --help
 ```
 
 ## Built-In References
