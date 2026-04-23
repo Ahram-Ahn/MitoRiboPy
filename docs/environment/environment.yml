@@ -1,0 +1,52 @@
+# MitoRiboPy v0.3.0 development and runtime environment.
+#
+# Usage:
+#   conda env create -f docs/environment/environment.yml
+#   conda activate mitoribopy
+#   pip install -e .
+#
+# The package itself is installed via pip so that local edits to
+# src/mitoribopy/ take effect immediately. The bioinformatics tools that
+# 'mitoribopy align' shells out to (cutadapt, bowtie2, samtools,
+# umi_tools) are pinned here so every user gets the same versions the
+# pipeline was validated against.
+#
+# Platform: linux-64 and osx-64 (both confirmed working as of 2026-04).
+# Windows users: install via WSL2 - native Windows is not supported
+# because the downstream bioinformatics tools do not build on it.
+
+name: mitoribopy
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  # --- Python stack ---------------------------------------------------
+  - python>=3.10,<3.13
+  - pip
+  - numpy>=1.24
+  - pandas>=1.5
+  - scipy>=1.10
+  - matplotlib>=3.7
+  - seaborn>=0.12
+  - biopython>=1.81
+  - pyyaml>=6.0
+  - pysam>=0.22
+  # --- External bioinformatics tools ---------------------------------
+  # Used by 'mitoribopy align'. Pins are minimum-known-good versions;
+  # the CLI will accept newer.
+  - cutadapt>=4.0                 # trim + UMI extraction (Phase 3 Step B)
+  - bowtie2>=2.4                  # contam subtraction + mt alignment
+                                  # (Phase 3 Steps D, E)
+  - samtools>=1.15                # user-facing convenience; pysam
+                                  # bundles htslib for align internals
+  - umi_tools>=1.1                # UMI-aware deduplication (Step G)
+  - bedtools>=2.30                # optional, not used by the align
+                                  # module but kept here for user
+                                  # convenience when building custom
+                                  # contam panels from BED intervals
+  - fastqc>=0.12                  # optional QC (Phase 3 Step A)
+  # --- Dev tooling ---------------------------------------------------
+  - pytest>=7.4
+  - pip:
+      - -e ..
