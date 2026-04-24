@@ -143,7 +143,13 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _dict_to_argv(section: dict, *, flag_style: str = "hyphen") -> list[str]:
+def _dict_to_argv(
+    section: dict,
+    *,
+    flag_style: str = "hyphen",
+    repeat_flags: set[str] | None = None,
+    flag_overrides: dict[str, str] | None = None,
+) -> list[str]:
     """Serialize a section dict into a CLI-style argv list.
 
     Rules:
@@ -155,7 +161,10 @@ def _dict_to_argv(section: dict, *, flag_style: str = "hyphen") -> list[str]:
       emitted verbatim with a ``--`` prefix.
     * Boolean ``True`` emits just the flag; ``False`` emits nothing.
     * Lists / tuples are emitted as ``--flag v1 v2 v3`` (nargs="+" style).
+      Keys listed in ``repeat_flags`` are emitted as repeated ``--flag v``
+      pairs for argparse options that use ``action="append"``.
     * ``None`` values are skipped.
+    * ``flag_overrides`` maps config keys to exact legacy flag spellings.
 
     The per-stage ``flag_style`` is necessary because the ``rpf`` stage
     parser (``pipeline.runner``) declares its flags in the legacy
@@ -168,9 +177,13 @@ def _dict_to_argv(section: dict, *, flag_style: str = "hyphen") -> list[str]:
             f"flag_style must be 'hyphen' or 'underscore', got {flag_style!r}."
         )
 
+    repeat_flags = repeat_flags or set()
+    flag_overrides = flag_overrides or {}
     argv: list[str] = []
     for key, value in section.items():
-        if flag_style == "underscore":
+        if key in flag_overrides:
+            flag = flag_overrides[key]
+        elif flag_style == "underscore":
             flag = f"--{key.replace('-', '_')}"
         else:
             flag = f"--{key.replace('_', '-')}"
@@ -181,8 +194,12 @@ def _dict_to_argv(section: dict, *, flag_style: str = "hyphen") -> list[str]:
                 argv.append(flag)
             continue
         if isinstance(value, (list, tuple)):
-            argv.append(flag)
-            argv.extend(str(v) for v in value)
+            if key in repeat_flags:
+                for item in value:
+                    argv.extend([flag, str(item)])
+            else:
+                argv.append(flag)
+                argv.extend(str(v) for v in value)
             continue
         argv.extend([flag, str(value)])
     return argv
@@ -464,13 +481,23 @@ def run(argv: Iterable[str]) -> int:
         if has_align:
             plan.append(
                 "align: "
-                + " ".join(_dict_to_argv(config.get("align", {}), flag_style="hyphen"))
+                + " ".join(
+                    _dict_to_argv(
+                        config.get("align", {}),
+                        flag_style="hyphen",
+                        repeat_flags={"fastq"},
+                    )
+                )
             )
         if has_rpf:
             plan.append(
                 "rpf: "
                 + " ".join(
-                    _dict_to_argv(config.get("rpf", {}), flag_style="underscore")
+                    _dict_to_argv(
+                        config.get("rpf", {}),
+                        flag_style="underscore",
+                        flag_overrides={"rpf": "-rpf"},
+                    )
                 )
             )
         if has_rnaseq and has_de_table:
@@ -497,7 +524,9 @@ def run(argv: Iterable[str]) -> int:
         if args.resume and _should_skip_align(run_root):
             stages_skipped.append("align")
         else:
-            align_argv = _dict_to_argv(config["align"], flag_style="hyphen")
+            align_argv = _dict_to_argv(
+                config["align"], flag_style="hyphen", repeat_flags={"fastq"}
+            )
             rc = align_cli.run(align_argv)
             if rc != 0:
                 print(
@@ -514,7 +543,11 @@ def run(argv: Iterable[str]) -> int:
         if args.resume and _should_skip_rpf(run_root):
             stages_skipped.append("rpf")
         else:
-            rpf_argv = _dict_to_argv(config["rpf"], flag_style="underscore")
+            rpf_argv = _dict_to_argv(
+                config["rpf"],
+                flag_style="underscore",
+                flag_overrides={"rpf": "-rpf"},
+            )
             rc = rpf_cli.run(rpf_argv)
             if rc != 0:
                 print(

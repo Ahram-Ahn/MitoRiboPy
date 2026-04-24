@@ -86,6 +86,28 @@ def test_dict_to_argv_round_trip_preserves_list_and_bool() -> None:
     assert ns.structure_density is False  # bool False was dropped entirely
 
 
+def test_dict_to_argv_repeats_append_style_flags() -> None:
+    argv = all_cli._dict_to_argv(
+        {"fastq": ["sample_a.fq.gz", "sample_b.fq.gz"]},
+        repeat_flags={"fastq"},
+    )
+    assert argv == [
+        "--fastq",
+        "sample_a.fq.gz",
+        "--fastq",
+        "sample_b.fq.gz",
+    ]
+
+
+def test_dict_to_argv_supports_legacy_flag_overrides() -> None:
+    argv = all_cli._dict_to_argv(
+        {"rpf": [29, 34], "plot_format": "svg"},
+        flag_style="underscore",
+        flag_overrides={"rpf": "-rpf"},
+    )
+    assert argv == ["-rpf", "29", "34", "--plot_format", "svg"]
+
+
 # ---------- CLI help / dry-run ---------------------------------------------
 
 
@@ -185,6 +207,7 @@ def test_all_dry_run_rpf_section_uses_underscored_flags(tmp_path, capsys) -> Non
     out = capsys.readouterr().out
     assert "--offset_type 5" in out
     assert "--offset-type" not in out
+    assert "-rpf" not in out  # absent because this config did not set rpf
     assert "--min_5_offset 10" in out
     assert "--merge_density" in out
 
