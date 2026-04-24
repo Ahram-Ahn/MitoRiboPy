@@ -116,6 +116,12 @@ def load_total_read_counts(context: PipelineContext, emit_status: StatusWriter) 
             )
             context.total_counts_map = {}
 
+    # Task 5c: derived state lives on the context. The
+    # context.args.total_mrna_map assignment below is a compatibility
+    # shim for external code that still reads from the namespace; it
+    # emits a deprecation warning on access and will be removed in
+    # v0.4.0. Internal consumers (run_coverage_profile_plots) now take
+    # total_mrna_map as an explicit kwarg.
     context.args.total_mrna_map = context.total_counts_map
     _emit_step_ok(
         2,
@@ -424,6 +430,9 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
             args=context.args,
             annotation_df=context.annotation_df,
             filtered_bed_df=context.filtered_bed_df,
+            # Task 5c: pass derived state explicitly instead of relying
+            # on args.total_mrna_map.
+            total_mrna_map=context.total_counts_map,
         )
         ran_modules.append("coverage-profile plots")
 

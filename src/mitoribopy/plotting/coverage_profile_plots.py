@@ -164,6 +164,8 @@ def run_coverage_profile_plots(
     args,
     annotation_df: pd.DataFrame,
     filtered_bed_df: pd.DataFrame | None = None,
+    *,
+    total_mrna_map: dict[str, int | float] | None = None,
 ):
     """Create RPM and raw-count coverage-profile plots.
 
@@ -315,11 +317,28 @@ def run_coverage_profile_plots(
     # ------------------------------------------------------------------
     # E) Convert coverage → RPM (reads per million mRNA‑aligned)
     # ------------------------------------------------------------------
-    if not hasattr(args, "total_mrna_map"):
-        raise AttributeError("args.total_mrna_map missing – cannot compute RPM!")
+    # Prefer the explicit kwarg. Fall back to args.total_mrna_map with a
+    # one-time deprecation warning, since it mutates the parsed argparse
+    # namespace (Task 5c). When both are absent, fail loudly.
+    resolved_totals: dict[str, int | float]
+    if total_mrna_map is not None:
+        resolved_totals = total_mrna_map
+    elif hasattr(args, "total_mrna_map"):
+        log_warning(
+            "COVERAGE",
+            "Reading total_mrna_map from args is deprecated; pass "
+            "total_mrna_map=... as a keyword argument instead. "
+            "The args fallback will be removed in v0.4.0.",
+        )
+        resolved_totals = args.total_mrna_map
+    else:
+        raise AttributeError(
+            "total_mrna_map is required to compute RPM; pass it as a "
+            "keyword argument to run_coverage_profile_plots."
+        )
 
     for sample in read_cov_map:
-        scale = 1e6 / max(args.total_mrna_map.get(sample, 1), 1)
+        scale = 1e6 / max(resolved_totals.get(sample, 1), 1)
         for chrom in read_cov_map[sample]:
             read_cov_map[sample][chrom] = read_cov_map[sample][chrom] * scale
         for chrom in psite_cov_map[sample]:

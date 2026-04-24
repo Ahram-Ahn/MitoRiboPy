@@ -1,4 +1,20 @@
-"""Shared runtime state for package-native pipeline execution."""
+"""Shared runtime state for package-native pipeline execution.
+
+Convention (Task 5c): after ``build_pipeline_context`` returns, the
+``args`` namespace is treated as **read-only input**. Every piece of
+derived state lives on ``PipelineContext`` itself (e.g.
+``total_counts_map``, ``filtered_bed_df``, ``sample_dirs``,
+``selected_offsets_df``). This keeps the "input parameters" record
+clean so a reviewer reading ``run_settings.json`` can trust that what
+they see is what was passed in, not a mutated snapshot taken mid-run.
+
+The one remaining shim - ``context.args.total_mrna_map =
+context.total_counts_map`` - is there only to keep older consumers
+working through one deprecation cycle; ``run_coverage_profile_plots``
+now accepts ``total_mrna_map`` as an explicit keyword argument and
+emits a deprecation warning when it has to fall back to the args copy.
+The shim will be removed in v0.4.0.
+"""
 
 from __future__ import annotations
 
