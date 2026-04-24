@@ -55,7 +55,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from Bio import SeqIO
-from ..console import iter_with_progress, log_info
+from ..console import iter_with_progress, log_info, log_warning
 from ..data import build_sequence_display_map, resolve_sequence_name
 from .style import apply_publication_style
 
@@ -201,6 +201,19 @@ def run_coverage_profile_plots(
     fasta_dict: Dict[str, SeqIO.SeqRecord] = SeqIO.to_dict(SeqIO.parse(str(fasta_file), "fasta"))
     sequence_display_map = build_sequence_display_map(annotation_df, fasta_dict.keys())
     cds_lookup = _build_cds_lookup(annotation_df, set(fasta_dict.keys()))
+
+    # Warn loudly if any FASTA record has no matching annotation row -
+    # coverage plots will silently skip that transcript's codon / frame
+    # variants otherwise and the user might never notice.
+    unmapped = [name for name in fasta_dict if name not in cds_lookup]
+    if unmapped:
+        log_warning(
+            "COVERAGE",
+            f"{len(unmapped)} FASTA record(s) have no matching annotation "
+            "row; codon- and frame-resolution plots will be skipped for "
+            "these. Missing: " + ", ".join(sorted(unmapped)[:10])
+            + ("..." if len(unmapped) > 10 else ""),
+        )
 
     # ------------------------------------------------------------------
     # B) Prepare containers keyed by sample → transcript → numpy array

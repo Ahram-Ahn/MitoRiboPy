@@ -104,6 +104,15 @@ def process_bed_files(
         bed_df.dropna(subset=["start", "end"], inplace=True)
         bed_df["start"] = bed_df["start"].astype(int)
         bed_df["end"] = bed_df["end"].astype(int)
+        # Drop malformed rows (end <= start) before computing read_length.
+        malformed_mask = bed_df["end"] <= bed_df["start"]
+        if malformed_mask.any():
+            log_warning(
+                "BED",
+                f"{bed_file}: dropping {int(malformed_mask.sum())} BED row(s) with "
+                "end <= start (malformed coordinates).",
+            )
+            bed_df = bed_df.loc[~malformed_mask].copy()
         bed_df["read_length"] = bed_df["end"] - bed_df["start"]
 
         filtered_bed_df = bed_df[bed_df["read_length"].isin(rpf_range)].copy()
@@ -198,6 +207,17 @@ def compute_unfiltered_read_length_summary(
         df.dropna(subset=["start", "end"], inplace=True)
         df["start"] = df["start"].astype(int)
         df["end"] = df["end"].astype(int)
+        # Defensive: drop malformed rows where end <= start before computing
+        # read_length. Such rows would produce zero or negative lengths that
+        # could silently skew downstream QC.
+        malformed_mask = df["end"] <= df["start"]
+        if malformed_mask.any():
+            log_warning(
+                "QC",
+                f"{bed_file}: dropping {int(malformed_mask.sum())} BED row(s) with "
+                "end <= start (malformed coordinates).",
+            )
+            df = df.loc[~malformed_mask].copy()
         df["read_length"] = df["end"] - df["start"]
 
         mask = (df["read_length"] >= read_length_range[0]) & (
