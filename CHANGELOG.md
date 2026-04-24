@@ -7,6 +7,76 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-24
+
+### Added
+- **Per-sample adapter detection**: `mitoribopy align` now scans every
+  input FASTQ independently and resolves the kit per sample. Mixed-kit
+  runs (e.g. one TruSeq + one NEBNext UMI sample in the same batch) are
+  fully supported. Detection logic lives in
+  `mitoribopy.align.sample_resolve` and produces a
+  `kit_resolution.tsv` next to `read_counts.tsv` recording each
+  sample's detected kit, applied kit, match rate, and dedup decision.
+- **Per-sample dedup resolution**: `--dedup-strategy auto` (the
+  default) now resolves to `umi-tools` for each UMI-bearing sample and
+  `skip` for each UMI-less sample within the same run. The required
+  external tools (umi_tools, picard) are checked as the union of every
+  sample's resolved strategy.
+- **`--kit-preset auto`** (the new default) tells the CLI to rely
+  entirely on per-sample auto-detection. An explicit preset
+  (truseq_smallrna, nebnext_smallrna, nebnext_ultra_umi, qiaseq_mirna,
+  custom) becomes a per-sample fallback used only when detection cannot
+  identify a known adapter.
+- **Polymorphic `align.fastq` YAML key**: `align.fastq` now accepts
+  either a single directory string (treated as a `--fastq-dir`
+  shortcut) or an explicit list of paths. Saves YAML users from listing
+  every input file by hand.
+- **Per-sample offset selection (`--offset_mode per_sample`, default)**:
+  per-sample 5'/3' offsets drive each sample's downstream translation
+  profile and coverage plots, so inter-sample offset drift no longer
+  biases the combined output. The combined-across-samples offset table
+  is still written as a diagnostic, and an `offset_drift_<align>.svg`
+  plot surfaces per-sample drift at a glance. Pass
+  `--offset_mode combined` to recover the v0.3.x global behaviour.
+- **`--analysis_sites {p,a,both}`** (default `both`) explicitly controls
+  which sites get downstream codon-usage and coverage outputs. With
+  `both`, parallel `translation_profile_p/` and `translation_profile_a/`
+  (and `coverage_profile_plots_p/`, `coverage_profile_plots_a/`)
+  directories are produced so users can compare P-site and A-site
+  results side by side without rerunning the pipeline.
+- New module `mitoribopy.align.sample_resolve` with `SampleResolution`,
+  `resolve_sample_resolutions`, `required_dedup_tools`, and
+  `write_kit_resolution_tsv`.
+- New helper `mitoribopy.analysis.build_per_sample_summaries` exposed
+  for downstream tooling that wants the per-sample enrichment table
+  without re-running the full pipeline.
+
+### Changed
+- **`mitoribopy align`** writes a per-sample provenance table
+  (`kit_resolution.tsv`) and embeds the same data under
+  `run_settings.json -> per_sample`. The legacy top-level keys
+  `kit_preset`, `adapter`, `umi_length`, `umi_position` are replaced by
+  `kit_preset_default`, `adapter_default`, and the per-sample list.
+  `dedup_strategy` at the top level reports `mixed` when the run mixes
+  UMI and non-UMI samples.
+- **`--offset_site`** help text clarifies that the flag controls only
+  the offset *selection* coordinate space, not which downstream outputs
+  are produced. To pick which downstream outputs to generate, use
+  `--analysis_sites`.
+- **Translation profile and coverage plots** now write per-site
+  subdirectories when `--analysis_sites=both` (the default). Single-site
+  runs (`--analysis_sites=p` or `=a`) keep the legacy top-level layout
+  for backward compatibility.
+- **YAML config template** updated by `mitoribopy all
+  --print-config-template`: shows `kit_preset: auto` as the new
+  default, the polymorphic `fastq:` shortcut, the new
+  `offset_mode: per_sample` and `analysis_sites: both` keys, and a
+  per-sample resolution explainer.
+
+### Removed
+- The legacy single-FASTQ-only adapter sanity check (`_apply_adapter_detection`)
+  in `mitoribopy.cli.align`. The per-sample resolver replaces it.
+
 ## [0.3.0] - 2026-04-23
 ### Added
 - **`mitoribopy align --adapter-detection {auto|off|strict}`** (default

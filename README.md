@@ -1,29 +1,33 @@
 # MitoRiboPy
 
-MitoRiboPy is a Python package for mitochondrial ribosome profiling (mt-Ribo-seq) analysis. Starting in v0.3.0 it spans the full pipeline from raw FASTQ through translation-efficiency integration with paired RNA-seq:
+MitoRiboPy is a Python package for mitochondrial ribosome profiling (mt-Ribo-seq) analysis. Starting in v0.3.0 it spans the full pipeline from raw FASTQ through translation-efficiency integration with paired RNA-seq; v0.4.0 makes every per-sample decision (kit, dedup, offsets) independent so mixed-library batches just work:
 
-- `mitoribopy align` &mdash; FASTQ &rarr; BAM &rarr; BED6 + per-sample read counts (cutadapt + bowtie2 + umi_tools + pysam)
-- `mitoribopy rpf` &mdash; BED/BAM &rarr; offsets, translation-profile, codon usage, coverage plots
+- `mitoribopy align` &mdash; FASTQ &rarr; BAM &rarr; BED6 + per-sample read counts (cutadapt + bowtie2 + umi_tools + pysam). **Per-sample kit detection and dedup** in v0.4.0.
+- `mitoribopy rpf` &mdash; BED/BAM &rarr; offsets, translation-profile, codon usage, coverage plots. **Per-sample offsets by default** in v0.4.0; combined still available as a diagnostic.
 - `mitoribopy rnaseq` &mdash; DE table (DESeq2 / Xtail / Anota2Seq) + rpf outputs &rarr; TE and &Delta;TE tables + plots, SHA256 reference-consistency gate
-- `mitoribopy all` &mdash; end-to-end orchestrator with a shared config file and a composed `run_manifest.json`
+- `mitoribopy all` &mdash; end-to-end orchestrator with a shared YAML config and a composed `run_manifest.json`
 
 ## Highlights
 
-- Subcommand CLI (`align` / `rpf` / `rnaseq` / `all`) with shared `--config`, `--dry-run`, `--threads`, `--log-level`
-- Config files in JSON, YAML, or TOML (auto-detected by path suffix)
-- Kit-aware FASTQ trimming: `truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, `qiaseq_mirna`, or explicit `--adapter`
-- Adapter auto-detection (`--adapter-detection auto`, default): scans the head of the FASTQ against every known preset and either picks the matching one or (in `strict` mode) hard-fails on mismatch &mdash; catches the silent failure where a wrong `--kit-preset` drops ~99% of reads as "too long"
-- Strand-aware mt-transcriptome alignment (`--library-strandedness forward` by default) so ND5 / ND6 antisense overlap is resolved by construction on Path A (transcriptome reference)
-- Deduplication safe by default: `--dedup-strategy auto` picks UMI-aware when UMIs are present and skips otherwise; `mark-duplicates` is behind a long confirmation flag because coordinate-only dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries
-- BAM input to `rpf` via pysam (no samtools / bedtools PATH dependency)
-- SHA256 reference-consistency gate on `rnaseq`: Ribo-seq and RNA-seq sides must be aligned to the identical transcript reference; mismatches are a hard fail
-- Strain presets (`-s h` / `-s y` / `-s vm` / `-s ym` / `-s custom`): human + yeast ship a built-in annotation; `vm` / `ym` / `custom` pick up the matching codon table but require user-supplied `--annotation_file` and an explicit `-rpf` range
-- Footprint-class defaults (`--footprint_class monosome|disome|custom`): monosome uses the canonical 28-34 nt (vertebrate) / 37-41 nt (yeast) RPF window; disome widens to 60-90 nt / 65-95 nt for collided-ribosome studies
-- End-specific 5'/3' offset selection, P-site vs A-site workflows, bicistronic ATP8/ATP6 and ND4L/ND4 handling
-- Custom organism support via `--annotation_file`, `--codon_tables_file`, `--codon_table_name`, `--start_codons`
-- Persistent per-run logging in `<output>/mitoribopy.log`
-- Consistent terminal + file progress reporting for `align` and `rpf`
-- Provenance: every stage writes a `run_settings.json`; `mitoribopy all` composes them into `run_manifest.json`
+- **Per-sample resolution everywhere**: each FASTQ gets its own auto-detected kit, its own UMI-aware-or-skip dedup decision, and its own offset table. Mixed-kit / mixed-UMI runs are first-class. Per-sample provenance lands in `kit_resolution.tsv` and `run_settings.json -> per_sample`.
+- **Per-sample offsets by default** (`--offset_mode per_sample`): downstream codon usage and coverage plots use each sample's own offsets, so inter-sample drift no longer biases the combined output. The combined offset table is still emitted for QC, and `offset_drift_<align>.svg` makes drift visible at a glance. Pass `--offset_mode combined` to force the v0.3.x global behaviour.
+- **Both P-site AND A-site outputs by default** (`--analysis_sites both`): codon usage and coverage plots are generated for both sites side by side under per-site subdirectories. `--analysis_sites p` or `--analysis_sites a` restricts to one site.
+- **`--kit-preset auto`** (the new default) lets per-sample detection pick the kit; an explicit preset becomes a per-sample fallback only when detection fails.
+- Subcommand CLI (`align` / `rpf` / `rnaseq` / `all`) with shared `--config`, `--dry-run`, `--threads`, `--log-level`.
+- Config files in JSON, YAML, or TOML (auto-detected by path suffix); YAML is the recommended invocation surface.
+- **Polymorphic `align.fastq` YAML key**: pass a directory string OR an explicit list of paths; the directory is glob-scanned for `*.fq`, `*.fq.gz`, `*.fastq`, `*.fastq.gz`.
+- Kit-aware FASTQ trimming: `truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, `qiaseq_mirna`, or explicit `--adapter`. Strict mode (`--adapter-detection strict`) hard-fails any sample whose data disagrees with an explicit preset.
+- Strand-aware mt-transcriptome alignment (`--library-strandedness forward` by default) so ND5 / ND6 antisense overlap is resolved by construction on Path A (transcriptome reference).
+- Deduplication safe by default: `--dedup-strategy auto` resolves to `umi-tools` per sample whenever a UMI is present and `skip` otherwise; `mark-duplicates` is gated behind a long confirmation flag because coordinate-only dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries.
+- BAM input to `rpf` via pysam (no samtools / bedtools PATH dependency).
+- SHA256 reference-consistency gate on `rnaseq`: Ribo-seq and RNA-seq sides must be aligned to the identical transcript reference; mismatches are a hard fail.
+- Strain presets (`-s h` / `-s y` / `-s vm` / `-s ym` / `-s custom`): human + yeast ship a built-in annotation; `vm` / `ym` / `custom` pick up the matching codon table but require user-supplied `--annotation_file` and an explicit `-rpf` range.
+- Footprint-class defaults (`--footprint_class monosome|disome|custom`): monosome uses the canonical 28-34 nt (vertebrate) / 37-41 nt (yeast) RPF window; disome widens to 60-90 nt / 65-95 nt for collided-ribosome studies.
+- End-specific 5'/3' offset selection, P-site vs A-site workflows, bicistronic ATP8/ATP6 and ND4L/ND4 handling.
+- Custom organism support via `--annotation_file`, `--codon_tables_file`, `--codon_table_name`, `--start_codons`.
+- Persistent per-run logging in `<output>/mitoribopy.log`.
+- Consistent terminal + file progress reporting for `align` and `rpf`.
+- Provenance: every stage writes a `run_settings.json` (with per-sample resolution embedded for `align`); `mitoribopy all` composes them into `run_manifest.json`.
 
 ## Installation
 
@@ -53,7 +57,9 @@ PYTHONPATH=src python -m mitoribopy --help
 
 ## Quick Start
 
-### Starting a new project (zero to working config)
+### Recommended path: YAML config + `mitoribopy all`
+
+The shortest route from raw FASTQ to translation-profile and coverage outputs is a single YAML file plus one command. This is the path the README demonstrates first; the bash-wrapper alternative further down is for batch / cluster jobs where every flag should be explicit.
 
 ```bash
 # 1. Conda env with cutadapt / bowtie2 / umi_tools / samtools / pysam.
@@ -62,14 +68,96 @@ conda activate mitoribopy
 
 # 2. Drop a working YAML template next to your data and fill in the paths.
 mitoribopy all --print-config-template > pipeline_config.yaml
+$EDITOR pipeline_config.yaml
 
-# 3. Inspect a stage's flag list without running it.
+# 3. Optional: dry-run prints the per-stage argv so you can review.
+mitoribopy all --config pipeline_config.yaml --output results/ --dry-run
+
+# 4. Run.
+mitoribopy all --config pipeline_config.yaml --output results/
+```
+
+A working `pipeline_config.yaml` for a typical human mt-Ribo-seq run looks like this (annotated):
+
+```yaml
+align:
+  # Per-sample auto detection; explicit kit_preset becomes the fallback.
+  kit_preset: auto
+  adapter_detection: auto         # auto | off | strict (per-sample)
+  library_strandedness: forward
+  # Pass a DIRECTORY (string) and every *.fq.gz / *.fastq.gz / *.fq /
+  # *.fastq inside is picked up. To restrict to specific files, pass
+  # `fastq:` as a list instead.
+  fastq: input_data/
+  contam_index: input_data/indexes/rrna_contam
+  mt_index: input_data/indexes/mt_tx
+  mapq: 10
+  min_length: 15
+  max_length: 45
+  dedup_strategy: auto            # umi-tools per sample if UMI, else skip
+
+rpf:
+  strain: h                       # human mt-mRNA reference + codon table
+  fasta: input_data/human-mt-mRNA.fasta
+  rpf: [29, 34]                   # filtered RPF range
+  align: stop                     # anchor offsets at the stop codon
+  offset_type: "5"                # offsets reported from the read 5' end
+  offset_site: p                  # selection coordinate space (P-site)
+  offset_pick_reference: p_site
+  offset_mode: per_sample         # per-sample offsets drive downstream
+  analysis_sites: both            # write BOTH P-site and A-site outputs
+  min_5_offset: 10
+  max_5_offset: 22
+  min_3_offset: 10
+  max_3_offset: 22
+  offset_mask_nt: 5
+  plot_format: svg
+  merge_density: true
+```
+
+### Alternative: bash wrapper for batch / cluster jobs
+
+When every flag should be visible in the job script (e.g. for a cluster scheduler that captures stdout / stderr per task), wrap the same YAML invocation in a thin shell wrapper. The bash form composes well with `set -euo pipefail`, exit-code capture, and per-job log rotation.
+
+```bash
+#!/usr/bin/env bash
+set -uo pipefail
+
+ENV_BIN=/path/to/conda/envs/mitoribopy/bin
+export PATH="$ENV_BIN:$PATH"
+ROOT=/path/to/your/run
+cd "$ROOT"
+
+OUT=results/full_run
+mkdir -p "$OUT"
+
+mitoribopy all \
+  --config pipeline_config.yaml \
+  --output "$OUT" \
+  --threads 8
+RC=$?
+
+echo
+echo "================ kit_resolution.tsv ================"
+cat "$OUT/align/kit_resolution.tsv"
+
+echo
+echo "================ read_counts.tsv ================"
+cat "$OUT/align/read_counts.tsv"
+
+echo "$RC" > "$OUT.exitcode"
+exit $RC
+```
+
+The YAML form is canonical because it is self-documenting and loads exactly the same way `mitoribopy all` reads it programmatically. The bash wrapper only exists for environments that prefer one-file job scripts.
+
+### Inspecting and overriding the config
+
+```bash
+# Print the full per-stage --help (orchestrator --help shows only its own flags).
 mitoribopy all --show-stage-help align
 mitoribopy all --show-stage-help rpf
-
-# 4. Dry-run to see the resolved argv per stage, then actually run.
-mitoribopy all --config pipeline_config.yaml --output results/ --dry-run
-mitoribopy all --config pipeline_config.yaml --output results/
+mitoribopy all --show-stage-help rnaseq
 ```
 
 ### Strain presets
@@ -100,8 +188,14 @@ mitoribopy rpf \
   -f <reference.fa> \
   --directory <ribo_bed_dir> \
   -rpf 29 34 \
+  --offset_mode per_sample \
+  --analysis_sites both \
   --output <results_dir>
 ```
+
+`--offset_mode per_sample` (the default) selects offsets independently for each sample so inter-sample offset drift no longer biases pooled output. The combined-across-samples table is still written as a diagnostic and surfaced in `offset_drift_<align>.svg`. Pass `--offset_mode combined` to recover the v0.3.x global behaviour.
+
+`--analysis_sites both` (the default) writes parallel P-site and A-site downstream outputs into per-site subdirectories (`translation_profile_p/`, `translation_profile_a/`, `coverage_profile_plots_p/`, `coverage_profile_plots_a/`). Pass `--analysis_sites p` or `--analysis_sites a` to restrict to one site (legacy single-site layout).
 
 Plain `mitoribopy <flags>` still works in v0.3.x but routes to `rpf` with a deprecation warning. Use the explicit subcommand form.
 
@@ -109,7 +203,6 @@ Plain `mitoribopy <flags>` still works in v0.3.x but routes to `rpf` with a depr
 
 ```bash
 mitoribopy align \
-  --kit-preset nebnext_smallrna \
   --library-strandedness forward \
   --fastq-dir <fastqs_dir> \
   --contam-index <bowtie2_rRNA_index_prefix> \
@@ -117,7 +210,9 @@ mitoribopy align \
   --output <align_results_dir>
 ```
 
-Use `--kit-preset custom --adapter <SEQ>` when your library isn't one of the built-in presets. External tools (`cutadapt`, `bowtie2`, `umi_tools`) must be on `$PATH`; see [docs/environment/environment.yml](docs/environment/environment.yml) for a ready-made bioconda env.
+`--kit-preset` defaults to `auto`: each input FASTQ is scanned at run start and its kit is resolved independently. To pin an explicit fallback for samples whose data cannot be auto-identified, pass `--kit-preset truseq_smallrna` (or one of the other presets); to refuse anything but a hard match, pass `--adapter-detection strict`. Use `--kit-preset custom --adapter <SEQ>` when your library isn't one of the built-in presets. The per-sample resolution table lands at `<align_results_dir>/kit_resolution.tsv` and is also embedded under `run_settings.json -> per_sample`.
+
+External tools (`cutadapt`, `bowtie2`, `umi_tools` for UMI samples) must be on `$PATH`; see [docs/environment/environment.yml](docs/environment/environment.yml) for a ready-made bioconda env. `umi_tools` is only required when at least one resolved sample has a UMI.
 
 ### `mitoribopy rnaseq` &mdash; DE table + rpf &rarr; TE / &Delta;TE
 
@@ -230,24 +325,32 @@ These are not all technically mandatory in the parser, but they are the recommen
 
 ### Common optional parameters
 
+#### `align` stage
+
+- `--kit-preset {auto,truseq_smallrna,nebnext_smallrna,nebnext_ultra_umi,qiaseq_mirna,custom}` &mdash; `auto` (default) runs per-sample detection; explicit preset becomes a per-sample fallback.
+- `--adapter <SEQ>` &mdash; explicit adapter sequence (required for `--kit-preset custom`); otherwise an optional fallback used only when detection fails.
+- `--adapter-detection {auto,off,strict}` &mdash; per-sample policy. `strict` hard-fails any sample whose detection disagrees with `--kit-preset` or yields no match.
+- `--dedup-strategy {auto,umi-tools,skip,mark-duplicates}` &mdash; `auto` resolves per sample (umi-tools when UMIs present, skip otherwise).
+- `--library-strandedness {forward,reverse,unstranded}`
+- `--min-length`, `--max-length`, `--quality`, `--mapq`, `--seed`
+
+#### `rpf` stage
+
 - `--align start|stop`
-- `--offset_type 5|3`
-- `--offset_site p|a`
+- `--offset_type 5|3` &mdash; report offsets from the read 5' or 3' end.
+- `--offset_site p|a` &mdash; coordinate space for the SELECTED OFFSETS table only. Use `--analysis_sites` to control which downstream outputs are generated.
 - `--offset_pick_reference p_site|selected_site`
-- `--min_5_offset`, `--max_5_offset`
-- `--min_3_offset`, `--max_3_offset`
-- `--offset_mask_nt`
-- `--read_counts_file`
-- `--read_counts_sample_col`
-- `--read_counts_reference_col`
-- `--read_counts_reads_col`
+- `--offset_mode per_sample|combined` &mdash; per-sample offsets drive downstream by default; `combined` matches v0.3.x.
+- `--analysis_sites p|a|both` &mdash; which downstream sites to generate (default `both` writes parallel P and A outputs).
+- `--min_5_offset`, `--max_5_offset`, `--min_3_offset`, `--max_3_offset`, `--offset_mask_nt`
+- `--read_counts_file`, `--read_counts_sample_col`, `--read_counts_reference_col`, `--read_counts_reads_col`
 - `--unfiltered_read_length_range <min> <max>`
 - `--rpm_norm_mode total|mt_mrna`
 - `--plot_format png|pdf|svg`
 - `-m, --merge_density`
 - `--structure_density`
 - `--cor_plot`
-- `--use_rna_seq`
+- `--use_rna_seq` (deprecated; use the `rnaseq` subcommand)
 
 ## Example Usage
 
@@ -335,7 +438,28 @@ mitoribopy \
 
 ## Input Files
 
-### BED
+### FASTQ (primary input to the `align` stage)
+
+Accepted file extensions: `*.fq`, `*.fq.gz`, `*.fastq`, `*.fastq.gz`. Both gzipped and uncompressed are auto-detected.
+
+Two ways to point the pipeline at your FASTQs:
+
+1. **Directory** (recommended): pass a directory containing every input FASTQ.
+   - CLI: `--fastq-dir input_data/`
+   - YAML: `align.fastq: input_data/` (a single string is treated as a directory)
+2. **Explicit list**: name each FASTQ.
+   - CLI: `--fastq sampleA.fq.gz --fastq sampleB.fq.gz` (repeatable)
+   - YAML: `align.fastq: [sampleA.fq.gz, sampleB.fq.gz]` (a list is treated as explicit paths)
+
+Sample names are derived from the FASTQ filename with the extension stripped (`WT_R1.fq.gz` → `WT_R1`). The same name flows through every per-sample table (`read_counts.tsv`, `kit_resolution.tsv`, downstream profile and codon usage subdirs).
+
+#### Per-sample kit detection
+
+When `--kit-preset` is `auto` (the default), the pipeline scans the head of every input FASTQ at run start, picks the matching kit per sample, and records its decision in `<output>/kit_resolution.tsv`. Mixed-kit batches (TruSeq + NEBNext + qiaseq in one run) and mixed UMI / non-UMI batches just work: the dedup strategy is also resolved per sample so UMI-bearing samples take the umi-tools path while non-UMI samples skip dedup.
+
+Pass an explicit preset (e.g. `--kit-preset truseq_smallrna`) when you want a deterministic fallback for samples whose data cannot be auto-identified, or `--adapter-detection strict` to refuse to continue on any disagreement.
+
+### BED (input to the `rpf` stage if you already have aligned BEDs)
 
 Expected columns:
 
@@ -344,6 +468,8 @@ Expected columns:
 3. `end`
 
 Additional BED columns are tolerated. Coordinates are treated as standard 0-based, end-exclusive intervals.
+
+When the `align` stage runs first (or you use `mitoribopy all`), `mitoribopy rpf` consumes its `<align>/bed/` output automatically &mdash; you never need to handle BED files by hand.
 
 ### FASTA
 
@@ -393,43 +519,68 @@ When multiple named tables are present, choose one with `--codon_table_name`.
 
 ## Output Overview
 
-Typical output structure:
+Typical output structure for an `mitoribopy all` run with the v0.4.0 defaults (`--offset_mode per_sample`, `--analysis_sites both`):
 
 ```text
 <output>/
-  mitoribopy.log
-  plots_and_csv/
-  <sample>/
-    footprint_density/
-    translating_frame/
-    codon_usage/
-    debug_csv/
-  coverage_profile_plots/
-  structure_density/      # if --structure_density
-  codon_correlation/      # if --cor_plot
-  rna_seq_results/        # if --use_rna_seq
+  run_manifest.json
+  align/
+    mitoribopy.log
+    read_counts.tsv               # per-stage counts
+    kit_resolution.tsv            # per-sample kit + dedup decisions
+    run_settings.json             # includes per_sample[] block
+    trimmed/, contam_filtered/, aligned/, deduped/, bed/
+  rpf/
+    mitoribopy.log
+    rpf_counts.tsv                # per-sample per-gene RPF counts
+    run_settings.json             # includes reference_checksum
+    plots_and_csv/
+      offset_<align>.csv                 # combined diagnostic
+      p_site_offsets_<align>.csv         # combined diagnostic
+      offset_drift_<align>.svg           # per-sample offset comparison
+      per_sample/
+        <sample>/
+          offset_<align>.csv             # per-sample enrichment
+          p_site_offsets_<align>.csv     # per-sample selected offsets
+    translation_profile_p/        # P-site outputs (when analysis_sites=both)
+      <sample>/
+        footprint_density/
+        translating_frame/
+        codon_usage/
+        debug_csv/
+    translation_profile_a/        # A-site outputs (when analysis_sites=both)
+      <sample>/...
+    coverage_profile_plots_p/     # P-site coverage plots
+    coverage_profile_plots_a/     # A-site coverage plots
+    structure_density/            # if --structure_density (uses P-site by default)
+    codon_correlation/            # if --cor_plot
+  rnaseq/                         # if rnaseq config supplied
 ```
 
-Key outputs include:
+When `--analysis_sites=p` or `=a` (single site), the per-site directory names collapse back to the legacy v0.3 layout: `<output>/rpf/<sample>/...` and `<output>/rpf/coverage_profile_plots/`.
 
-- offset enrichment CSVs and plots
-- selected offset tables by read length
-- footprint-density CSVs for P-site, A-site, and E-site
-- frame-usage summaries
-- transcript-level and total codon-usage summaries
-- RPM and raw coverage-profile plots
-- CDS-aware codon-binned coverage plots (`*_codon/`, 3 nt combined per codon)
-- optional structure-density exports from footprint-density tables
+Key outputs:
+
+- **Per-sample enrichment + selection tables** under `plots_and_csv/per_sample/<sample>/`.
+- **`offset_drift_<align>.svg`** &mdash; per-sample 5'/3' offset by read length plus the combined diagnostic dashed line. Read this first to spot inter-sample drift.
+- **`kit_resolution.tsv`** in `<align>/` &mdash; per-sample detected kit, applied kit, match rate, and dedup decision. The first thing to check when a particular sample looks off.
+- **Footprint-density CSVs** for P-site, A-site, and E-site under each sample's `footprint_density/`.
+- **Frame-usage summaries** and **transcript-level + total codon-usage summaries** per site.
+- **RPM and raw coverage-profile plots** per site.
+- **CDS-aware codon-binned coverage plots** (`*_codon/`, 3 nt combined per codon).
+- Optional **structure-density exports** from footprint-density tables.
 
 ## Important Runtime Notes
 
-- `--offset_type 5|3`: downstream site placement from the read 5' or 3' end
-- `--offset_site p|a`: whether reported offsets represent P-site or A-site positions
-- `--offset_pick_reference p_site|selected_site`: how the best offset is chosen
-- `--min_5_offset`, `--max_5_offset`, `--min_3_offset`, `--max_3_offset`: recommended end-specific selection bounds
-- `--offset_mask_nt`: mask near-anchor bins from enrichment summaries and plots
-- `--rpm_norm_mode total|mt_mrna`: read-count normalization mode
-- `--structure_density`: export log2 and scaled density values from footprint-density tables
+- `--offset_type 5|3`: measure offsets from the read 5' or 3' end.
+- `--offset_site p|a`: coordinate space for the SELECTED OFFSETS table only. Does not control which downstream outputs are generated.
+- `--offset_pick_reference p_site|selected_site`: how the best offset is chosen.
+- `--offset_mode per_sample|combined`: per-sample is the default; combined matches v0.3.x behaviour.
+- `--analysis_sites p|a|both`: which downstream sites to generate. Default `both` writes parallel P and A outputs.
+- `--min_5_offset`, `--max_5_offset`, `--min_3_offset`, `--max_3_offset`: recommended end-specific selection bounds.
+- `--offset_mask_nt`: mask near-anchor bins from enrichment summaries and plots.
+- `--rpm_norm_mode total|mt_mrna`: read-count normalization mode.
+- `--structure_density`: export log2 and scaled density values from footprint-density tables.
 
 For the full interface, run:
 
@@ -439,13 +590,41 @@ mitoribopy --help
 
 ## Troubleshooting
 
-**~99 % of reads disappear at the trim step, `post_trim` is a tiny fraction of `total_reads` in `read_counts.tsv`.**
-The named `--kit-preset` has the wrong 3' adapter for your library.
-`mitoribopy align` runs adapter detection by default
-(`--adapter-detection auto`); the `[ADAPTER]` INFO line in the log
-tells you which preset the data actually looks like. Re-run with that
-preset, or add `--adapter-detection strict` to fail-fast on the
-mismatch instead of silently continuing.
+**~99 % of reads disappear at the trim step for one sample, `post_trim` is a tiny fraction of `total_reads` in `read_counts.tsv`.**
+That sample's auto-detected kit was wrong, or auto-detection silently
+fell back to the global `--kit-preset` for a sample whose adapter is
+something else. Open `<output>/align/kit_resolution.tsv`: the
+`detected_kit`, `match_rate`, and `applied_kit` columns reveal what the
+detector saw and what was actually applied. Re-run with `--kit-preset
+<right_kit>` (a per-sample fallback), or pass `--adapter-detection
+strict` to refuse to continue on any disagreement.
+
+**Two of my samples have UMIs and two don't &mdash; how do I configure dedup?**
+You don't. With the default `--dedup-strategy auto` and `--kit-preset
+auto`, the per-sample resolver picks `umi-tools` for the UMI samples
+and `skip` for the non-UMI samples in the same run. The dedup decisions
+are recorded per sample in `kit_resolution.tsv` and embedded under
+`run_settings.json -> per_sample`.
+
+**Per-sample offsets diverge by more than 1-2 nt &mdash; which sample is the outlier?**
+Open `<rpf_output>/plots_and_csv/offset_drift_<align>.svg`. Each sample
+has its own per-read-length 5' and 3' offset bar; the combined
+diagnostic is overlaid as a dashed line. Outliers are visible by eye in
+seconds. If a single sample drifts by more than 2 nt at most read
+lengths, inspect its enrichment heatmap under
+`plots_and_csv/per_sample/<sample>/` &mdash; usually the cause is low
+coverage / a bad library at that sample, not a real biological signal.
+
+**A-site vs P-site &mdash; which downstream files do I read?**
+`--analysis_sites both` (the default) writes parallel outputs:
+- P-site results live in `translation_profile_p/` and `coverage_profile_plots_p/`.
+- A-site results live in `translation_profile_a/` and `coverage_profile_plots_a/`.
+
+Restrict to one site with `--analysis_sites p` or `--analysis_sites a`
+to suppress the other and use the legacy single-directory layout.
+`--offset_site` only affects the SELECTED OFFSETS table's coordinate
+space, not which downstream outputs exist; use `--analysis_sites` to
+control the latter.
 
 **Filtered BED is empty &rarr; "no data remained after BED filtering".**
 Either your RPF range does not cover the actual read-length
