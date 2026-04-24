@@ -38,8 +38,16 @@ def plot_read_length_distribution(
     read_length_counts: pd.Series,
     sample_name: str,
     output_path: str | os.PathLike[str],
+    *,
+    rpf_range: range | list[int] | tuple[int, int] | None = None,
 ) -> None:
-    """Render a per-sample read-length distribution bar chart."""
+    """Render a per-sample read-length distribution bar chart.
+
+    When ``rpf_range`` is provided (either a ``range`` or a
+    ``(min, max)`` inclusive tuple), a light shaded band is drawn
+    over that length window so the reader immediately sees which
+    read lengths entered the downstream RPF analysis.
+    """
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
     ax.bar(
         read_length_counts.index,
@@ -49,6 +57,28 @@ def plot_read_length_distribution(
         edgecolor="white",
         linewidth=0.6,
     )
+
+    if rpf_range is not None:
+        if isinstance(rpf_range, range):
+            rpf_lo = rpf_range.start
+            rpf_hi = rpf_range.stop - 1
+        elif isinstance(rpf_range, (list, tuple)) and len(rpf_range) >= 2:
+            sorted_range = sorted(int(v) for v in rpf_range)
+            rpf_lo = sorted_range[0]
+            rpf_hi = sorted_range[-1]
+        else:
+            rpf_lo = rpf_hi = None
+        if rpf_lo is not None and rpf_hi is not None:
+            ax.axvspan(
+                rpf_lo - 0.5,
+                rpf_hi + 0.5,
+                color="#F0B400",
+                alpha=0.15,
+                zorder=0,
+                label=f"RPF range {rpf_lo}-{rpf_hi} nt",
+            )
+            ax.legend(loc="upper right", framealpha=0.9, fontsize=10)
+
     ax.set_xlabel("Read Length (nt)", fontsize=13, fontweight="bold")
     ax.set_ylabel("Read Count", fontsize=13, fontweight="bold")
     ax.set_title(f"Read-Length Distribution: {sample_name}", fontsize=15, fontweight="bold")

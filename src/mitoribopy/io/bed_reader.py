@@ -124,9 +124,16 @@ def process_bed_files(
         filtered_bed_df["sample_name"] = sample_name
         sample_names.append(sample_name)
 
-        read_length_counts = filtered_bed_df["read_length"].value_counts().sort_index()
+        # Unfiltered histogram (full range found in the BED file) so the
+        # plot can show the RPF window against the overall shape, not just
+        # within the window itself.
+        unfiltered_counts = bed_df["read_length"].value_counts().sort_index()
         plot_path = os.path.join(output_dir, f"{sample_name}_read_length_distribution.svg")
-        plot_read_length_distribution(read_length_counts, sample_name, plot_path)
+        plot_read_length_distribution(
+            unfiltered_counts, sample_name, plot_path, rpf_range=rpf_range
+        )
+        # The filtered (RPF-window) histogram is still used for the summary CSV.
+        read_length_counts = filtered_bed_df["read_length"].value_counts().sort_index()
 
         read_length_summary.append(
             {
