@@ -357,9 +357,15 @@ def test_end_to_end_cli_smoke_generates_codon_usage_outputs(tmp_path: Path) -> N
         assert f"[PIPELINE] Step {step_number}/7" in result.stdout
 
     offsets_csv = output_dir / "plots_and_csv" / "p_site_offsets_stop.csv"
-    footprint_csv = output_dir / "S1" / "footprint_density" / "ND1_footprint_density.csv"
-    codon_usage_csv = output_dir / "S1" / "codon_usage" / "codon_usage_total.csv"
-    coverage_plot_dir = output_dir / "coverage_profile_plots"
+    # Default analysis_sites=both → translation profile + coverage land
+    # in per-site subdirectories.
+    footprint_csv = (
+        output_dir / "translation_profile_p" / "S1" / "footprint_density" / "ND1_footprint_density.csv"
+    )
+    codon_usage_csv = (
+        output_dir / "translation_profile_p" / "S1" / "codon_usage" / "codon_usage_total.csv"
+    )
+    coverage_plot_dir = output_dir / "coverage_profile_plots_p"
     filtered_bed_dir = output_dir / "plots_and_csv" / "filtered_bed"
     log_file = output_dir / "mitoribopy.log"
 
@@ -367,6 +373,9 @@ def test_end_to_end_cli_smoke_generates_codon_usage_outputs(tmp_path: Path) -> N
     assert footprint_csv.exists()
     assert codon_usage_csv.exists()
     assert coverage_plot_dir.exists()
+    # A-site outputs are also written when analysis_sites=both.
+    assert (output_dir / "translation_profile_a" / "S1" / "codon_usage" / "codon_usage_total.csv").exists()
+    assert (output_dir / "coverage_profile_plots_a").exists()
     assert not filtered_bed_dir.exists()
     assert list(coverage_plot_dir.rglob("*.svg")), "Expected at least one coverage-profile SVG output"
     assert log_file.exists()

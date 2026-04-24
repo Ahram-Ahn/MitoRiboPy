@@ -292,7 +292,27 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         "--offset_site",
         choices=["p", "a"],
         default=defaults["offset_site"],
-        help="Which site the selected offsets should represent in outputs: p = P-site, a = A-site.",
+        help=(
+            "Coordinate space for the SELECTED OFFSETS table. p = P-site,\n"
+            "a = A-site. This controls the column values in\n"
+            "p_site_offsets_<align>.csv only. To control which downstream\n"
+            "outputs (codon usage, coverage plots) are generated, use\n"
+            "--analysis_sites."
+        ),
+    )
+    offset_group.add_argument(
+        "--analysis_sites",
+        choices=["p", "a", "both"],
+        default=defaults.get("analysis_sites", "both"),
+        help=(
+            "Which downstream outputs to generate per sample.\n"
+            "  both  (default) write both P-site and A-site codon usage and\n"
+            "        coverage plots, side by side under per-site subdirs.\n"
+            "  p     P-site outputs only.\n"
+            "  a     A-site outputs only.\n"
+            "Independent of --offset_site, which only controls the offset\n"
+            "selection coordinate space."
+        ),
     )
     offset_group.add_argument(
         "--codon_overlap_mode",
@@ -313,6 +333,23 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help=(
             "Use one fixed offset for every read length and sample.\n"
             "This bypasses enrichment-based offset selection."
+        ),
+    )
+    offset_group.add_argument(
+        "--offset_mode",
+        choices=["per_sample", "combined"],
+        default=defaults.get("offset_mode", "per_sample"),
+        help=(
+            "How offsets drive the downstream translation-profile and "
+            "coverage plots.\n"
+            "  per_sample  (default) run enrichment + offset selection per\n"
+            "              sample; each sample uses its own offsets for\n"
+            "              downstream outputs. Offset drift across samples\n"
+            "              is surfaced in offset_drift_<align>.svg.\n"
+            "  combined    select one offset table from every sample pooled\n"
+            "              together and apply it uniformly; matches the\n"
+            "              v0.3.x behavior. Use when you have very low\n"
+            "              coverage per sample and need the pooled signal."
         ),
     )
     output_group.add_argument(

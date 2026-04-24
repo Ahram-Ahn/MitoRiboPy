@@ -43,5 +43,15 @@ class PipelineContext:
     sample_dirs: list[str] = field(default_factory=list)
     offset_summary_df: pd.DataFrame | None = None
     offset_details_df: pd.DataFrame | None = None
+    # Combined-across-samples selected offsets. Always populated when
+    # offsets were selected, and surfaced as a diagnostic regardless of
+    # `--offset_mode`.
     selected_offsets_df: pd.DataFrame | None = None
+    # Per-sample offset summaries (input to the per-sample offset
+    # picker). One DataFrame per sample, keyed by sample name.
+    per_sample_offset_summaries: dict[str, pd.DataFrame] = field(default_factory=dict)
+    # Per-sample selected offsets. Keys are sample names. Empty when
+    # `--offset_mode combined` is active (downstream then uses
+    # `selected_offsets_df` for every sample).
+    selected_offsets_by_sample: dict[str, pd.DataFrame] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)

@@ -166,6 +166,8 @@ def run_coverage_profile_plots(
     filtered_bed_df: pd.DataFrame | None = None,
     *,
     total_mrna_map: dict[str, int | float] | None = None,
+    selected_offsets_by_sample: dict | None = None,
+    site_override: str | None = None,
 ):
     """Create RPM and raw-count coverage-profile plots.
 
@@ -193,7 +195,10 @@ def run_coverage_profile_plots(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     plot_format = getattr(args, "plot_format", "svg")
-    offset_site = str(getattr(args, "offset_site", "p")).lower()
+    if site_override is not None:
+        offset_site = str(site_override).lower()
+    else:
+        offset_site = str(getattr(args, "offset_site", "p")).lower()
     if offset_site not in {"p", "a"}:
         offset_site = "p"
 
@@ -259,10 +264,17 @@ def run_coverage_profile_plots(
                 bed_df.columns = ["chrom", "start", "end", "name", "score", "strand"][: bed_df.shape[1]]
                 read_length_blocks.append((rlen, bed_df))
 
+        sample_offsets_df = (
+            selected_offsets_by_sample.get(sample, selected_offsets_df)
+            if selected_offsets_by_sample
+            else selected_offsets_df
+        )
+        if sample_offsets_df is None:
+            continue
         for rlen, bed_df in read_length_blocks:
 
             # Fetch offset for this read length
-            row = selected_offsets_df[selected_offsets_df["Read Length"] == rlen]
+            row = sample_offsets_df[sample_offsets_df["Read Length"] == rlen]
             if row.empty:
                 continue
             if offset_type == "5":

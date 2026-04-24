@@ -37,8 +37,14 @@ def compute_offsets(
     offset_site: str = "p",
     codon_overlap_mode: str = "full",
 ) -> pd.DataFrame:
-    """Compute read-level 5' and 3' offsets relative to start/stop codons."""
-    results: list[tuple[int, int, int]] = []
+    """Compute read-level 5' and 3' offsets relative to start/stop codons.
+
+    The returned DataFrame carries a ``sample_name`` column when it is
+    present on ``bed_df``. Per-sample offset selection relies on this
+    column; legacy callers that don't populate ``sample_name`` get the
+    sentinel value ``"All"`` so group-by downstream still works.
+    """
+    results: list[tuple[str, int, int, int]] = []
 
     if offset_site not in {"p", "a"}:
         raise ValueError(f"Unsupported offset_site='{offset_site}'. Use 'p' or 'a'.")
@@ -47,11 +53,21 @@ def compute_offsets(
             f"Unsupported codon_overlap_mode='{codon_overlap_mode}'. Use 'full' or 'any'."
         )
 
+    sample_series = (
+        bed_df["sample_name"].astype(str) if "sample_name" in bed_df.columns else None
+    )
+
     if manual_offset is not None:
-        for _, read in bed_df.iterrows():
+        for idx, read in bed_df.iterrows():
             read_length = read["read_length"]
-            results.append((read_length, int(manual_offset), 0))
-        return pd.DataFrame(results, columns=["Read Length", "5' Offset", "3' Offset"])
+            sample = (
+                sample_series.loc[idx] if sample_series is not None else "All"
+            )
+            results.append((sample, read_length, int(manual_offset), 0))
+        return pd.DataFrame(
+            results,
+            columns=["sample_name", "Read Length", "5' Offset", "3' Offset"],
+        )
 
     available_sequence_names = bed_df["chrom"].dropna().astype(str).unique()
     for _, annotation_row in annotation_df.iterrows():
@@ -66,7 +82,7 @@ def compute_offsets(
         codon_end = codon_start + 2
         transcript_reads = bed_df[bed_df["chrom"] == transcript_name]
 
-        for _, read in transcript_reads.iterrows():
+        for idx, read in transcript_reads.iterrows():
             read_start = int(read["start"])
             # BED end is exclusive. Convert to inclusive coordinate.
             read_end = int(read["end"]) - 1
@@ -101,41 +117,24 @@ def compute_offsets(
                 three_offset=three_offset,
                 offset_site=offset_site,
             )
-            results.append((read_length, five_offset, three_offset))
+            sample = (
+                sample_series.loc[idx] if sample_series is not None else "All"
+            )
+            results.append((sample, read_length, five_offset, three_offset))
 
-    return pd.DataFrame(results, columns=["Read Length", "5' Offset", "3' Offset"])
-
-
-def create_csv_for_offset_enrichment(
-    bed_df: pd.DataFrame,
-    annotation_df: pd.DataFrame,
-    align_to: str,
-    rpf_range: range,
-    output_csv: str,
-    offset_limit: int = 23,
-    manual_offset: int | None = None,
-    offset_mask_nt: int = 5,
-    offset_site: str = "p",
-    codon_overlap_mode: str = "full",
-    strain: str = "y",
-) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
-    """Create an offset enrichment summary table and write it as CSV."""
-    _ = strain
-    offset_mask_nt = _validate_offset_mask_nt(offset_mask_nt)
-    offsets_df = compute_offsets(
-        bed_df=bed_df,
-        annotation_df=annotation_df,
-        align_to=align_to,
-        manual_offset=manual_offset,
-        offset_site=offset_site,
-        codon_overlap_mode=codon_overlap_mode,
+    return pd.DataFrame(
+        results,
+        columns=["sample_name", "Read Length", "5' Offset", "3' Offset"],
     )
 
-    if offsets_df.empty:
-        log_warning("OFFSET", "No reads overlapping the anchor codons were found.")
-        return None, None
 
-    offsets_df["File"] = "All"
+def _build_summary_df(
+    offsets_df: pd.DataFrame,
+    rpf_range: range,
+    offset_limit: int,
+    offset_mask_nt: int,
+) -> pd.DataFrame:
+    """Bin a per-read offsets table into the read-length × offset summary."""
     five_range = range(-offset_limit, 0)
     three_range = range(1, offset_limit + 1)
     summary_cols = list(range(-offset_limit, offset_limit + 1))
@@ -158,7 +157,53 @@ def create_csv_for_offset_enrichment(
             summary_df.at[read_length, three_offset] += 1
 
     summary_df.reset_index(inplace=True)
+    return summary_df
+
+
+def create_csv_for_offset_enrichment(
+    bed_df: pd.DataFrame,
+    annotation_df: pd.DataFrame,
+    align_to: str,
+    rpf_range: range,
+    output_csv: str,
+    offset_limit: int = 23,
+    manual_offset: int | None = None,
+    offset_mask_nt: int = 5,
+    offset_site: str = "p",
+    codon_overlap_mode: str = "full",
+    strain: str = "y",
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    """Create an offset enrichment summary table and write it as CSV.
+
+    Returns ``(summary_df, offsets_df)``. ``offsets_df`` carries a
+    ``sample_name`` column when the input ``bed_df`` did, letting
+    per-sample selection downstream group on it. Per-sample summary
+    tables are produced by :func:`build_per_sample_summaries` to keep
+    this function backwards compatible with legacy callers.
+    """
+    _ = strain
+    offset_mask_nt = _validate_offset_mask_nt(offset_mask_nt)
+    offsets_df = compute_offsets(
+        bed_df=bed_df,
+        annotation_df=annotation_df,
+        align_to=align_to,
+        manual_offset=manual_offset,
+        offset_site=offset_site,
+        codon_overlap_mode=codon_overlap_mode,
+    )
+
+    if offsets_df.empty:
+        log_warning("OFFSET", "No reads overlapping the anchor codons were found.")
+        return None, None
+
+    summary_df = _build_summary_df(
+        offsets_df=offsets_df,
+        rpf_range=rpf_range,
+        offset_limit=offset_limit,
+        offset_mask_nt=offset_mask_nt,
+    )
     summary_df.to_csv(output_csv, index=False)
+
     if offset_mask_nt > 0:
         log_info(
             "OFFSET",
@@ -167,6 +212,34 @@ def create_csv_for_offset_enrichment(
         )
     log_info("OFFSET", f"Offset enrichment CSV saved => {output_csv}")
     return summary_df, offsets_df
+
+
+def build_per_sample_summaries(
+    offsets_df: pd.DataFrame,
+    rpf_range: range,
+    offset_limit: int,
+    offset_mask_nt: int,
+) -> dict[str, pd.DataFrame]:
+    """Return one read-length × offset summary per sample.
+
+    Groups ``offsets_df`` by ``sample_name`` and runs
+    :func:`_build_summary_df` on each subset. Returns an empty dict
+    when ``offsets_df`` has no ``sample_name`` column.
+    """
+    if offsets_df is None or offsets_df.empty:
+        return {}
+    if "sample_name" not in offsets_df.columns:
+        return {}
+    offset_mask_nt = _validate_offset_mask_nt(offset_mask_nt)
+    summaries: dict[str, pd.DataFrame] = {}
+    for sample_name, sub in offsets_df.groupby("sample_name", sort=True):
+        summaries[str(sample_name)] = _build_summary_df(
+            offsets_df=sub,
+            rpf_range=rpf_range,
+            offset_limit=offset_limit,
+            offset_mask_nt=offset_mask_nt,
+        )
+    return summaries
 
 
 def plot_offset_enrichment(

@@ -99,6 +99,50 @@ def test_dict_to_argv_repeats_append_style_flags() -> None:
     ]
 
 
+def test_normalize_align_inputs_promotes_string_to_fastq_dir() -> None:
+    cfg = {"fastq": "input_data/", "kit_preset": "auto"}
+    out = all_cli._normalize_align_inputs(cfg)
+    assert out["fastq_dir"] == "input_data/"
+    # Original `fastq` is rewritten to None so _dict_to_argv drops it.
+    assert out["fastq"] is None
+    # Caller's dict is not mutated.
+    assert cfg["fastq"] == "input_data/"
+
+
+def test_normalize_align_inputs_keeps_explicit_list() -> None:
+    cfg = {"fastq": ["a.fq.gz", "b.fq.gz"]}
+    out = all_cli._normalize_align_inputs(cfg)
+    assert out["fastq"] == ["a.fq.gz", "b.fq.gz"]
+    assert "fastq_dir" not in out
+
+
+def test_normalize_align_inputs_does_not_clobber_existing_fastq_dir() -> None:
+    cfg = {"fastq": "should_be_ignored/", "fastq_dir": "explicit_dir/"}
+    out = all_cli._normalize_align_inputs(cfg)
+    assert out["fastq_dir"] == "explicit_dir/"
+    assert out["fastq"] is None
+
+
+def test_all_dry_run_polymorphic_fastq_string_becomes_fastq_dir(tmp_path, capsys) -> None:
+    cfg = tmp_path / "p.yaml"
+    cfg.write_text(
+        "align:\n"
+        "  kit_preset: auto\n"
+        "  fastq: input_data/\n"
+    )
+    exit_code = cli.main([
+        "all",
+        "--dry-run",
+        "--config", str(cfg),
+        "--output", str(tmp_path / "out"),
+    ])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "--fastq-dir input_data/" in out
+    # The polymorphic string MUST NOT appear as a --fastq value.
+    assert "--fastq input_data/" not in out
+
+
 def test_dict_to_argv_supports_legacy_flag_overrides() -> None:
     argv = all_cli._dict_to_argv(
         {"rpf": [29, 34], "plot_format": "svg"},

@@ -205,6 +205,29 @@ def _dict_to_argv(
     return argv
 
 
+def _normalize_align_inputs(align_cfg: dict) -> dict:
+    """Make ``align.fastq`` polymorphic: a string is a directory shortcut.
+
+    YAML users routinely want to point at a directory instead of listing
+    every FASTQ. ``--fastq-dir`` already exists at the CLI; this helper
+    lets the YAML key ``fastq:`` accept either a list (treated as
+    explicit paths) or a single string (treated as ``fastq_dir``). The
+    function returns a shallow copy of ``align_cfg`` with ``fastq`` /
+    ``fastq_dir`` rewritten to the unambiguous form ``_dict_to_argv``
+    will serialize correctly.
+    """
+    if not align_cfg:
+        return align_cfg
+    cfg = dict(align_cfg)
+    fastq_value = cfg.get("fastq")
+    if isinstance(fastq_value, str):
+        # String → directory shortcut. Promote to fastq_dir without
+        # clobbering an existing fastq_dir if the user set both.
+        cfg.setdefault("fastq_dir", fastq_value)
+        cfg["fastq"] = None
+    return cfg
+
+
 # Per-stage config-template comment, also used by --print-config-template.
 _CONFIG_TEMPLATE = """\
 # mitoribopy all --config pipeline_config.yaml --output results/
@@ -219,20 +242,26 @@ _CONFIG_TEMPLATE = """\
 
 # ---- align -----------------------------------------------------------------
 align:
-  # Library chemistry
-  kit_preset: custom              # truseq_smallrna | nebnext_smallrna |
+  # Library chemistry. `auto` (default) detects the kit per sample by
+  # scanning the head of each FASTQ; samples may use different kits in
+  # the same run. Set an explicit preset only when you need a guaranteed
+  # fallback for samples whose adapter cannot be auto-identified.
+  kit_preset: auto                # auto | truseq_smallrna | nebnext_smallrna |
                                   # nebnext_ultra_umi | qiaseq_mirna | custom
-  adapter: null                   # required when kit_preset=custom, else optional
+  adapter: null                   # explicit fallback adapter; required when
+                                  # kit_preset=custom and detection fails
   adapter_detection: auto         # auto | off | strict
-  umi_length: null                # overrides kit preset
+  umi_length: null                # overrides kit preset's UMI length
   umi_position: null              # 5p | 3p
 
-  # Inputs / reference indexes (bowtie2 prefixes built by bowtie2-build)
-  fastq_dir: null
-  # OR explicit list:
-  # fastq:
+  # Inputs / reference indexes (bowtie2 prefixes built by bowtie2-build).
+  # `fastq` accepts either a directory string OR an explicit list of paths.
+  # Picked up patterns: *.fq, *.fq.gz, *.fastq, *.fastq.gz.
+  fastq: input_data/              # directory shortcut (recommended)
+  # fastq:                        # OR list of explicit paths:
   #   - /path/to/sample_A.fq.gz
   #   - /path/to/sample_B.fq.gz
+  # fastq_dir: null               # legacy alias for the directory form
   contam_index: null              # REQUIRED: rRNA/tRNA bowtie2 index prefix
   mt_index: null                  # REQUIRED: mt-transcriptome bowtie2 index prefix
 
@@ -256,8 +285,18 @@ rpf:
   # Offset anchor + selection bounds
   align: stop                     # start | stop
   offset_type: "5"                # "5" | "3"  (report offsets from the 5' or 3' end)
-  offset_site: p                  # p | a      (P-site vs A-site)
+  offset_site: p                  # p | a   coordinate space for the SELECTED
+                                  # OFFSETS table only. Use analysis_sites to
+                                  # control which downstream outputs are
+                                  # produced (codon usage, coverage plots).
   offset_pick_reference: p_site
+  offset_mode: per_sample         # per_sample (default) | combined.
+                                  # per_sample: each sample uses its own
+                                  # offsets; combined: pool all samples and
+                                  # apply one offset table (v0.3.x behaviour).
+  analysis_sites: both            # both (default) | p | a
+                                  # both writes parallel P-site and A-site
+                                  # coverage plots and codon usage tables.
   min_5_offset: 10
   max_5_offset: 22
   min_3_offset: 10
@@ -483,7 +522,7 @@ def run(argv: Iterable[str]) -> int:
                 "align: "
                 + " ".join(
                     _dict_to_argv(
-                        config.get("align", {}),
+                        _normalize_align_inputs(config.get("align", {})),
                         flag_style="hyphen",
                         repeat_flags={"fastq"},
                     )
@@ -525,7 +564,9 @@ def run(argv: Iterable[str]) -> int:
             stages_skipped.append("align")
         else:
             align_argv = _dict_to_argv(
-                config["align"], flag_style="hyphen", repeat_flags={"fastq"}
+                _normalize_align_inputs(config["align"]),
+                flag_style="hyphen",
+                repeat_flags={"fastq"},
             )
             rc = align_cli.run(align_argv)
             if rc != 0:

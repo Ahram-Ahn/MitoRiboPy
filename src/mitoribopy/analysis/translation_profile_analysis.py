@@ -33,6 +33,8 @@ def run_translation_profile_analysis(
     filtered_bed_df=None,
     resolved_codon_table=None,
     resolved_start_codons=None,
+    selected_offsets_by_sample: dict | None = None,
+    site_override: str | None = None,
 ):
     """Compute translation-profile summaries and write the paired plotting outputs."""
 
@@ -201,7 +203,10 @@ def run_translation_profile_analysis(
     coverage_usage_per_sample = {}
     frame_usage_map = {}
 
-    offset_site = str(getattr(args, "offset_site", "p")).lower()
+    if site_override is not None:
+        offset_site = str(site_override).lower()
+    else:
+        offset_site = str(getattr(args, "offset_site", "p")).lower()
     if offset_site not in {"p", "a"}:
         offset_site = "p"
     primary_site_key = "P_site" if offset_site == "p" else "A_site"
@@ -271,8 +276,19 @@ def run_translation_profile_analysis(
                     continue
                 read_length_blocks.append((rl, bed_df))
 
+        sample_offsets_df = (
+            selected_offsets_by_sample.get(sample_name, selected_offsets_df)
+            if selected_offsets_by_sample
+            else selected_offsets_df
+        )
+        if sample_offsets_df is None:
+            log_info(
+                "PROFILE",
+                f"{sample_name}: no selected offsets table available; skipping.",
+            )
+            continue
         for rl, bed_df in read_length_blocks:
-            offset_row = selected_offsets_df[selected_offsets_df["Read Length"] == rl]
+            offset_row = sample_offsets_df[sample_offsets_df["Read Length"] == rl]
             if offset_row.empty:
                 continue
 

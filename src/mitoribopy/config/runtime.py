@@ -33,6 +33,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "offset_pick_reference": "p_site",
     "offset_type": "5",
     "offset_site": "p",
+    "offset_mode": "per_sample",
+    "analysis_sites": "both",
     "codon_overlap_mode": "full",
     "plot_dir": "plots_and_csv",
     "plot_format": "png",
