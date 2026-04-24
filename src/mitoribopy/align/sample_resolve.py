@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Iterable
 
 from . import adapter_detect
-from ._types import KIT_PRESETS, DedupStrategy, ResolvedKit
+from ._types import KIT_PRESETS, DedupStrategy, ResolvedKit, resolve_kit_alias
 from .dedup import resolve_dedup_strategy
 from .trim import resolve_kit_settings
 
@@ -82,7 +82,11 @@ _KIT_RESOLUTION_COLUMNS: tuple[str, ...] = (
 
 
 def _user_supplied_explicit_preset(kit_preset: str, adapter: str | None) -> bool:
-    """True when the user did NOT leave the kit at the auto sentinel."""
+    """True when the user did NOT leave the kit at the auto sentinel.
+
+    Aliases for canonical presets count as explicit choices once
+    resolved; ``resolve_kit_alias`` is run before this helper.
+    """
     return kit_preset != "auto" or adapter is not None
 
 
@@ -97,6 +101,7 @@ def _resolve_one(
     dedup_strategy: DedupStrategy,
     confirm_mark_duplicates: bool,
     adapter_detection_mode: str,
+    allow_pretrimmed_inference: bool = True,
     detector=adapter_detect.detect_adapter,
 ) -> SampleResolution:
     """Resolve one sample. May raise :class:`SampleResolutionError`."""
@@ -197,18 +202,24 @@ def _resolve_one(
             else:
                 applied_preset = detected
                 source = "detected"
+        elif user_explicit:
+            applied_preset = kit_preset
+            source = "user_fallback"
+        elif detection.pretrimmed and allow_pretrimmed_inference:
+            # Universal absence of every known adapter — best inference
+            # is that the FASTQ is already trimmed (e.g. SRA-deposited).
+            # cutadapt will skip the -a flag and only do length/quality.
+            applied_preset = "pretrimmed"
+            source = "inferred_pretrimmed"
         else:
-            if user_explicit:
-                applied_preset = kit_preset
-                source = "user_fallback"
-            else:
-                raise SampleResolutionError(
-                    f"{sample}: adapter auto-detection found no known kit "
-                    f"({detection.n_reads_scanned} reads scanned, "
-                    f"per-kit rates: {rates_str}) and no --kit-preset / "
-                    "--adapter fallback was supplied. Pass --kit-preset "
-                    "explicitly or use --adapter-detection off."
-                )
+            raise SampleResolutionError(
+                f"{sample}: adapter auto-detection found no known kit "
+                f"({detection.n_reads_scanned} reads scanned, "
+                f"per-kit rates: {rates_str}) and no --kit-preset / "
+                "--adapter fallback was supplied. Either pass --kit-preset "
+                "explicitly, use --kit-preset pretrimmed for already-trimmed "
+                "data, or use --adapter-detection off."
+            )
 
     kit = resolve_kit_settings(
         applied_preset,
@@ -244,6 +255,7 @@ def resolve_sample_resolutions(
     dedup_strategy: DedupStrategy,
     confirm_mark_duplicates: bool,
     adapter_detection_mode: str,
+    allow_pretrimmed_inference: bool = True,
     detector=adapter_detect.detect_adapter,
 ) -> list[SampleResolution]:
     """Pre-flight resolution for every input sample.
@@ -252,6 +264,9 @@ def resolve_sample_resolutions(
     message that names every offending sample so the user can fix the
     config in one pass.
     """
+    # Translate any legacy alias up front so the rest of the resolver
+    # only deals with canonical preset names.
+    kit_preset = resolve_kit_alias(kit_preset)
     if kit_preset not in KIT_PRESETS:
         known = ", ".join(sorted(KIT_PRESETS))
         raise SampleResolutionError(
@@ -273,6 +288,7 @@ def resolve_sample_resolutions(
                     dedup_strategy=dedup_strategy,
                     confirm_mark_duplicates=confirm_mark_duplicates,
                     adapter_detection_mode=adapter_detection_mode,
+                    allow_pretrimmed_inference=allow_pretrimmed_inference,
                     detector=detector,
                 )
             )

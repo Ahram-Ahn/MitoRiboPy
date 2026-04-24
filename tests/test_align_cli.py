@@ -107,7 +107,7 @@ def test_dry_run_exits_zero_and_prints_plan_with_resolved_settings(
             "align",
             "--dry-run",
             "--kit-preset",
-            "truseq_smallrna",
+            "illumina_smallrna",
             "--fastq-dir",
             str(tmp_path),
         ]
@@ -116,7 +116,7 @@ def test_dry_run_exits_zero_and_prints_plan_with_resolved_settings(
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "dry-run" in out
-    assert "truseq_smallrna" in out
+    assert "illumina_smallrna" in out
     assert "TGGAATTCTCGGGTGCCAAGG" in out  # resolved adapter
     assert "strand=forward" in out
 
@@ -144,7 +144,7 @@ def test_dry_run_fails_fast_on_mark_duplicates_without_confirm_flag(
             "align",
             "--dry-run",
             "--kit-preset",
-            "truseq_smallrna",
+            "illumina_smallrna",
             "--dedup-strategy",
             "mark-duplicates",
             "--fastq-dir",
@@ -162,7 +162,7 @@ def test_dry_run_fails_fast_on_mark_duplicates_without_confirm_flag(
 def test_non_dry_run_requires_output_contam_index_mt_index_inputs(
     capsys,
 ) -> None:
-    exit_code = cli.main(["align", "--kit-preset", "truseq_smallrna"])
+    exit_code = cli.main(["align", "--kit-preset", "illumina_smallrna"])
     err = capsys.readouterr().err
     assert exit_code == 2
     assert "--output" in err
@@ -271,7 +271,7 @@ def test_end_to_end_orchestration_produces_expected_outputs(
         [
             "align",
             "--kit-preset",
-            "truseq_smallrna",
+            "illumina_smallrna",
             "--fastq-dir",
             str(fq_dir),
             "--contam-index",
@@ -312,7 +312,7 @@ def test_end_to_end_orchestration_produces_expected_outputs(
     assert settings_path.exists()
     settings = json.loads(settings_path.read_text())
     assert settings["subcommand"] == "align"
-    assert settings["kit_preset_default"] == "truseq_smallrna"
+    assert settings["kit_preset_default"] == "illumina_smallrna"
     assert settings["library_strandedness"] == "forward"
     assert settings["dedup_strategy"] == "skip"  # auto -> skip because umi_length==0
     assert settings["mapq_threshold"] == 10
@@ -322,7 +322,7 @@ def test_end_to_end_orchestration_produces_expected_outputs(
     by_sample = {row["sample"]: row for row in settings["per_sample"]}
     for sample in ("sampleA", "sampleB"):
         row = by_sample[sample]
-        assert row["applied_kit"] == "truseq_smallrna"
+        assert row["applied_kit"] == "illumina_smallrna"
         assert row["adapter"] == "TGGAATTCTCGGGTGCCAAGG"
         assert row["umi_length"] == 0
         assert row["dedup_strategy"] == "skip"
@@ -349,7 +349,7 @@ def test_end_to_end_uses_explicit_fastq_list(
         [
             "align",
             "--kit-preset",
-            "truseq_smallrna",
+            "illumina_smallrna",
             "--fastq",
             str(f1),
             "--contam-index",
@@ -376,7 +376,7 @@ def test_end_to_end_picks_up_umi_dedup_when_umi_present(
         [
             "align",
             "--kit-preset",
-            "nebnext_ultra_umi",  # 8 nt 5' UMI
+            "illumina_truseq_umi",  # 8 nt 5' UMI
             "--fastq",
             str(fq),
             "--contam-index",
@@ -392,4 +392,4 @@ def test_end_to_end_picks_up_umi_dedup_when_umi_present(
     settings = json.loads((out_dir / "run_settings.json").read_text())
     assert settings["dedup_strategy"] == "umi-tools"
     assert settings["per_sample"][0]["umi_length"] == 8
-    assert settings["per_sample"][0]["applied_kit"] == "nebnext_ultra_umi"
+    assert settings["per_sample"][0]["applied_kit"] == "illumina_truseq_umi"

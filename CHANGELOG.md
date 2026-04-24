@@ -7,6 +7,51 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-04-24
+
+### Added
+- **`pretrimmed` kit preset** for FASTQs that have already been
+  adapter-trimmed (SRA-deposited data, output of a prior trim step).
+  cutadapt still runs for length and quality filtering but skips the
+  ``-a`` flag entirely. Auto-inferred when adapter detection finds 0%
+  match across every kit (the strongest signal that no adapter is
+  there); also selectable explicitly via ``--kit-preset pretrimmed``.
+  Mixed batches with both raw and pre-trimmed FASTQs in the same run
+  resolve each sample independently.
+- **Detection tuning flags**: ``--adapter-detect-reads`` (default 5000),
+  ``--adapter-detect-min-rate`` (default 0.30), ``--adapter-detect-min-len``
+  (default 12), ``--adapter-detect-pretrimmed-threshold`` (default 0.05),
+  and ``--no-pretrimmed-inference``. All exposed via the YAML ``align``
+  section as well.
+- ``DetectionResult.pretrimmed`` field carrying the universal-absence
+  signal so callers can route to the right fallback.
+
+### Changed
+- **``KIT_PRESETS`` consolidated by adapter family** rather than vendor.
+  v0.4.0 had a long list (``truseq_smallrna``, ``nebnext_smallrna``,
+  ``nebnext_ultra_umi``, ``qiaseq_mirna``, ``truseq_stranded_total``,
+  ``smarter_pico_v3``, ``sequoia_express``, …); v0.4.1 ships a short
+  canonical set:
+  - ``illumina_smallrna`` &mdash; TruSeq Small RNA adapter, no UMI.
+  - ``illumina_truseq`` &mdash; TruSeq Read 1 adapter, no UMI. Covers
+    NEBNext Multiplex Small RNA, TruSeq Stranded Total RNA Gold,
+    Takara SMARTer Stranded Total v3 Pico, Bio-Rad SEQuoia Express
+    Standard, and any other prep on the standard Illumina R1 adapter.
+  - ``illumina_truseq_umi`` &mdash; TruSeq R1 + 8 nt 5' UMI. Covers
+    NEBNext Ultra II UMI, SEQuoia Complete UMI.
+  - ``qiaseq_mirna``, ``custom``, ``auto``, ``pretrimmed``.
+  Old vendor-specific names remain accepted as aliases via
+  ``KIT_PRESET_ALIASES`` and ``resolve_kit_alias``; existing YAML
+  configs and CLI invocations keep working without changes.
+- ``ResolvedKit.adapter`` is now ``str | None`` (was ``str``). Only the
+  ``pretrimmed`` kit holds ``None``; cutadapt's ``_build_pass1_command``
+  skips the ``-a`` flag when it sees ``None``.
+- Adapter-detection failure with no fallback now falls through to the
+  ``pretrimmed`` kit by default instead of hard-erroring. This is the
+  fix for the ``"adapter auto-detection found no known kit"`` failure
+  on SRA-deposited inputs reported in v0.4.0. Pass
+  ``--no-pretrimmed-inference`` to keep the v0.4.0 strict behaviour.
+
 ## [0.4.0] - 2026-04-24
 
 ### Added

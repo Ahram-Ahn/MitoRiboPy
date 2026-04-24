@@ -54,7 +54,7 @@ def test_detect_truseq_when_all_reads_have_truseq_adapter() -> None:
     result = detect_adapter(
         Path("dummy.fq"), opener=_opener_for(_make_fastq(seqs))
     )
-    assert result.preset_name == "truseq_smallrna"
+    assert result.preset_name == "illumina_smallrna"
     assert result.match_rate == pytest.approx(1.0)
     assert result.n_reads_scanned == 100
     assert not result.ambiguous
@@ -68,10 +68,10 @@ def test_detect_neb_smallrna_with_ambiguous_flag_for_neb_family_share() -> None:
     # Both nebnext_smallrna and nebnext_ultra_umi share this adapter;
     # alphabetical tie-break picks nebnext_smallrna and ambiguous=True
     # so the user is warned to re-confirm whether they actually have UMIs.
-    assert result.preset_name == "nebnext_smallrna"
+    assert result.preset_name == "illumina_truseq"
     assert result.match_rate == pytest.approx(1.0)
     assert result.ambiguous is True
-    assert result.per_kit_rates["nebnext_ultra_umi"] == pytest.approx(1.0)
+    assert result.per_kit_rates["illumina_truseq_umi"] == pytest.approx(1.0)
 
 
 def test_detect_qiaseq_mirna() -> None:
@@ -105,7 +105,7 @@ def test_detect_returns_none_when_match_rate_below_threshold() -> None:
         opener=_opener_for(_make_fastq(seqs)),
     )
     assert result.preset_name is None
-    assert result.per_kit_rates["truseq_smallrna"] == pytest.approx(0.20)
+    assert result.per_kit_rates["illumina_smallrna"] == pytest.approx(0.20)
 
 
 def test_detect_passes_at_50_percent_with_default_threshold() -> None:
@@ -114,7 +114,7 @@ def test_detect_passes_at_50_percent_with_default_threshold() -> None:
     result = detect_adapter(
         Path("dummy.fq"), opener=_opener_for(_make_fastq(seqs))
     )
-    assert result.preset_name == "truseq_smallrna"
+    assert result.preset_name == "illumina_smallrna"
     assert result.match_rate == pytest.approx(0.5)
 
 
@@ -145,7 +145,7 @@ def test_detect_handles_truncated_final_record() -> None:
     # Both records' sequence lines should have been read; iterator stops
     # cleanly when the underlying stream runs out mid-record.
     assert result.n_reads_scanned >= 1
-    assert result.preset_name == "truseq_smallrna"
+    assert result.preset_name == "illumina_smallrna"
 
 
 # ---------- end-of-window / determinism behaviour ---------------------------
@@ -177,10 +177,10 @@ def test_detect_short_adapter_skipped_from_candidates() -> None:
 
 
 def test_format_per_kit_rates_sorts_alphabetically_and_uses_percents() -> None:
-    rates = {"truseq_smallrna": 0.941, "nebnext_smallrna": 0.012}
+    rates = {"illumina_smallrna": 0.941, "illumina_truseq": 0.012}
     formatted = format_per_kit_rates(rates)
-    # Sorted alphabetically => nebnext first, truseq second.
-    assert formatted == "nebnext_smallrna=1.2%, truseq_smallrna=94.1%"
+    # Sorted alphabetically.
+    assert formatted == "illumina_smallrna=94.1%, illumina_truseq=1.2%"
 
 
 def test_format_per_kit_rates_handles_empty_dict() -> None:
@@ -192,9 +192,9 @@ def test_format_per_kit_rates_handles_empty_dict() -> None:
 
 def test_detection_result_is_frozen_dataclass() -> None:
     result = DetectionResult(
-        preset_name="truseq_smallrna",
+        preset_name="illumina_smallrna",
         match_rate=0.94,
-        per_kit_rates={"truseq_smallrna": 0.94},
+        per_kit_rates={"illumina_smallrna": 0.94},
         n_reads_scanned=5000,
         ambiguous=False,
     )

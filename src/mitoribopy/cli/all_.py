@@ -242,17 +242,32 @@ _CONFIG_TEMPLATE = """\
 
 # ---- align -----------------------------------------------------------------
 align:
-  # Library chemistry. `auto` (default) detects the kit per sample by
-  # scanning the head of each FASTQ; samples may use different kits in
-  # the same run. Set an explicit preset only when you need a guaranteed
-  # fallback for samples whose adapter cannot be auto-identified.
-  kit_preset: auto                # auto | truseq_smallrna | nebnext_smallrna |
-                                  # nebnext_ultra_umi | qiaseq_mirna | custom
+  # Library chemistry. `auto` (default) detects the adapter family per
+  # sample by scanning the head of each FASTQ; mixed-kit and mixed-UMI
+  # batches are first-class. Set an explicit preset only when you need
+  # a per-sample fallback for samples whose adapter cannot be
+  # auto-identified.
+  kit_preset: auto                # auto | illumina_smallrna | illumina_truseq |
+                                  # illumina_truseq_umi | qiaseq_mirna |
+                                  # pretrimmed | custom
+                                  # (legacy aliases truseq_smallrna,
+                                  #  nebnext_smallrna, nebnext_ultra_umi
+                                  #  still accepted for back-compat)
   adapter: null                   # explicit fallback adapter; required when
                                   # kit_preset=custom and detection fails
   adapter_detection: auto         # auto | off | strict
   umi_length: null                # overrides kit preset's UMI length
   umi_position: null              # 5p | 3p
+
+  # Adapter-detection tuning. Defaults are calibrated for typical
+  # 36-150 nt sequencing libraries; touch only when detection is
+  # producing surprises.
+  adapter_detect_reads: 5000              # head-of-FASTQ scan size
+  adapter_detect_min_rate: 0.30           # min fraction with adapter signal
+  adapter_detect_min_len: 12              # adapter prefix length used
+  adapter_detect_pretrimmed_threshold: 0.05  # all-kits below this -> pretrimmed
+  # allow_pretrimmed_inference: true      # set false to keep v0.4.0 hard-fail
+                                          #   behaviour when detection fails
 
   # Inputs / reference indexes (bowtie2 prefixes built by bowtie2-build).
   # `fastq` accepts either a directory string OR an explicit list of paths.

@@ -26,6 +26,7 @@ from ._types import (
     KitPreset,
     ResolvedKit,
     UmiPosition,
+    resolve_kit_alias,
 )
 
 
@@ -50,6 +51,9 @@ def resolve_kit_settings(
         if the effective configuration is internally inconsistent
         (notably: ``custom`` with no ``--adapter``).
     """
+    # Translate any legacy vendor-specific alias to its canonical
+    # adapter-family preset name before lookup.
+    kit = resolve_kit_alias(kit)
     try:
         preset: KitPreset = KIT_PRESETS[kit]
     except KeyError as exc:
@@ -66,14 +70,19 @@ def resolve_kit_settings(
         )
 
     effective_adapter = adapter if adapter is not None else preset.adapter
-    if effective_adapter is None:
+    # The 'pretrimmed' preset legitimately has no adapter — cutadapt will
+    # skip the -a flag and only do length + quality filtering. Every
+    # other adapter-less resolution is an error (most often: 'custom'
+    # without --adapter).
+    if effective_adapter is None and kit != "pretrimmed":
         named = ", ".join(
             name for name in KIT_PRESETS if name not in {"custom", "auto"}
         )
         raise ValueError(
             "The 'custom' kit preset requires an explicit --adapter <SEQ>. "
-            "Either pass --adapter or switch to a named kit preset "
-            f"({named})."
+            "Either pass --adapter, switch to a named kit preset "
+            f"({named}), or use --kit-preset pretrimmed for already-trimmed "
+            "FASTQs."
         )
 
     effective_umi_length = umi_length if umi_length is not None else preset.umi_length
@@ -128,9 +137,13 @@ def _build_pass1_command(
             "--rename={id}_{cut_prefix} {comment}",
         ]
 
+    # Skip the -a flag entirely for the 'pretrimmed' kit so cutadapt
+    # only enforces length + quality filtering. This is the supported
+    # path for SRA-deposited or already-trimmed FASTQs.
+    if resolved.adapter is not None:
+        cmd += ["-a", resolved.adapter]
+
     cmd += [
-        "-a",
-        resolved.adapter,
         "--minimum-length",
         str(min_length),
         "--maximum-length",

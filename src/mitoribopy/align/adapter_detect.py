@@ -41,6 +41,11 @@ class DetectionResult:
     true when a second preset's rate is within ``ambiguity_window`` of
     the winner, which happens for kits that share an adapter sequence
     (notably ``nebnext_smallrna`` vs ``nebnext_ultra_umi``).
+
+    ``pretrimmed`` is true when every kit's match rate is at or below
+    ``pretrimmed_threshold``. The strongest signal that a FASTQ is
+    already adapter-trimmed (e.g. SRA-deposited data, or output of a
+    prior trim step) is universal absence of every known adapter.
     """
 
     preset_name: str | None
@@ -48,6 +53,7 @@ class DetectionResult:
     per_kit_rates: dict[str, float]
     n_reads_scanned: int
     ambiguous: bool
+    pretrimmed: bool = False
 
 
 def _open_fastq(path: Path) -> IO[str]:
@@ -83,6 +89,7 @@ def detect_adapter(
     min_match_len: int = 12,
     min_match_rate: float = 0.30,
     ambiguity_window: float = 0.05,
+    pretrimmed_threshold: float = 0.05,
     opener: Callable[[Path], IO[str]] = _open_fastq,
 ) -> DetectionResult:
     """Scan the head of ``fastq_path`` for known adapter signatures.
@@ -147,10 +154,18 @@ def detect_adapter(
             per_kit_rates=rates,
             n_reads_scanned=n_scanned,
             ambiguous=False,
+            pretrimmed=False,
         )
 
     best_name = min(rates.keys(), key=lambda name: (-rates[name], name))
     best_rate = rates[best_name]
+
+    # Universal absence of every known adapter is the strongest signal
+    # that a FASTQ is already trimmed. Distinct from "the adapter is
+    # something we don't have a preset for" — that case still has some
+    # noise floor (random short matches), but pretrimmed data sits
+    # near zero across the board.
+    pretrimmed = all(rate <= pretrimmed_threshold for rate in rates.values())
 
     if best_rate < min_match_rate:
         return DetectionResult(
@@ -159,6 +174,7 @@ def detect_adapter(
             per_kit_rates=rates,
             n_reads_scanned=n_scanned,
             ambiguous=False,
+            pretrimmed=pretrimmed,
         )
 
     ambiguous = any(
@@ -172,6 +188,7 @@ def detect_adapter(
         per_kit_rates=rates,
         n_reads_scanned=n_scanned,
         ambiguous=ambiguous,
+        pretrimmed=False,
     )
 
 

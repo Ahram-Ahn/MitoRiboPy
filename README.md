@@ -16,7 +16,9 @@ MitoRiboPy is a Python package for mitochondrial ribosome profiling (mt-Ribo-seq
 - Subcommand CLI (`align` / `rpf` / `rnaseq` / `all`) with shared `--config`, `--dry-run`, `--threads`, `--log-level`.
 - Config files in JSON, YAML, or TOML (auto-detected by path suffix); YAML is the recommended invocation surface.
 - **Polymorphic `align.fastq` YAML key**: pass a directory string OR an explicit list of paths; the directory is glob-scanned for `*.fq`, `*.fq.gz`, `*.fastq`, `*.fastq.gz`.
-- Kit-aware FASTQ trimming: `truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, `qiaseq_mirna`, or explicit `--adapter`. Strict mode (`--adapter-detection strict`) hard-fails any sample whose data disagrees with an explicit preset.
+- **Kit presets organized by adapter family** (v0.4.1): `illumina_smallrna`, `illumina_truseq` (covers NEBNext Small RNA, TruSeq Stranded Total Gold, SMARTer Pico v3, SEQuoia Express, …), `illumina_truseq_umi` (covers NEBNext Ultra II UMI, SEQuoia Complete UMI, …), `qiaseq_mirna`, `pretrimmed`, or explicit `--adapter`. Old vendor-specific names (`truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`) remain accepted as aliases.
+- **Pre-trimmed FASTQs auto-detected**: when adapter detection finds 0% across every kit (the strongest signal that the FASTQ has already been trimmed, e.g. SRA-deposited data), the resolver falls through to the `pretrimmed` kit so cutadapt skips adapter trimming and runs only length + quality filtering. Mixed batches with raw and pre-trimmed samples in the same run are first-class.
+- Strict mode (`--adapter-detection strict`) still hard-fails any sample whose data disagrees with an explicit preset.
 - Strand-aware mt-transcriptome alignment (`--library-strandedness forward` by default) so ND5 / ND6 antisense overlap is resolved by construction on Path A (transcriptome reference).
 - Deduplication safe by default: `--dedup-strategy auto` resolves to `umi-tools` per sample whenever a UMI is present and `skip` otherwise; `mark-duplicates` is gated behind a long confirmation flag because coordinate-only dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries.
 - BAM input to `rpf` via pysam (no samtools / bedtools PATH dependency).
@@ -327,9 +329,14 @@ These are not all technically mandatory in the parser, but they are the recommen
 
 #### `align` stage
 
-- `--kit-preset {auto,truseq_smallrna,nebnext_smallrna,nebnext_ultra_umi,qiaseq_mirna,custom}` &mdash; `auto` (default) runs per-sample detection; explicit preset becomes a per-sample fallback.
+- `--kit-preset {auto,illumina_smallrna,illumina_truseq,illumina_truseq_umi,qiaseq_mirna,pretrimmed,custom}` &mdash; `auto` (default) runs per-sample detection; explicit preset becomes a per-sample fallback. Legacy vendor names (`truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`) remain accepted as aliases for back-compat.
 - `--adapter <SEQ>` &mdash; explicit adapter sequence (required for `--kit-preset custom`); otherwise an optional fallback used only when detection fails.
 - `--adapter-detection {auto,off,strict}` &mdash; per-sample policy. `strict` hard-fails any sample whose detection disagrees with `--kit-preset` or yields no match.
+- `--adapter-detect-reads <N>` (default 5000) &mdash; head-of-FASTQ scan size.
+- `--adapter-detect-min-rate <FRAC>` (default 0.30) &mdash; min fraction of reads with adapter signal for a kit to be considered detected.
+- `--adapter-detect-min-len <N>` (default 12) &mdash; adapter prefix length used as the search needle.
+- `--adapter-detect-pretrimmed-threshold <FRAC>` (default 0.05) &mdash; when EVERY kit's match rate is at or below this value, classify as pre-trimmed.
+- `--no-pretrimmed-inference` &mdash; disable the auto-fallback to `pretrimmed`; restores the v0.4.0 hard-fail behaviour.
 - `--dedup-strategy {auto,umi-tools,skip,mark-duplicates}` &mdash; `auto` resolves per sample (umi-tools when UMIs present, skip otherwise).
 - `--library-strandedness {forward,reverse,unstranded}`
 - `--min-length`, `--max-length`, `--quality`, `--mapq`, `--seed`
@@ -598,6 +605,32 @@ something else. Open `<output>/align/kit_resolution.tsv`: the
 detector saw and what was actually applied. Re-run with `--kit-preset
 <right_kit>` (a per-sample fallback), or pass `--adapter-detection
 strict` to refuse to continue on any disagreement.
+
+**`adapter auto-detection found no known kit` for SRA-deposited or already-trimmed FASTQs.**
+v0.4.1 auto-handles this: when every kit's match rate is at or below
+the pretrimmed threshold (default 5%), the FASTQ is classified as
+pre-trimmed and resolved to the `pretrimmed` kit so cutadapt skips the
+`-a` flag. If you want the v0.4.0 hard-fail behaviour back, pass
+`--no-pretrimmed-inference`. To set it explicitly per sample, pass
+`--kit-preset pretrimmed` or set `kit_preset: pretrimmed` in the YAML.
+Mixed batches with raw + pre-trimmed FASTQs in the same run are
+supported; each sample is resolved independently and the
+`source` column in `kit_resolution.tsv` distinguishes `detected` from
+`inferred_pretrimmed`.
+
+**My library kit is not in the preset list.**
+Most current Illumina-compatible kits map to one of three adapter
+families that ARE in the list:
+- TruSeq Small RNA adapter → `illumina_smallrna`
+- TruSeq Read 1 adapter without UMI → `illumina_truseq` (covers
+  NEBNext Small RNA, TruSeq Stranded Total RNA Gold, SMARTer Pico v3,
+  SEQuoia Express Standard, …)
+- TruSeq Read 1 adapter with 8 nt 5' UMI → `illumina_truseq_umi`
+  (NEBNext Ultra II UMI, SEQuoia Complete UMI, …)
+
+Check your kit's documentation for the 3' adapter sequence. If it
+matches one above, use that preset. If it doesn't, pass
+`--kit-preset custom --adapter <YOUR_SEQ>`.
 
 **Two of my samples have UMIs and two don't &mdash; how do I configure dedup?**
 You don't. With the default `--dedup-strategy auto` and `--kit-preset

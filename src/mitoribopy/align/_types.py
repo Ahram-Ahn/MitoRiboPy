@@ -70,9 +70,18 @@ class KitPreset:
     description: str
 
 
-# The preset registry. Every addition here MUST be cross-checked against
-# the kit vendor's documentation; a mismatch silently corrupts real data.
+# Canonical preset registry, organized by adapter family rather than
+# kit brand. Most commercial library prep kits share one of three 3'
+# adapter sequences; differentiating presets by adapter family (instead
+# of by vendor name) keeps the registry small, makes detection
+# unambiguous (no two presets share an adapter), and lets a single
+# preset cover an entire family of kits. Vendor names live in the
+# ``description`` and in the ``KIT_PRESET_ALIASES`` map below.
+#
+# Every adapter sequence here MUST be cross-checked against the kit
+# vendor's documentation; a mismatch silently corrupts real data.
 KIT_PRESETS: dict[str, KitPreset] = {
+    # --- Sentinels / fallbacks ---
     "auto": KitPreset(
         name="auto",
         adapter=None,
@@ -81,35 +90,72 @@ KIT_PRESETS: dict[str, KitPreset] = {
         description=(
             "Per-sample auto detection. The orchestrator scans the head of "
             "every input FASTQ and resolves the kit independently for each "
-            "sample; this preset is the default when no explicit "
-            "--kit-preset is supplied."
+            "sample. This is the default when no explicit --kit-preset is "
+            "supplied."
         ),
     ),
-    "truseq_smallrna": KitPreset(
-        name="truseq_smallrna",
+    "pretrimmed": KitPreset(
+        name="pretrimmed",
+        adapter=None,
+        umi_length=0,
+        umi_position="5p",
+        description=(
+            "FASTQs that have already been adapter-trimmed (e.g. SRA-deposited "
+            "data, or output of a prior trim step). cutadapt still runs for "
+            "length and quality filtering but skips the -a flag. Auto-inferred "
+            "when no known kit signature is found across every preset; can "
+            "also be set explicitly to skip detection entirely."
+        ),
+    ),
+    "custom": KitPreset(
+        name="custom",
+        adapter=None,
+        umi_length=0,
+        umi_position="5p",
+        description=(
+            "No defaults applied. --adapter must be supplied explicitly. "
+            "Use this preset whenever your kit is not one of the named "
+            "adapter families."
+        ),
+    ),
+    # --- Real adapter families ---
+    "illumina_smallrna": KitPreset(
+        name="illumina_smallrna",
         adapter="TGGAATTCTCGGGTGCCAAGG",
         umi_length=0,
         umi_position="5p",
-        description="Illumina TruSeq Small RNA (3' adapter TGGAATTCTCGGGTGCCAAGG).",
+        description=(
+            "Illumina TruSeq Small RNA Library Prep adapter "
+            "TGGAATTCTCGGGTGCCAAGG, no UMI. Covers Illumina TruSeq Small "
+            "RNA and any compatible kit using the same 3' adapter."
+        ),
     ),
-    "nebnext_smallrna": KitPreset(
-        name="nebnext_smallrna",
+    "illumina_truseq": KitPreset(
+        name="illumina_truseq",
         adapter="AGATCGGAAGAGCACACGTCTGAACTCCAGTCA",
         umi_length=0,
         umi_position="5p",
         description=(
-            "NEB Next Multiplex Small RNA Library Prep "
-            "(3' SRA adapter AGATCGGAAGAGCACACGTCTGAACTCCAGTCA)."
+            "Illumina TruSeq Read 1 adapter "
+            "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA, no UMI. Covers most "
+            "current Illumina-compatible total/stranded RNA preps: NEB "
+            "Next Multiplex Small RNA, TruSeq Stranded Total RNA "
+            "(Gold), Takara SMARTer Stranded Total RNA-Seq v3 Pico "
+            "Input, Bio-Rad SEQuoia Express Standard, and any other "
+            "prep using the standard Illumina R1 adapter without a UMI."
         ),
     ),
-    "nebnext_ultra_umi": KitPreset(
-        name="nebnext_ultra_umi",
+    "illumina_truseq_umi": KitPreset(
+        name="illumina_truseq_umi",
         adapter="AGATCGGAAGAGCACACGTCTGAACTCCAGTCA",
         umi_length=8,
         umi_position="5p",
         description=(
-            "NEBNext Ultra II with UMI Adapters (3' SRA adapter; 8 nt 5' UMI). "
-            "Confirm against your kit's insert diagram before using."
+            "Illumina TruSeq Read 1 adapter with 8 nt 5' UMI. Covers "
+            "NEBNext Ultra II with UMI Adapters, Bio-Rad SEQuoia "
+            "Complete (UMI), and other UMI-bearing variants of the "
+            "Illumina R1 adapter family. Confirm the UMI length against "
+            "your kit's insert diagram before using."
         ),
     ),
     "qiaseq_mirna": KitPreset(
@@ -122,17 +168,30 @@ KIT_PRESETS: dict[str, KitPreset] = {
             "12 nt 3' UMI inside the insert)."
         ),
     ),
-    "custom": KitPreset(
-        name="custom",
-        adapter=None,
-        umi_length=0,
-        umi_position="5p",
-        description=(
-            "No defaults applied. --adapter must be supplied explicitly. "
-            "Use this preset whenever your kit is not one of the named ones."
-        ),
-    ),
 }
+
+
+# Backward-compatibility aliases. v0.4.0 launched with vendor-specific
+# preset names (``truseq_smallrna``, ``nebnext_smallrna``, …); v0.4.1
+# consolidated them into adapter-family names. Old YAML configs and CLI
+# invocations keep working — :func:`resolve_kit_alias` translates them
+# transparently with an INFO log line so the user knows the mapping.
+KIT_PRESET_ALIASES: dict[str, str] = {
+    "truseq_smallrna": "illumina_smallrna",
+    "nebnext_smallrna": "illumina_truseq",
+    "nebnext_ultra_umi": "illumina_truseq_umi",
+    "truseq_stranded_total": "illumina_truseq",
+    "smarter_pico_v3": "illumina_truseq",
+    "sequoia_express": "illumina_truseq",
+}
+
+
+def resolve_kit_alias(name: str) -> str:
+    """Translate a legacy vendor-specific preset name to the canonical
+    adapter-family preset name. Pass-through for canonical names and
+    sentinels (auto, pretrimmed, custom).
+    """
+    return KIT_PRESET_ALIASES.get(name, name)
 
 
 @dataclass(frozen=True)
@@ -142,10 +201,15 @@ class ResolvedKit:
     Produced by :func:`mitoribopy.align.trim.resolve_kit_settings` and
     written verbatim into the Phase 6 run manifest so a reader can
     reconstruct the exact trimming that happened.
+
+    ``adapter`` is ``None`` only for the ``pretrimmed`` kit; in every
+    other case it carries the resolved 3' adapter sequence. cutadapt
+    skips the ``-a`` flag entirely when adapter is ``None``, falling
+    back to length + quality filtering only.
     """
 
     kit: str
-    adapter: str
+    adapter: str | None
     umi_length: int
     umi_position: UmiPosition
 

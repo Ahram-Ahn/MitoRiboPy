@@ -35,7 +35,7 @@ from ..align import (
     tool_check,
     trim as trim_step,
 )
-from ..align._types import KIT_PRESETS, ResolvedKit, SampleCounts
+from ..align._types import KIT_PRESET_ALIASES, KIT_PRESETS, ResolvedKit, SampleCounts
 from ..align.sample_resolve import (
     SampleResolution,
     SampleResolutionError,
@@ -122,16 +122,26 @@ def build_parser() -> argparse.ArgumentParser:
     library = parser.add_argument_group("Library prep")
     library.add_argument(
         "--kit-preset",
-        choices=sorted(KIT_PRESETS),
+        choices=sorted(KIT_PRESETS) + sorted(KIT_PRESET_ALIASES),
         default="auto",
+        metavar="PRESET",
         help=(
-            "Library-prep kit. 'auto' (default) runs per-sample adapter "
-            "detection and resolves the kit independently for each input "
-            "FASTQ; mixed-kit and mixed-UMI runs are supported. Pass an "
-            "explicit preset (truseq_smallrna, nebnext_smallrna, "
-            "nebnext_ultra_umi, qiaseq_mirna) to use it as a per-sample "
-            "fallback when detection fails. 'custom' still requires "
-            "--adapter to be supplied explicitly."
+            "Library-prep adapter family. 'auto' (default) runs per-sample "
+            "adapter detection and resolves the kit independently for each "
+            "input FASTQ; mixed-kit and mixed-UMI runs are supported. "
+            "Canonical presets organized by adapter family:\n"
+            "  illumina_smallrna     Illumina TruSeq Small RNA adapter, no UMI\n"
+            "  illumina_truseq       Illumina TruSeq Read 1 adapter, no UMI "
+            "(NEBNext Small RNA, TruSeq Stranded Total, SMARTer Pico v3, "
+            "SEQuoia Express, …)\n"
+            "  illumina_truseq_umi   Same adapter + 8 nt 5' UMI (NEBNext Ultra "
+            "II UMI, SEQuoia Complete UMI, …)\n"
+            "  qiaseq_mirna          QIAseq miRNA adapter + 12 nt 3' UMI\n"
+            "  pretrimmed            FASTQs already adapter-trimmed; cutadapt "
+            "skips the -a flag\n"
+            "  custom                requires --adapter <SEQ>\n"
+            "Legacy vendor names (truseq_smallrna, nebnext_smallrna, "
+            "nebnext_ultra_umi, …) remain accepted as aliases."
         ),
     )
     library.add_argument(
@@ -165,11 +175,71 @@ def build_parser() -> argparse.ArgumentParser:
             "Per-sample adapter detection policy. 'auto' (default) scans "
             "every input FASTQ and picks the matching preset per sample; "
             "samples whose scan fails fall back to the user's --kit-preset / "
-            "--adapter when supplied. 'strict' scans and HARD-FAILS on any "
-            "sample whose scan disagrees with an explicit --kit-preset or "
-            "where no preset can be identified. 'off' skips the scan and "
-            "trusts --kit-preset / --adapter for every sample (requires an "
-            "explicit preset)."
+            "--adapter when supplied, or to the 'pretrimmed' kit when no "
+            "fallback is set and the data looks already-trimmed. 'strict' "
+            "scans and HARD-FAILS on any sample whose scan disagrees with "
+            "an explicit --kit-preset or where no preset can be identified. "
+            "'off' skips the scan and trusts --kit-preset / --adapter for "
+            "every sample (requires an explicit preset)."
+        ),
+    )
+    library.add_argument(
+        "--adapter-detect-reads",
+        type=int,
+        default=5000,
+        metavar="N",
+        help=(
+            "Number of FASTQ reads to scan per sample during adapter "
+            "auto-detection. Increase for noisy libraries where the first "
+            "5000 reads have unusual adapter distributions; decrease for a "
+            "faster pre-flight pass on cleaner data."
+        ),
+    )
+    library.add_argument(
+        "--adapter-detect-min-rate",
+        type=float,
+        default=0.30,
+        metavar="FRAC",
+        help=(
+            "Minimum fraction of scanned reads that must contain an adapter "
+            "prefix for the kit to be considered detected. Lower for "
+            "sparsely-adapted libraries (e.g. 0.10); raise for stricter "
+            "calls."
+        ),
+    )
+    library.add_argument(
+        "--adapter-detect-min-len",
+        type=int,
+        default=12,
+        metavar="N",
+        help=(
+            "Adapter prefix length used as the search needle (nt). Default "
+            "12. Lower (e.g. 8) tolerates noisy adapter regions; raise "
+            "(e.g. 16) for stricter matches."
+        ),
+    )
+    library.add_argument(
+        "--adapter-detect-pretrimmed-threshold",
+        type=float,
+        default=0.05,
+        metavar="FRAC",
+        help=(
+            "When EVERY kit's match rate is at or below this value, the "
+            "FASTQ is classified as already adapter-trimmed and resolved "
+            "to the 'pretrimmed' kit (cutadapt skips the -a flag). Default "
+            "0.05 (5%%)."
+        ),
+    )
+    library.add_argument(
+        "--no-pretrimmed-inference",
+        dest="allow_pretrimmed_inference",
+        action="store_false",
+        default=True,
+        help=(
+            "Disable the auto-fallback to 'pretrimmed' when adapter "
+            "detection finds no known kit. With this flag, detection "
+            "failure with no --kit-preset fallback raises an error "
+            "instead (the v0.4.0 behaviour before this change)."
         ),
     )
     library.add_argument(
@@ -543,11 +613,36 @@ def _resolve_per_sample(
     """Run the per-sample resolver for the supplied inputs.
 
     Lifts ``--adapter-detection`` from ``args`` and translates it into
-    the resolver's policy. ``detector`` is an injection point used by
-    tests; production runs use the default scanner.
+    the resolver's policy. The detection tuning flags
+    (``--adapter-detect-reads``, ``--adapter-detect-min-rate``,
+    ``--adapter-detect-min-len``, ``--adapter-detect-pretrimmed-threshold``)
+    are folded into a closure-bound detector so tests can still inject
+    their own detector callable while production runs honour every CLI
+    knob.
     """
     samples = [(_sample_name(fq), fq) for fq in inputs]
-    kwargs = dict(
+    if detector is None:
+        # Capture the user's detection knobs in a thin closure so the
+        # underlying detect_adapter sees them per call without forcing
+        # every resolver-call site to forward four extra kwargs.
+        detect_n_reads = getattr(args, "adapter_detect_reads", 5000)
+        detect_min_rate = getattr(args, "adapter_detect_min_rate", 0.30)
+        detect_min_len = getattr(args, "adapter_detect_min_len", 12)
+        detect_pretrimmed_threshold = getattr(
+            args, "adapter_detect_pretrimmed_threshold", 0.05
+        )
+
+        def detector(fastq_path):  # noqa: E306 — local helper
+            return adapter_detect.detect_adapter(
+                fastq_path,
+                n_reads=detect_n_reads,
+                min_match_rate=detect_min_rate,
+                min_match_len=detect_min_len,
+                pretrimmed_threshold=detect_pretrimmed_threshold,
+            )
+
+    return resolve_sample_resolutions(
+        samples,
         kit_preset=args.kit_preset,
         adapter=args.adapter,
         umi_length=args.umi_length,
@@ -555,10 +650,11 @@ def _resolve_per_sample(
         dedup_strategy=args.dedup_strategy,
         confirm_mark_duplicates=args.confirm_mark_duplicates,
         adapter_detection_mode=args.adapter_detection,
+        allow_pretrimmed_inference=getattr(
+            args, "allow_pretrimmed_inference", True
+        ),
+        detector=detector,
     )
-    if detector is not None:
-        kwargs["detector"] = detector
-    return resolve_sample_resolutions(samples, **kwargs)
 
 
 def run(argv: Iterable[str]) -> int:
