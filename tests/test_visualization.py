@@ -107,3 +107,39 @@ def test_run_coverage_profile_plots_writes_codon_binned_outputs(tmp_path) -> Non
         / "read_coverage_rpm_codon"
         / "ND1_read_coverage_(rpm,_codon-binned_cds).svg"
     ).is_file()
+    # Frame-colored P-site plots (new in Task 4).
+    assert (
+        tmp_path
+        / "coverage"
+        / "p_site_coverage_rpm_frame"
+        / "ND1_p-site_density_(rpm,_cds_frame_coloring).svg"
+    ).is_file()
+    assert (
+        tmp_path
+        / "coverage"
+        / "p_site_coverage_raw_frame"
+        / "ND1_p-site_density_(raw_counts,_cds_frame_coloring).svg"
+    ).is_file()
+
+
+def test_cds_nt_slice_map_excludes_utr_and_aligns_on_start_codon() -> None:
+    """Sanity: the frame-colored slice must start at CDS start, exclude UTRs,
+    and be trimmed to a multiple of 3."""
+    import numpy as np
+    from mitoribopy.plotting.coverage_profile_plots import _build_cds_nt_slice_map
+
+    # Transcript length 30: 5' UTR 3 nt, CDS 24 nt (8 codons), 3' UTR 3 nt.
+    arr = np.arange(30, dtype=float)
+    cov_map = {"sample1": {"TXA": arr}}
+    cds_lookup = {"TXA": (3, 27)}  # CDS covers indices 3..26 (end-exclusive 27)
+
+    out = _build_cds_nt_slice_map(cov_map, cds_lookup)
+    slice_arr, cds_start = out["sample1"]["TXA"]
+
+    assert cds_start == 3
+    # Exactly 24 nt, all from the CDS, no UTR leakage.
+    assert len(slice_arr) == 24
+    assert slice_arr[0] == 3.0
+    assert slice_arr[-1] == 26.0
+    # Length is a multiple of 3 (usable codons).
+    assert len(slice_arr) % 3 == 0

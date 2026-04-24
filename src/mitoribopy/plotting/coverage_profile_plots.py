@@ -111,6 +111,46 @@ def _build_codon_binned_map(
             codon_map[sample][transcript] = cds_slice.reshape(-1, 3).sum(axis=1)
     return codon_map
 
+
+# Okabe-Ito colorblind-safe palette (frame 0 / 1 / 2).
+# https://jfly.uni-koeln.de/color/
+_FRAME_COLORS = ("#E69F00", "#56B4E9", "#009E73")
+_FRAME_LABELS = ("Frame 0 (codon-locked)", "Frame 1", "Frame 2")
+
+
+def _build_cds_nt_slice_map(
+    cov_map: Dict[str, Dict[str, np.ndarray]],
+    cds_lookup: dict[str, tuple[int, int]],
+) -> Dict[str, Dict[str, tuple[np.ndarray, int]]]:
+    """Extract the CDS nucleotide-resolution slice for each sample/transcript.
+
+    Returns a map ``{sample: {transcript: (cds_slice_array, cds_start_nt)}}``.
+    ``cds_start_nt`` is the 0-based nt coordinate that the slice starts at,
+    so the caller can recover the original transcript coordinate if needed.
+    UTR positions are excluded. This is the input to the frame-colored plot.
+    """
+    out: Dict[str, Dict[str, tuple[np.ndarray, int]]] = {}
+    for sample, transcript_map in cov_map.items():
+        out[sample] = {}
+        for transcript, arr in transcript_map.items():
+            cds_bounds = cds_lookup.get(transcript)
+            if cds_bounds is None:
+                continue
+            cds_start, cds_end = cds_bounds
+            cds_end = min(cds_end, len(arr))
+            cds_start = max(cds_start, 0)
+            cds_len = cds_end - cds_start
+            if cds_len < 3:
+                continue
+            usable_len = cds_len - (cds_len % 3)
+            if usable_len < 3:
+                continue
+            out[sample][transcript] = (
+                np.asarray(arr[cds_start : cds_start + usable_len]),
+                cds_start,
+            )
+    return out
+
 # -----------------------------------------------------------------------------
 # Public entry point
 # -----------------------------------------------------------------------------
@@ -308,6 +348,10 @@ def run_coverage_profile_plots(
     psite_dir_rpm_codon = output_dir / "p_site_coverage_rpm_codon"
     read_dir_raw_codon = output_dir / "read_coverage_raw_codon"
     psite_dir_raw_codon = output_dir / "p_site_coverage_raw_codon"
+    # Frame-colored nucleotide-resolution plots scoped to the CDS only.
+    # Frame-0 dominance is the canonical mt-Ribo-seq QC signature.
+    psite_dir_rpm_frame = output_dir / "p_site_coverage_rpm_frame"
+    psite_dir_raw_frame = output_dir / "p_site_coverage_raw_frame"
     for d in (
         read_dir_rpm,
         psite_dir_rpm,
@@ -317,6 +361,8 @@ def run_coverage_profile_plots(
         psite_dir_rpm_codon,
         read_dir_raw_codon,
         psite_dir_raw_codon,
+        psite_dir_rpm_frame,
+        psite_dir_raw_frame,
     ):
         d.mkdir(exist_ok=True)
 
@@ -400,6 +446,93 @@ def run_coverage_profile_plots(
     raw_read_global_max_codon = build_global_max(raw_read_cov_map_codon)
     raw_psite_global_max_codon = build_global_max(raw_psite_cov_map_codon)
 
+    # CDS nt slices for the frame-colored P-site plots.
+    psite_cds_slice_rpm = _build_cds_nt_slice_map(psite_cov_map, cds_lookup)
+    psite_cds_slice_raw = _build_cds_nt_slice_map(raw_psite_cov_map, cds_lookup)
+
+    def _frame_global_max(slice_map):
+        gmax: Dict[str, float] = {}
+        for sample in slice_map:
+            for tr, (arr, _cds_start) in slice_map[sample].items():
+                gmax[tr] = max(gmax.get(tr, 0), float(arr.max() if arr.size else 0))
+        return gmax
+
+    psite_frame_max_rpm = _frame_global_max(psite_cds_slice_rpm)
+    psite_frame_max_raw = _frame_global_max(psite_cds_slice_raw)
+
+    def _plot_frame_colored(
+        tr: str,
+        slice_map: Dict[str, Dict[str, tuple[np.ndarray, int]]],
+        ymax_map: dict[str, float],
+        out_dir: Path,
+        title_suffix: str,
+    ) -> Path | None:
+        """One panel per sample; bars at nt resolution inside the CDS,
+        colored by reading frame (0/1/2 relative to the CDS start).
+
+        For ribosome-profiling, P-site density should strongly peak at
+        frame 0 (codon-locked reads). The color partition makes that
+        visible in a single look.
+        """
+        any_present = any(tr in slice_map[sample] for sample in slice_map)
+        if not any_present:
+            return None
+
+        ymax = max(ymax_map.get(tr, 1), 1)
+        fig, axes = plt.subplots(
+            nrows=len(sample_list),
+            ncols=1,
+            figsize=(14, 3 * len(sample_list)),
+            sharex=True,
+        )
+        if len(sample_list) == 1:
+            axes = [axes]
+
+        for row, (sample, _) in enumerate(sample_list):
+            ax = axes[row]
+            entry = slice_map.get(sample, {}).get(tr)
+            if entry is None:
+                ax.text(
+                    0.5, 0.5, f"No data for {sample}", ha="center", va="center",
+                    transform=ax.transAxes,
+                )
+                ax.set_xticks([]); ax.set_yticks([])
+                continue
+            arr, _cds_start = entry
+            n = len(arr)
+            x = np.arange(1, n + 1)  # codon 1 = start codon, nt 1 = first nt of start codon
+            frames = np.arange(n) % 3  # 0, 1, 2, 0, 1, 2, ...
+            for frame_idx in (0, 1, 2):
+                mask = frames == frame_idx
+                ax.bar(
+                    x[mask],
+                    arr[mask],
+                    width=0.95,
+                    color=_FRAME_COLORS[frame_idx],
+                    edgecolor="none",
+                    label=_FRAME_LABELS[frame_idx] if row == 0 else None,
+                )
+            ax.set_ylim(0, ymax * 1.1)
+            ax.set_ylabel(sample, fontsize=12, fontweight="bold")
+            ax.grid(axis="y", alpha=0.2, linewidth=0.8)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            if row == len(sample_list) - 1:
+                ax.set_xlabel("CDS Nucleotide Position", fontsize=14, fontweight="bold")
+            if row == 0:
+                ax.legend(loc="upper right", framealpha=0.9, fontsize=10)
+
+        fig.suptitle(
+            f"{sequence_display_map.get(tr, tr)} - {title_suffix}",
+            fontsize=16,
+            fontweight="bold",
+        )
+        fig.tight_layout()
+        out_path = out_dir / f"{tr}_{title_suffix.replace(' ', '_').lower()}.{plot_format}"
+        fig.savefig(out_path)
+        plt.close(fig)
+        return out_path
+
     for tr in transcripts:
         # RPM
         out_r_rpm = _plot_cov(tr, read_cov_map, read_global_max, read_dir_rpm, "Read Coverage (RPM)", "steelblue")
@@ -451,6 +584,21 @@ def run_coverage_profile_plots(
             start_at_one=True,
             rotation=0,
         )
+        # Frame-colored P-site nt plots (CDS only; Okabe-Ito palette).
+        out_p_rpm_frame = _plot_frame_colored(
+            tr,
+            psite_cds_slice_rpm,
+            psite_frame_max_rpm,
+            psite_dir_rpm_frame,
+            "P-site Density (RPM, CDS Frame Coloring)",
+        )
+        out_p_raw_frame = _plot_frame_colored(
+            tr,
+            psite_cds_slice_raw,
+            psite_frame_max_raw,
+            psite_dir_raw_frame,
+            "P-site Density (Raw Counts, CDS Frame Coloring)",
+        )
         log_info(
             "COVERAGE",
             f"{tr} -> rpm:({out_r_rpm.name},{out_p_rpm.name}) | raw:({out_r_raw.name},{out_p_raw.name})"
@@ -459,6 +607,10 @@ def run_coverage_profile_plots(
                 f"{out_p_rpm_codon.name if out_p_rpm_codon else 'n/a'},"
                 f"{out_r_raw_codon.name if out_r_raw_codon else 'n/a'},"
                 f"{out_p_raw_codon.name if out_p_raw_codon else 'n/a'})"
+            )
+            + (
+                f" | frame:({out_p_rpm_frame.name if out_p_rpm_frame else 'n/a'},"
+                f"{out_p_raw_frame.name if out_p_raw_frame else 'n/a'})"
             ),
         )
 
