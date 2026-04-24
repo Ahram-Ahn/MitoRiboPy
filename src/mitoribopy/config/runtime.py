@@ -62,6 +62,31 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "rna_out_dir": "rna_seq_results",
     "do_rna_ribo_ratio": False,
     "bam_mapq": 10,
+    "footprint_class": "monosome",
+}
+
+
+# Biological RPF windows per footprint class.
+# monosome: a single ribosome footprint, ~28-34 nt in metazoan mt-Ribo-seq
+#           (mt-monosomes are short compared to cytoplasmic ~28-32 nt; yeast
+#           mt is longer at 37-41 nt because of the extended mS37 tail).
+# disome:   two stacked ribosomes with a shared protected fragment, ~60-90 nt
+#           (collided-ribosome studies, e.g. eIF5A-depletion / queueing).
+FOOTPRINT_CLASS_DEFAULTS: dict[str, dict[str, tuple[int, int]]] = {
+    "monosome": {
+        "unfiltered_read_length_range": (15, 50),
+        "rpf_h": (28, 34),   # vertebrate mt-mono footprint
+        "rpf_y": (37, 41),   # yeast mt-mono footprint
+    },
+    "disome": {
+        "unfiltered_read_length_range": (40, 110),
+        "rpf_h": (60, 90),   # vertebrate mt-disome footprint (loose)
+        "rpf_y": (65, 95),   # yeast mt-disome footprint
+    },
+    "custom": {
+        # "custom" implies the user will supply --rpf and
+        # --unfiltered_read_length_range explicitly; no biological default.
+    },
 }
 
 
@@ -125,14 +150,42 @@ def load_user_config(config_path: str | None) -> dict[str, Any]:
     return {key: value for key, value in raw.items() if key in allowed}
 
 
-def resolve_rpf_range(strain: str, rpf_arg: list[int] | tuple[int, int] | None) -> list[int]:
-    """Resolve RPF range from CLI/config or fallback defaults by strain."""
+def resolve_rpf_range(
+    strain: str,
+    rpf_arg: list[int] | tuple[int, int] | None,
+    *,
+    footprint_class: str = "monosome",
+) -> list[int]:
+    """Resolve RPF range from CLI/config or fallback defaults.
+
+    Explicit ``rpf_arg`` always wins. Otherwise the default comes from
+    ``FOOTPRINT_CLASS_DEFAULTS[footprint_class]`` keyed by strain:
+
+    * ``strain='h'`` or ``'vm'`` -> ``rpf_h``
+    * ``strain='y'`` or ``'ym'`` -> ``rpf_y``
+
+    For ``footprint_class='custom'`` or any strain without a built-in
+    (including ``'custom'`` strain), ``rpf_arg`` is required; we raise
+    a clear ``ValueError`` otherwise so the caller can surface it as a
+    user-facing CLI error.
+    """
     if rpf_arg:
         start, end = int(rpf_arg[0]), int(rpf_arg[1])
         if end < start:
             raise ValueError(f"Invalid RPF range: start={start}, end={end}")
         return list(range(start, end + 1))
 
-    if strain == "y":
-        return list(range(37, 42))
-    return list(range(28, 35))
+    class_defaults = FOOTPRINT_CLASS_DEFAULTS.get(footprint_class, {})
+    if strain in {"h", "vm"}:
+        window = class_defaults.get("rpf_h")
+    elif strain in {"y", "ym"}:
+        window = class_defaults.get("rpf_y")
+    else:
+        window = None
+
+    if window is None:
+        raise ValueError(
+            f"Cannot default RPF range for strain={strain!r}, "
+            f"footprint_class={footprint_class!r}. Pass -rpf MIN MAX explicitly."
+        )
+    return list(range(window[0], window[1] + 1))

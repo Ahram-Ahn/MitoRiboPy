@@ -11,20 +11,35 @@ import pandas as pd
 
 
 DEFAULT_CODON_TABLE_BY_STRAIN = {
+    # Built-in presets ship annotation + codon table out of the box.
     "y": "yeast_mitochondrial",
     "h": "vertebrate_mitochondrial",
+    # "Any ___ mitochondria" presets share the codon table with their
+    # anchor strain (vm = any vertebrate mito, ym = any yeast-mito-code
+    # fungus). They require a user-supplied --annotation_file.
+    "vm": "vertebrate_mitochondrial",
+    "ym": "yeast_mitochondrial",
 }
 
 DEFAULT_START_CODONS_BY_STRAIN = {
     "y": ["ATG"],
     "h": ["ATG", "ATA"],
+    "vm": ["ATG", "ATA", "ATT"],  # vertebrate mito: MT-ND2 uses ATT; be permissive
+    "ym": ["ATG"],
     "custom": ["ATG"],
 }
 
 BUILTIN_ANNOTATION_FILES = {
     "y": "yeast_annotation.csv",
     "h": "human_annotation.csv",
+    # vm / ym deliberately absent: user must supply --annotation_file.
 }
+
+
+# Presets that ship a ready-to-use annotation + RPF range with no user
+# input required. Anything not in this set must have --annotation_file
+# and an explicit -rpf MIN MAX.
+BUILTIN_ANNOTATION_PRESETS = frozenset(BUILTIN_ANNOTATION_FILES)
 
 BICISTRONIC_CONFIGS = (
     {

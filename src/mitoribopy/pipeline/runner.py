@@ -69,9 +69,18 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     core_group.add_argument(
         "-s",
         "--strain",
-        choices=["y", "h", "custom"],
+        choices=["y", "h", "vm", "ym", "custom"],
         default=defaults["strain"],
-        help="Reference preset: y = yeast, h = human, custom = user-supplied annotation/codon inputs.",
+        help=(
+            "Reference preset:\n"
+            "  h      human mt (ships annotation + vertebrate_mitochondrial codons)\n"
+            "  y      yeast mt (ships annotation + yeast_mitochondrial codons)\n"
+            "  vm     any vertebrate mt (uses vertebrate_mitochondrial codons;\n"
+            "         requires --annotation_file and an explicit -rpf range)\n"
+            "  ym     any fungus with yeast-mito code (uses yeast_mitochondrial\n"
+            "         codons; requires --annotation_file and explicit -rpf)\n"
+            "  custom fully user-specified (annotation + codon table + -rpf)"
+        ),
     )
     directory_action = core_group.add_argument(
         "-d",
@@ -104,14 +113,34 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=defaults["rpf"],
         help="Inclusive read-length filter range, for example: -rpf 29 34",
     )
-    rpf_action.default_display = "y: 37-41, h: 28-34"
+    rpf_action.default_display = (
+        "monosome h/vm: 28-34, y/ym: 37-41; "
+        "disome h/vm: 60-90, y/ym: 65-95"
+    )
+    footprint_action = core_group.add_argument(
+        "--footprint_class",
+        choices=["monosome", "disome", "custom"],
+        default=defaults["footprint_class"],
+        help=(
+            "Expected RPF class, selects sensible --rpf and\n"
+            "--unfiltered_read_length_range defaults when the user does\n"
+            "not pass them explicitly:\n"
+            "  monosome  single-ribosome footprint (default)\n"
+            "  disome    collided-ribosome footprint (~60-90 nt, e.g.\n"
+            "            eIF5A-depletion / queueing studies)\n"
+            "  custom    no biological default; pass -rpf / \n"
+            "            --unfiltered_read_length_range yourself"
+        ),
+    )
+    footprint_action.default_display = "monosome"
     core_group.add_argument(
         "--annotation_file",
         default=defaults["annotation_file"],
         metavar="ANNOTATION.csv",
         help=(
             "Optional annotation CSV override.\n"
-            "Required for --strain custom; built-in yeast/human tables are used otherwise."
+            "Required for --strain custom / vm / ym; built-in yeast (y)\n"
+            "and human (h) tables are used otherwise."
         ),
     )
     core_group.add_argument(
@@ -532,13 +561,53 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
         parser.error("--cor_mask_percentile must be in (0, 1)")
     if args.use_rna_seq and (not args.rna_seq_dir or not args.rna_order):
         parser.error("--use_rna_seq requires both --rna_seq_dir and --rna_order")
-    if args.strain == "custom" and not args.annotation_file:
-        parser.error("--strain custom requires --annotation_file")
-    if args.strain == "custom" and args.rpf is None:
-        parser.error("--strain custom requires an explicit -rpf MIN_LEN MAX_LEN range")
-    if args.strain == "custom" and not (args.codon_tables_file or args.codon_table_name):
+    # Strain-preset requirements. Order of checks matches how a user
+    # would experience the failures.
+    if args.strain == "custom":
+        if not args.annotation_file:
+            parser.error("--strain custom requires --annotation_file")
+        if args.rpf is None:
+            parser.error(
+                "--strain custom requires an explicit -rpf MIN_LEN MAX_LEN range"
+            )
+        if not (args.codon_tables_file or args.codon_table_name):
+            parser.error(
+                "--strain custom requires --codon_tables_file or --codon_table_name"
+            )
+    if args.strain in {"vm", "ym"}:
+        if not args.annotation_file:
+            parser.error(
+                f"--strain {args.strain} requires --annotation_file "
+                "(only h and y ship a built-in annotation)"
+            )
+        if args.rpf is None:
+            parser.error(
+                f"--strain {args.strain} requires an explicit -rpf MIN_LEN MAX_LEN "
+                "range (only h and y have a built-in default)"
+            )
+
+    # --footprint_class=custom requires an explicit -rpf even for h/y,
+    # because the whole point of 'custom' is "I know my footprint class,
+    # don't pick one for me".
+    if args.footprint_class == "custom" and args.rpf is None and args.strain not in {"h", "y"}:
         parser.error(
-            "--strain custom requires --codon_tables_file or --codon_table_name"
+            "--footprint_class custom requires an explicit -rpf MIN_LEN MAX_LEN range"
+        )
+
+    # Inject footprint-class unfiltered-length defaults when the user did
+    # not override --unfiltered_read_length_range. We compare to the
+    # monosome default because that is what DEFAULT_CONFIG ships; if the
+    # user passed their own range, it is already different and we leave
+    # it alone.
+    from ..config.runtime import FOOTPRINT_CLASS_DEFAULTS  # local import to avoid cycle
+    class_defaults = FOOTPRINT_CLASS_DEFAULTS.get(args.footprint_class, {})
+    user_kept_default = (
+        list(args.unfiltered_read_length_range)
+        == list(DEFAULT_CONFIG["unfiltered_read_length_range"])
+    )
+    if user_kept_default and "unfiltered_read_length_range" in class_defaults:
+        args.unfiltered_read_length_range = list(
+            class_defaults["unfiltered_read_length_range"]
         )
 
     return args

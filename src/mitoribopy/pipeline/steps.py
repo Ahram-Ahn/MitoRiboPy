@@ -15,6 +15,7 @@ from ..analysis import (
 )
 from ..config import resolve_rpf_range
 from ..data import load_annotation_table, load_codon_table, resolve_start_codons
+from ..data.reference_data import BUILTIN_ANNOTATION_PRESETS
 from ..io import (
     compute_total_counts,
     compute_unfiltered_read_length_summary,
@@ -58,8 +59,10 @@ def build_pipeline_context(args: argparse.Namespace) -> PipelineContext:
     plot_output_dir = base_output_dir / args.plot_dir
     plot_output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Only h and y ship a built-in annotation. vm / ym / custom require
+    # the user to pass --annotation_file (the parser enforces this).
     annotation_df = load_annotation_table(
-        preset=(args.strain if args.strain in {"y", "h"} else None),
+        preset=(args.strain if args.strain in BUILTIN_ANNOTATION_PRESETS else None),
         annotation_file=args.annotation_file,
         atp8_atp6_baseline=args.atp8_atp6_baseline,
         nd4l_nd4_baseline=args.nd4l_nd4_baseline,
@@ -73,6 +76,7 @@ def build_pipeline_context(args: argparse.Namespace) -> PipelineContext:
     unfiltered_read_length_range = tuple(
         int(value) for value in args.unfiltered_read_length_range
     )
+    footprint_class = getattr(args, "footprint_class", "monosome")
 
     return PipelineContext(
         args=args,
@@ -81,7 +85,9 @@ def build_pipeline_context(args: argparse.Namespace) -> PipelineContext:
         annotation_df=annotation_df,
         resolved_codon_table=resolved_codon_table,
         resolved_start_codons=resolved_start_codons,
-        rpf_range=resolve_rpf_range(args.strain, args.rpf),
+        rpf_range=resolve_rpf_range(
+            args.strain, args.rpf, footprint_class=footprint_class
+        ),
         unfiltered_read_length_range=unfiltered_read_length_range,
     )
 
