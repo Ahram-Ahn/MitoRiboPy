@@ -6,20 +6,91 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Added
-- `mitoribopy align --adapter-detection {auto|off|strict}` (default `auto`):
-  scans the head of the first input FASTQ for known adapter signatures
-  from `KIT_PRESETS` and either auto-selects the matching preset (when
-  `--kit-preset` is left at `custom`) or hard-fails on mismatch
-  (`strict` mode). Catches the silent failure mode where the supplied
-  `--kit-preset` does not match the actual library chemistry and ~99%
-  of reads are filtered as too-long without any error. New module
-  `mitoribopy.align.adapter_detect` exposes `detect_adapter` and
-  `DetectionResult` for programmatic use. The chosen mode is recorded
-  under `adapter_detection_mode` in `run_settings.json`.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-04-23
 ### Added
+- **`mitoribopy align --adapter-detection {auto|off|strict}`** (default
+  `auto`): scans the head of the first input FASTQ for known adapter
+  signatures from `KIT_PRESETS` and either auto-selects the matching
+  preset (when `--kit-preset` is left at `custom`) or hard-fails on
+  mismatch (`strict` mode). Catches the silent failure where a wrong
+  `--kit-preset` drops ~99% of reads as "too long" without any error.
+  New module `mitoribopy.align.adapter_detect` exposes `detect_adapter`
+  and `DetectionResult` for programmatic use. The chosen mode is
+  recorded under `adapter_detection_mode` in `run_settings.json`.
+- **`mitoribopy all --print-config-template`**: prints a fully-commented
+  YAML covering every stage with sensible defaults and inline preset
+  choices. New users can pipe it into a file to start a new project in
+  one step.
+- **`--footprint_class {monosome,disome,custom}`** (default `monosome`):
+  biological footprint preset that injects sensible defaults for `-rpf`
+  and `--unfiltered_read_length_range`. Monosome defaults are h/vm
+  28-34, y/ym 37-41, unfiltered 15-50; disome widens to h/vm 60-90,
+  y/ym 65-95, unfiltered 40-110. Explicit user values always win.
+- **New strain presets `vm` (any vertebrate mito) and `ym` (any
+  fungus with yeast-mito codon code)**: both inherit the codon table
+  for their anchor strain but require user-supplied `--annotation_file`
+  and an explicit `-rpf` range.
+- **Frame-colored P-site plots at CDS nucleotide resolution**: color
+  each position by `(nt_pos - cds_start) % 3` using the Okabe-Ito
+  colorblind-safe palette. Frame-0 dominance is the canonical
+  mt-Ribo-seq QC signature; the three-color partition makes it visible
+  at a glance. Written under `p_site_coverage_{rpm,raw}_frame/`.
+- **RPF-window band on the per-sample read-length distribution plot**:
+  `plot_read_length_distribution` takes an optional `rpf_range` kwarg
+  and shades the RPF window so the reader sees which lengths entered
+  downstream analysis.
+- **Defensive guards** for predictable failure modes:
+  malformed BED rows (`end <= start`) are dropped with a per-file
+  WARNING in both filtered and unfiltered paths; FASTA records with no
+  matching annotation row now emit a loud WARNING listing up to 10
+  missing records; `--threads <= 0` raises `SystemExit` with a clear
+  message.
+- **Logging-style convention documented** at the top of
+  `mitoribopy.console`: every console line routes through
+  `log_info` / `log_warning` / `log_error` / `log_progress` with a
+  `[COMPONENT]` prefix; bare `print(...)` is reserved for pre-logger
+  argparse validation. Audited and cleaned the last two offenders
+  (`tools/subsample.py`, `tools/read_composition.py`).
+- **`PipelineContext` convention**: every piece of derived state lives
+  on the context, not on the parsed `argparse.Namespace`.
+  `run_coverage_profile_plots` now takes `total_mrna_map` as an
+  explicit keyword argument.
+- **Regression test**: read-length CSV summary and the value that feeds
+  the distribution plot must always agree, row-for-row. Locks in the
+  invariant against the originally-reported ~3 nt shift.
+- **New subcommand CLI** under `src/mitoribopy/cli/`:
+  - `mitoribopy align`: FASTQ -> BAM + BED6 + per-sample read counts.
+  - `mitoribopy rpf`: Ribo-seq analysis pipeline from BED/BAM inputs.
+  - `mitoribopy rnaseq`: DE-table + Ribo-seq integration; TE /
+    &Delta;TE with a SHA256 reference-consistency gate.
+  - `mitoribopy all`: align + rpf + (optional) rnaseq orchestrator
+    with a composed `run_manifest.json`.
+  - Top-level `mitoribopy --help` lists all subcommands; shared
+    options: `--config`, `--dry-run`, `--threads N`,
+    `--log-level {DEBUG,INFO,WARNING,ERROR}`.
+- **Config files** in JSON / YAML / TOML (auto-detected by suffix).
+  YAML uses PyYAML; TOML uses stdlib `tomllib` on Py 3.11+ or the
+  optional `tomli` fallback via the `toml-py310` extra.
+- New dependencies: `PyYAML>=6.0`, `pysam>=0.22`.
+
+### Changed
+- **Orchestrator `_dict_to_argv` is now flag-style-aware** so
+  `mitoribopy all` correctly runs rpf. align / rnaseq sections keep
+  hyphen-converted flags (`--kit-preset`); rpf keeps underscored
+  flags (`--offset_type`, `--min_5_offset`, ...). Fixes the previous
+  end-to-end failure where the orchestrator emitted `--offset-type 5`
+  and rpf rejected it.
+
+### Deprecated
+- `mitoribopy rpf --use_rna_seq` and its four companion flags
+  (`--rna_seq_dir`, `--rna_order`, `--rna_out_dir`,
+  `--do_rna_ribo_ratio`) remain available but print a runtime
+  DEPRECATION notice; scheduled for removal in v0.4.0. Use the
+  dedicated `mitoribopy rnaseq` subcommand for DE-based TE /
+  &Delta;TE analysis with a SHA256 reference-consistency gate.
+
+### Phase 3 and earlier (all below) landed during the v0.3.0 development cycle
 - New subcommand CLI under `src/mitoribopy/cli/`:
   - `mitoribopy align`: FASTQ -> BAM + BED6 + per-sample read counts. See "Phase 3 (`mitoribopy align`)" below.
   - `mitoribopy rpf`: Ribo-seq analysis pipeline from BED inputs (delegates to the existing `mitoribopy.pipeline.runner`).
