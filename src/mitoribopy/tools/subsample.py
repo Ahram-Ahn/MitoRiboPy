@@ -7,6 +7,8 @@ import argparse
 import random
 from pathlib import Path
 
+from ..console import log_info
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Randomly subsample lines from a BED file.")
@@ -60,9 +62,12 @@ def main() -> None:
     with out_path.open("w", encoding="utf-8") as out:
         out.writelines(sampled)
 
-    print(f"[subsample_bed] Input: {in_path}")
-    print(f"[subsample_bed] Output: {out_path}")
-    print(f"[subsample_bed] Requested n={args.n}, wrote n={len(sampled)}, seed={args.seed}")
+    log_info("SUBSAMPLE", f"Input:  {in_path}")
+    log_info("SUBSAMPLE", f"Output: {out_path}")
+    log_info(
+        "SUBSAMPLE",
+        f"Requested n={args.n}, wrote n={len(sampled)}, seed={args.seed}.",
+    )
 
 
 if __name__ == "__main__":

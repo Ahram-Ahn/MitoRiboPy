@@ -200,12 +200,17 @@ def summarize_and_plot(
         dataframe=summary_df.assign(percent=(summary_df["frac"]*100).round(2)).drop(columns=["frac"])
     )
 
-    print("CONFIG:", asdict(cfg))
-    print(f"Sample: {sample_label}")
-    print(f"mRNA reads: {mrna_reads:,}")
-    print(f"Contaminant reads: {contam_reads:,}")
-    print(f"mRNA % of aligned reads: {enrichment_pct:.2f}%")
-    print(f"mRNA : contaminants ratio = {ratio:.3f}:1" if ratio != float('inf') else "All reads are mRNA (no contaminants).")
+    from ..console import log_info
+
+    log_info("COMPOSITION", f"CONFIG: {asdict(cfg)}")
+    log_info("COMPOSITION", f"Sample: {sample_label}")
+    log_info("COMPOSITION", f"mRNA reads: {mrna_reads:,}")
+    log_info("COMPOSITION", f"Contaminant reads: {contam_reads:,}")
+    log_info("COMPOSITION", f"mRNA % of aligned reads: {enrichment_pct:.2f}%")
+    if ratio != float("inf"):
+        log_info("COMPOSITION", f"mRNA : contaminants ratio = {ratio:.3f}:1")
+    else:
+        log_info("COMPOSITION", "All reads are mRNA (no contaminants).")
 
     # Return for programmatic use
     if return_summary:

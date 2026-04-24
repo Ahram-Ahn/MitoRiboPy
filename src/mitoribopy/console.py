@@ -1,4 +1,46 @@
-"""Console logging and progress helpers for package CLI runs."""
+"""Console logging and progress helpers for package CLI runs.
+
+Logging style convention used across all MitoRiboPy subcommands:
+
+    [<COMPONENT>] <message>
+
+``COMPONENT`` is a short UPPERCASE tag naming the pipeline stage or
+submodule that produced the line: ``ALIGN``, ``RPF``, ``ADAPTER``,
+``PIPELINE``, ``PROFILE``, ``COVERAGE``, ``CODON``, ``CONTAM``,
+``DEDUP``, ``VIS``, ``QC``, ``SUBSAMPLE``, ``COMPOSITION``, etc.
+
+Rules (enforced by convention; no runtime check):
+
+- **Never use bare** ``print(...)``, ``logging.info(...)``, ``sys.stderr.write``
+  in package code. Every console line must flow through
+  :func:`log_info`, :func:`log_warning`, :func:`log_error`, or
+  :func:`log_progress` so output is uniformly decorated and also mirrored
+  to the per-run ``mitoribopy.log`` file once
+  :func:`configure_file_logging` has been called.
+- **One component per log line.** Do not mix two tags like ``[ALIGN/RPF]``.
+  If crossing a boundary, emit two lines.
+- **Stages emit a ``Step K/N`` banner at each major step** via
+  :func:`log_progress` or the pipeline's ``_emit_step_ok`` helper in
+  :mod:`mitoribopy.pipeline.steps`. The banner format is:
+
+      [PIPELINE] Step 3/7 OK: wrote unfiltered read-length QC outputs ...
+
+- **Per-sample stages add a second-line detail** naming the sample:
+
+      [ALIGN] sampleA: trim - adapter=TGGAATTCTCGGGTGCCAAGG, umi=0
+      [ALIGN] sampleA: trim - kept 941,382/1,000,000 reads after cutadapt
+
+- **WARNINGs start with "WARNING:"** (provided automatically by
+  :func:`log_warning`), and ERRORs start with "ERROR:".
+
+- **Progress bars** use :func:`format_progress_bar` via
+  :func:`log_progress` / :func:`iter_with_progress`; do not invent new
+  bar formats.
+
+The one principled exception is CLI-time argparse validation errors,
+which are allowed to go through ``print(..., file=sys.stderr)`` because
+they happen before the file-logger is configured.
+"""
 
 from __future__ import annotations
 
