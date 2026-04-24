@@ -312,13 +312,28 @@ def test_end_to_end_orchestration_produces_expected_outputs(
     assert settings_path.exists()
     settings = json.loads(settings_path.read_text())
     assert settings["subcommand"] == "align"
-    assert settings["kit_preset"] == "truseq_smallrna"
-    assert settings["adapter"] == "TGGAATTCTCGGGTGCCAAGG"
+    assert settings["kit_preset_default"] == "truseq_smallrna"
     assert settings["library_strandedness"] == "forward"
     assert settings["dedup_strategy"] == "skip"  # auto -> skip because umi_length==0
     assert settings["mapq_threshold"] == 10
     assert "tool_versions" in settings
     assert settings["tool_versions"]["cutadapt"] == "1.0"
+    # Per-sample resolution table is the new spine for kit/dedup decisions.
+    by_sample = {row["sample"]: row for row in settings["per_sample"]}
+    for sample in ("sampleA", "sampleB"):
+        row = by_sample[sample]
+        assert row["applied_kit"] == "truseq_smallrna"
+        assert row["adapter"] == "TGGAATTCTCGGGTGCCAAGG"
+        assert row["umi_length"] == 0
+        assert row["dedup_strategy"] == "skip"
+
+    # The per-sample TSV is the human-friendly view of the same data.
+    kit_tsv = out_dir / "kit_resolution.tsv"
+    assert kit_tsv.exists()
+    header = kit_tsv.read_text().splitlines()[0].split("\t")
+    assert header[0] == "sample"
+    assert "applied_kit" in header
+    assert "dedup_strategy" in header
 
 
 def test_end_to_end_uses_explicit_fastq_list(
@@ -376,4 +391,5 @@ def test_end_to_end_picks_up_umi_dedup_when_umi_present(
     assert exit_code == 0
     settings = json.loads((out_dir / "run_settings.json").read_text())
     assert settings["dedup_strategy"] == "umi-tools"
-    assert settings["umi_length"] == 8
+    assert settings["per_sample"][0]["umi_length"] == 8
+    assert settings["per_sample"][0]["applied_kit"] == "nebnext_ultra_umi"

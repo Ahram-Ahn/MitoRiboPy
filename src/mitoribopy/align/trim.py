@@ -58,12 +58,22 @@ def resolve_kit_settings(
             f"Unknown kit preset: {kit!r}. Known presets: {known}."
         ) from exc
 
+    if kit == "auto":
+        raise ValueError(
+            "Cannot resolve kit settings against the 'auto' sentinel. The "
+            "per-sample resolver in mitoribopy.align.sample_resolve must "
+            "translate 'auto' to a real preset before calling this function."
+        )
+
     effective_adapter = adapter if adapter is not None else preset.adapter
     if effective_adapter is None:
+        named = ", ".join(
+            name for name in KIT_PRESETS if name not in {"custom", "auto"}
+        )
         raise ValueError(
             "The 'custom' kit preset requires an explicit --adapter <SEQ>. "
             "Either pass --adapter or switch to a named kit preset "
-            f"({', '.join(name for name in KIT_PRESETS if name != 'custom')})."
+            f"({named})."
         )
 
     effective_umi_length = umi_length if umi_length is not None else preset.umi_length

@@ -31,10 +31,19 @@ from ..align import (
     contam as contam_step,
     dedup as dedup_step,
     read_counts as counts_step,
+    sample_resolve,
     tool_check,
     trim as trim_step,
 )
-from ..align._types import KIT_PRESETS, SampleCounts
+from ..align._types import KIT_PRESETS, ResolvedKit, SampleCounts
+from ..align.sample_resolve import (
+    SampleResolution,
+    SampleResolutionError,
+    required_dedup_tools,
+    resolution_summary_lines,
+    resolve_sample_resolutions,
+    write_kit_resolution_tsv,
+)
 from ..console import configure_file_logging, log_info, log_progress, log_warning
 from . import common
 
@@ -114,11 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
     library.add_argument(
         "--kit-preset",
         choices=sorted(KIT_PRESETS),
-        default="custom",
+        default="auto",
         help=(
-            "Library-prep kit. 'custom' (default) forces --adapter to be "
-            "supplied explicitly to prevent silently wrong adapter "
-            "defaults from shifting the mt-RPF length distribution."
+            "Library-prep kit. 'auto' (default) runs per-sample adapter "
+            "detection and resolves the kit independently for each input "
+            "FASTQ; mixed-kit and mixed-UMI runs are supported. Pass an "
+            "explicit preset (truseq_smallrna, nebnext_smallrna, "
+            "nebnext_ultra_umi, qiaseq_mirna) to use it as a per-sample "
+            "fallback when detection fails. 'custom' still requires "
+            "--adapter to be supplied explicitly."
         ),
     )
     library.add_argument(
@@ -149,12 +162,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         metavar="MODE",
         help=(
-            "Sanity-check the supplied --kit-preset against the data. "
-            "'auto' (default): scan the head of the first FASTQ; pick "
-            "the matching preset when --kit-preset is left at 'custom', "
-            "warn on mismatch otherwise. 'strict': always scan and "
-            "HARD-FAIL on any disagreement (best for batch / CI runs). "
-            "'off': trust --kit-preset / --adapter without inspection."
+            "Per-sample adapter detection policy. 'auto' (default) scans "
+            "every input FASTQ and picks the matching preset per sample; "
+            "samples whose scan fails fall back to the user's --kit-preset / "
+            "--adapter when supplied. 'strict' scans and HARD-FAILS on any "
+            "sample whose scan disagrees with an explicit --kit-preset or "
+            "where no preset can be identified. 'off' skips the scan and "
+            "trusts --kit-preset / --adapter for every sample (requires an "
+            "explicit preset)."
         ),
     )
     library.add_argument(
@@ -291,58 +306,96 @@ def _sample_name(fastq_path: Path) -> str:
 
 
 def _planned_actions(
-    resolved_kit,
-    resolved_dedup: str,
+    resolutions: list[SampleResolution],
+    *,
     strandedness: str,
     mapq: int,
     min_length: int,
     max_length: int,
-    n_inputs: int,
 ) -> list[str]:
-    return [
-        f"validate external tools on PATH (cutadapt, bowtie2; plus "
-        f"umi_tools / picard as needed for dedup='{resolved_dedup}')",
-        (
-            f"cutadapt trim: kit={resolved_kit.kit}, "
-            f"adapter={resolved_kit.adapter}, umi_length="
-            f"{resolved_kit.umi_length} ({resolved_kit.umi_position}), "
-            f"min={min_length} max={max_length} nt"
-        ),
-        "bowtie2 contam subtract (--contam-index); unaligned reads pass "
-        f"through. strand={strandedness}",
-        "bowtie2 mt-transcriptome align (--mt-index) --end-to-end "
-        f"--very-sensitive -L 18; strand={strandedness}",
-        f"MAPQ filter at q >= {mapq} (pysam; NUMT suppression)",
-        f"dedup strategy: {resolved_dedup}",
-        "BAM -> BED6 (strand-aware)",
-        f"write read_counts.tsv and run_settings.json for {n_inputs} sample(s)",
+    dedup_strategies = sorted({res.dedup_strategy for res in resolutions}) or ["skip"]
+    actions: list[str] = [
+        "validate external tools on PATH (cutadapt, bowtie2; plus "
+        f"umi_tools / picard as needed for dedup={'/'.join(dedup_strategies)})",
+        f"resolve per-sample kit + dedup for {len(resolutions)} sample(s):",
     ]
+    actions.extend("  " + line for line in resolution_summary_lines(resolutions))
+    actions.extend(
+        [
+            f"cutadapt trim per sample (min={min_length} max={max_length} nt)",
+            "bowtie2 contam subtract (--contam-index); unaligned reads pass "
+            f"through. strand={strandedness}",
+            "bowtie2 mt-transcriptome align (--mt-index) --end-to-end "
+            f"--very-sensitive -L 18; strand={strandedness}",
+            f"MAPQ filter at q >= {mapq} (pysam; NUMT suppression)",
+            "dedup per sample (auto-resolved: umi-tools when UMIs present, else skip)",
+            "BAM -> BED6 (strand-aware)",
+            f"write kit_resolution.tsv, read_counts.tsv, run_settings.json "
+            f"for {len(resolutions)} sample(s)",
+        ]
+    )
+    return actions
+
+
+def _per_sample_settings(resolutions: list[SampleResolution]) -> list[dict]:
+    """JSON-friendly per-sample settings block for run_settings.json."""
+    rows: list[dict] = []
+    for resolution in resolutions:
+        rows.append(
+            {
+                "sample": resolution.sample,
+                "fastq": str(resolution.fastq),
+                "applied_kit": resolution.kit.kit,
+                "adapter": resolution.kit.adapter,
+                "umi_length": resolution.kit.umi_length,
+                "umi_position": resolution.kit.umi_position,
+                "dedup_strategy": resolution.dedup_strategy,
+                "detected_kit": resolution.detected_kit,
+                "detection_match_rate": resolution.detection_match_rate,
+                "detection_ambiguous": resolution.detection_ambiguous,
+                "source": resolution.source,
+            }
+        )
+    return rows
+
+
+def _legacy_global_dedup(resolutions: list[SampleResolution]) -> str:
+    """Pick a representative dedup label for legacy single-value consumers.
+
+    The per-sample switch in v0.4.0 means a single run can mix
+    ``umi-tools`` and ``skip``. For backward compatibility some tests
+    still read a single ``dedup_strategy`` field; we report the union as
+    ``mixed`` when it isn't uniform so an external reader notices.
+    """
+    strategies = {res.dedup_strategy for res in resolutions}
+    if not strategies:
+        return "skip"
+    if len(strategies) == 1:
+        return next(iter(strategies))
+    return "mixed"
 
 
 def _write_run_settings(
     output_dir: Path,
     *,
     args: argparse.Namespace,
-    resolved_kit,
-    resolved_dedup: str,
+    resolutions: list[SampleResolution],
     tool_versions: dict[str, str | None],
     inputs: list[Path],
 ) -> Path:
     settings = {
         "subcommand": "align",
         "mitoribopy_version": __version__,
-        "kit_preset": resolved_kit.kit,
-        "adapter": resolved_kit.adapter,
+        "kit_preset_default": args.kit_preset,
+        "adapter_default": args.adapter,
         "adapter_detection_mode": args.adapter_detection,
-        "umi_length": resolved_kit.umi_length,
-        "umi_position": resolved_kit.umi_position,
         "library_strandedness": args.library_strandedness,
         "min_length": args.min_length,
         "max_length": args.max_length,
         "quality": args.quality,
         "mapq_threshold": args.mapq,
         "seed": args.seed,
-        "dedup_strategy": resolved_dedup,
+        "dedup_strategy": _legacy_global_dedup(resolutions),
         "umi_dedup_method": args.umi_dedup_method,
         "confirm_mark_duplicates": args.confirm_mark_duplicates,
         "contam_index": args.contam_index,
@@ -351,6 +404,7 @@ def _write_run_settings(
         "log_level": getattr(args, "log_level", "INFO"),
         "tool_versions": tool_versions,
         "inputs": [str(p) for p in inputs],
+        "per_sample": _per_sample_settings(resolutions),
     }
     path = output_dir / "run_settings.json"
     path.write_text(json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8")
@@ -359,13 +413,15 @@ def _write_run_settings(
 
 def _process_one_sample(
     *,
-    fastq_in: Path,
-    sample: str,
     output_dir: Path,
     args: argparse.Namespace,
-    resolved_kit,
-    resolved_dedup: str,
+    resolution: SampleResolution,
 ) -> SampleCounts:
+    sample = resolution.sample
+    fastq_in = resolution.fastq
+    resolved_kit = resolution.kit
+    resolved_dedup = resolution.dedup_strategy
+
     trimmed_dir = output_dir / "trimmed"
     contam_dir = output_dir / "contam_filtered"
     aligned_dir = output_dir / "aligned"
@@ -383,7 +439,12 @@ def _process_one_sample(
 
     threads = getattr(args, "threads", None) or 1
 
-    _log_sample_stage(sample, "trim", f"adapter={resolved_kit.adapter}, umi_length={resolved_kit.umi_length}")
+    _log_sample_stage(
+        sample,
+        "trim",
+        f"kit={resolved_kit.kit}, adapter={resolved_kit.adapter}, "
+        f"umi_length={resolved_kit.umi_length}",
+    )
     cutadapt = trim_step.run_cutadapt(
         fastq_in=fastq_in,
         fastq_out=trimmed_fq,
@@ -440,7 +501,7 @@ def _process_one_sample(
 
     _log_sample_stage(sample, "dedup", f"strategy={resolved_dedup}")
     dedup = dedup_step.run_dedup(
-        strategy=args.dedup_strategy,
+        strategy=resolved_dedup,
         umi_length=resolved_kit.umi_length,
         confirm_mark_duplicates=args.confirm_mark_duplicates,
         bam_in=mapq_bam,
@@ -473,99 +534,31 @@ def _log_sample_stage(sample: str, stage: str, detail: str) -> None:
     log_info("ALIGN", f"{sample}: {stage} - {detail}")
 
 
-def _apply_adapter_detection(
+def _resolve_per_sample(
+    *,
     args: argparse.Namespace,
-    first_fastq: Path,
-) -> int | None:
-    """Scan ``first_fastq`` and apply ``--adapter-detection`` policy to ``args``.
+    inputs: list[Path],
+    detector=None,
+) -> list[SampleResolution]:
+    """Run the per-sample resolver for the supplied inputs.
 
-    May mutate ``args.kit_preset`` when the user left it at ``custom`` and
-    detection succeeded. Returns ``None`` to continue, or a non-zero exit
-    code to abort (strict-mode hard fail).
+    Lifts ``--adapter-detection`` from ``args`` and translates it into
+    the resolver's policy. ``detector`` is an injection point used by
+    tests; production runs use the default scanner.
     """
-    if not first_fastq.exists():
-        log_warning(
-            "ADAPTER",
-            f"Cannot scan {first_fastq} (file not found); skipping detection.",
-        )
-        return None
-
-    try:
-        detection = adapter_detect.detect_adapter(first_fastq)
-    except OSError as exc:
-        log_warning(
-            "ADAPTER",
-            f"Could not scan {first_fastq.name}: {exc}; skipping detection.",
-        )
-        return None
-
-    user_specified_preset = args.kit_preset != "custom" or args.adapter is not None
-    detected = detection.preset_name
-    rates_str = adapter_detect.format_per_kit_rates(detection.per_kit_rates)
-
-    if args.adapter_detection == "strict":
-        if detected is None:
-            print(
-                "[mitoribopy align] ERROR: --adapter-detection strict could not "
-                f"identify a known adapter in {first_fastq.name} "
-                f"({detection.n_reads_scanned} reads scanned). "
-                f"Per-kit match rates: {rates_str}. "
-                "Re-run with --adapter-detection off to bypass.",
-                file=sys.stderr,
-            )
-            return 2
-        if user_specified_preset and detected != args.kit_preset:
-            print(
-                "[mitoribopy align] ERROR: --adapter-detection strict: "
-                f"data looks like '{detected}' "
-                f"({detection.match_rate * 100:.1f}% match) but you supplied "
-                f"--kit-preset {args.kit_preset}. "
-                f"Per-kit match rates: {rates_str}. "
-                f"Re-run with --kit-preset {detected} "
-                "(or --adapter-detection off).",
-                file=sys.stderr,
-            )
-            return 2
-        if not user_specified_preset:
-            args.kit_preset = detected
-            log_info(
-                "ADAPTER",
-                f"Auto-selected --kit-preset {detected} "
-                f"({detection.match_rate * 100:.1f}% match, "
-                f"{detection.n_reads_scanned} reads scanned).",
-            )
-        return None
-
-    # auto mode (off mode never enters this function)
-    if detected is None:
-        if not user_specified_preset:
-            log_warning(
-                "ADAPTER",
-                f"No known adapter detected in {first_fastq.name} "
-                "and --kit-preset is 'custom' with no --adapter. "
-                f"Per-kit match rates: {rates_str}. "
-                "Pass --kit-preset / --adapter explicitly or use "
-                "--adapter-detection off.",
-            )
-        return None
-
-    if not user_specified_preset:
-        args.kit_preset = detected
-        log_info(
-            "ADAPTER",
-            f"Auto-selected --kit-preset {detected} "
-            f"({detection.match_rate * 100:.1f}% match, "
-            f"{detection.n_reads_scanned} reads scanned).",
-        )
-    elif detected != args.kit_preset:
-        log_warning(
-            "ADAPTER",
-            f"--kit-preset {args.kit_preset} disagrees with adapter scan "
-            f"(detected '{detected}' at {detection.match_rate * 100:.1f}%). "
-            f"Per-kit match rates: {rates_str}. "
-            "Re-run with --adapter-detection strict to fail-fast on this.",
-        )
-    return None
+    samples = [(_sample_name(fq), fq) for fq in inputs]
+    kwargs = dict(
+        kit_preset=args.kit_preset,
+        adapter=args.adapter,
+        umi_length=args.umi_length,
+        umi_position=args.umi_position,
+        dedup_strategy=args.dedup_strategy,
+        confirm_mark_duplicates=args.confirm_mark_duplicates,
+        adapter_detection_mode=args.adapter_detection,
+    )
+    if detector is not None:
+        kwargs["detector"] = detector
+    return resolve_sample_resolutions(samples, **kwargs)
 
 
 def run(argv: Iterable[str]) -> int:
@@ -574,9 +567,8 @@ def run(argv: Iterable[str]) -> int:
     args = parser.parse_args(list(argv))
     common.apply_common_arguments(args)
 
-    # Enumerate FASTQs first so adapter detection can sanity-check
-    # --kit-preset against the actual data before any expensive resolution
-    # or subprocess work.
+    # Enumerate FASTQs first so the per-sample resolver can scan each
+    # one and fail-fast before any expensive subprocess work.
     inputs: list[Path]
     try:
         inputs = _enumerate_fastqs(args.fastq_dir, args.fastq)
@@ -584,59 +576,134 @@ def run(argv: Iterable[str]) -> int:
         print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
         return 2
 
-    # Adapter sanity check. Skipped in dry-run (no real data inspection)
-    # and when no FASTQ paths exist yet (validation will fail loudly later).
-    if args.adapter_detection != "off" and not args.dry_run and inputs:
-        bail = _apply_adapter_detection(args, inputs[0])
-        if bail is not None:
-            return bail
-
-    # Resolve configuration up front so invalid combinations fail before
-    # any subprocess runs.
-    try:
-        resolved_kit = trim_step.resolve_kit_settings(
-            args.kit_preset,
-            adapter=args.adapter,
-            umi_length=args.umi_length,
-            umi_position=args.umi_position,
-        )
-    except (KeyError, ValueError) as exc:
-        print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
-        return 2
-
-    try:
-        resolved_dedup = dedup_step.resolve_dedup_strategy(
-            args.dedup_strategy,
-            umi_length=resolved_kit.umi_length,
-            confirm_mark_duplicates=args.confirm_mark_duplicates,
-        )
-    except ValueError as exc:
-        print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
-        return 2
+    # In --dry-run we skip per-sample scanning (we have not yet
+    # validated that paths exist and reading bytes is undesirable). We
+    # still produce a representative dry-run plan from the global args.
+    resolutions: list[SampleResolution] = []
+    if not args.dry_run and inputs:
+        try:
+            resolutions = _resolve_per_sample(args=args, inputs=inputs)
+        except SampleResolutionError as exc:
+            print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
+            return 2
+        # Surface ambiguous detections (NEB family) so the user reviews
+        # whether their kit really has UMIs.
+        for resolution in resolutions:
+            if resolution.detection_ambiguous:
+                log_warning(
+                    "ADAPTER",
+                    f"{resolution.sample}: adapter scan was ambiguous between "
+                    "kits sharing this adapter; confirm whether your library "
+                    "has UMIs (resolved kit: "
+                    f"{resolution.kit.kit}, umi_length="
+                    f"{resolution.kit.umi_length}).",
+                )
 
     if args.dry_run:
-        for line in _planned_actions(
-            resolved_kit,
-            resolved_dedup,
-            strandedness=args.library_strandedness,
-            mapq=args.mapq,
-            min_length=args.min_length,
-            max_length=args.max_length,
-            n_inputs=len(inputs),
-        ):
-            pass
-        return common.emit_dry_run(
-            "align",
-            _planned_actions(
-                resolved_kit,
-                resolved_dedup,
+        # Build a synthetic resolution per planned input so the dry-run
+        # plan reflects what the per-sample resolver WOULD do. We trust
+        # the user-supplied kit_preset; when 'auto' we cannot scan, so
+        # report 'pending: auto-detect at run time'.
+        if inputs:
+            planned: list[SampleResolution] = []
+            for fastq in inputs:
+                sample = _sample_name(fastq)
+                if args.kit_preset == "auto":
+                    # Use a synthetic placeholder so the plan still
+                    # surfaces the per-sample loop intent.
+                    placeholder_kit = ResolvedKit(
+                        kit="auto-detect-at-runtime",
+                        adapter="(detect at runtime)",
+                        umi_length=0,
+                        umi_position="5p",
+                    )
+                    dedup_label = "auto"
+                    source_label = "dry_run_auto"
+                else:
+                    placeholder_kit = trim_step.resolve_kit_settings(
+                        args.kit_preset,
+                        adapter=args.adapter,
+                        umi_length=args.umi_length,
+                        umi_position=args.umi_position,
+                    )
+                    dedup_label = dedup_step.resolve_dedup_strategy(
+                        args.dedup_strategy,
+                        umi_length=placeholder_kit.umi_length,
+                        confirm_mark_duplicates=args.confirm_mark_duplicates,
+                    )
+                    source_label = "dry_run_explicit"
+                planned.append(
+                    SampleResolution(
+                        sample=sample,
+                        fastq=fastq,
+                        kit=placeholder_kit,
+                        dedup_strategy=dedup_label,  # type: ignore[arg-type]
+                        detected_kit=None,
+                        detection_match_rate=0.0,
+                        detection_ambiguous=False,
+                        source=source_label,
+                    )
+                )
+            try:
+                actions = _planned_actions(
+                    planned,
+                    strandedness=args.library_strandedness,
+                    mapq=args.mapq,
+                    min_length=args.min_length,
+                    max_length=args.max_length,
+                )
+            except (KeyError, ValueError) as exc:
+                print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
+                return 2
+        else:
+            # No inputs supplied; still validate the kit/dedup combo so
+            # the user gets fast feedback on bad flag combinations.
+            try:
+                if args.kit_preset == "auto":
+                    placeholder_kit = ResolvedKit(
+                        kit="auto",
+                        adapter="(per-sample auto-detect)",
+                        umi_length=0,
+                        umi_position="5p",
+                    )
+                else:
+                    placeholder_kit = trim_step.resolve_kit_settings(
+                        args.kit_preset,
+                        adapter=args.adapter,
+                        umi_length=args.umi_length,
+                        umi_position=args.umi_position,
+                    )
+                dedup_label = dedup_step.resolve_dedup_strategy(
+                    args.dedup_strategy,
+                    umi_length=placeholder_kit.umi_length,
+                    confirm_mark_duplicates=args.confirm_mark_duplicates,
+                )
+            except (KeyError, ValueError) as exc:
+                print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
+                return 2
+            placeholder = SampleResolution(
+                sample="(no inputs)",
+                fastq=Path(""),
+                kit=placeholder_kit,
+                dedup_strategy=dedup_label,  # type: ignore[arg-type]
+                detected_kit=None,
+                detection_match_rate=0.0,
+                detection_ambiguous=False,
+                source="dry_run_no_inputs",
+            )
+            actions = _planned_actions(
+                [placeholder],
                 strandedness=args.library_strandedness,
                 mapq=args.mapq,
                 min_length=args.min_length,
                 max_length=args.max_length,
-                n_inputs=len(inputs),
-            ),
-        )
+            )
+            actions.append(
+                f"no input FASTQs supplied; per-sample resolution would run "
+                f"with kit_preset={args.kit_preset}, "
+                f"adapter_detection={args.adapter_detection}."
+            )
+        return common.emit_dry_run("align", actions)
 
     # Validate non-dry-run required inputs.
     missing: list[str] = []
@@ -656,15 +723,12 @@ def run(argv: Iterable[str]) -> int:
         )
         return 2
 
-    # Tool check.
+    # Tool check uses the union of every sample's resolved dedup
+    # strategy so we only require umi_tools / picard when at least one
+    # sample needs them.
     required = ["cutadapt", "bowtie2", "bowtie2-build"]
-    optional: list[str] = []
-    if resolved_dedup == "umi-tools":
-        required.append("umi_tools")
-    if resolved_dedup == "mark-duplicates":
-        required.append("picard")
-    for tool in ("fastqc",):
-        optional.append(tool)
+    required.extend(sorted(required_dedup_tools(resolutions)))
+    optional: list[str] = ["fastqc"]
     try:
         tools = tool_check.ensure_tools_available(
             required=required, optional=optional
@@ -682,40 +746,46 @@ def run(argv: Iterable[str]) -> int:
         name: (info.version if info is not None else None)
         for name, info in tools.items()
     }
+
+    # Persist the per-sample resolution table for provenance + UX.
+    write_kit_resolution_tsv(resolutions, output_dir / "kit_resolution.tsv")
     log_info(
         "ALIGN",
-        f"Starting align pipeline for {len(inputs)} sample(s) with dedup='{resolved_dedup}' and strand='{args.library_strandedness}'.",
+        f"Wrote kit_resolution.tsv with per-sample kit + dedup decisions for "
+        f"{len(resolutions)} sample(s).",
+    )
+
+    log_info(
+        "ALIGN",
+        f"Starting align pipeline for {len(inputs)} sample(s) "
+        f"(strand='{args.library_strandedness}'; per-sample resolution active).",
     )
     _write_run_settings(
         output_dir,
         args=args,
-        resolved_kit=resolved_kit,
-        resolved_dedup=resolved_dedup,
+        resolutions=resolutions,
         tool_versions=tool_versions,
         inputs=inputs,
     )
 
     rows: list[SampleCounts] = []
-    for index, fastq_in in enumerate(inputs, start=1):
-        sample = _sample_name(fastq_in)
+    for index, resolution in enumerate(resolutions, start=1):
         log_progress(
             "ALIGN",
             index,
-            len(inputs),
-            f"Processing sample {index}/{len(inputs)} ({sample}).",
+            len(resolutions),
+            f"Processing sample {index}/{len(resolutions)} ({resolution.sample}).",
         )
         counts = _process_one_sample(
-            fastq_in=fastq_in,
-            sample=sample,
             output_dir=output_dir,
             args=args,
-            resolved_kit=resolved_kit,
-            resolved_dedup=resolved_dedup,
+            resolution=resolution,
         )
         rows.append(counts)
         log_info(
             "ALIGN",
-            f"{sample}: complete (post_trim={counts.post_trim}, mt_aligned={counts.mt_aligned}, post_dedup={counts.mt_aligned_after_dedup}).",
+            f"{resolution.sample}: complete (post_trim={counts.post_trim}, "
+            f"mt_aligned={counts.mt_aligned}, post_dedup={counts.mt_aligned_after_dedup}).",
         )
 
     # Deterministic sort by sample name.
@@ -723,6 +793,8 @@ def run(argv: Iterable[str]) -> int:
     counts_step.write_read_counts_table(rows, output_dir / "read_counts.tsv")
     log_info(
         "ALIGN",
-        f"Finished align pipeline for {len(rows)} sample(s). Wrote read_counts.tsv and run_settings.json to {output_dir}.",
+        f"Finished align pipeline for {len(rows)} sample(s). Wrote "
+        "read_counts.tsv, kit_resolution.tsv, and run_settings.json to "
+        f"{output_dir}.",
     )
     return 0

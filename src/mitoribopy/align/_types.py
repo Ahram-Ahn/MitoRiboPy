@@ -73,6 +73,18 @@ class KitPreset:
 # The preset registry. Every addition here MUST be cross-checked against
 # the kit vendor's documentation; a mismatch silently corrupts real data.
 KIT_PRESETS: dict[str, KitPreset] = {
+    "auto": KitPreset(
+        name="auto",
+        adapter=None,
+        umi_length=0,
+        umi_position="5p",
+        description=(
+            "Per-sample auto detection. The orchestrator scans the head of "
+            "every input FASTQ and resolves the kit independently for each "
+            "sample; this preset is the default when no explicit "
+            "--kit-preset is supplied."
+        ),
+    ),
     "truseq_smallrna": KitPreset(
         name="truseq_smallrna",
         adapter="TGGAATTCTCGGGTGCCAAGG",
