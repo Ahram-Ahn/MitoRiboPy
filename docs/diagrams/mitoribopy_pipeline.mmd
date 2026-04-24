@@ -1,5 +1,7 @@
-%% MitoRiboPy v0.3.0 pipeline architecture.
+%% MitoRiboPy pipeline architecture (current as of v0.4.1).
 %% Four subcommands (align / rpf / rnaseq / all) and their data flow.
+%% v0.4 additions: per-sample kit + dedup resolution (sample_resolve),
+%% per-sample offsets, --analysis_sites both, kit_resolution.tsv.
 
 graph TD
   classDef entry fill:#e9f5ff,stroke:#2a7ab0,color:#083
@@ -29,21 +31,25 @@ graph TD
 
   subgraph ALIGN_PKG["mitoribopy.align"]
     a_tool_check["tool_check<br/>bowtie2_strand_flag"]
-    a_trim["trim<br/>cutadapt kit presets"]
+    a_resolve["sample_resolve<br/>per-sample kit + dedup<br/>(SampleResolution)"]
+    a_detect["adapter_detect<br/>per-sample scan<br/>+ pretrimmed inference"]
+    a_trim["trim<br/>cutadapt kit presets<br/>(adapter=None for pretrimmed)"]
     a_contam["contam<br/>bowtie2 contam subtract"]
     a_align["align<br/>bowtie2 mt-transcriptome"]
     a_dedup["dedup<br/>umi_tools / skip / mark-duplicates"]
     a_bam_utils["bam_utils (pysam)<br/>MAPQ filter + BAM->BED6"]
     a_read_counts["read_counts<br/>SampleCounts + TSV"]
   end
-  class a_tool_check,a_trim,a_contam,a_align,a_dedup,a_bam_utils,a_read_counts module
+  class a_tool_check,a_resolve,a_detect,a_trim,a_contam,a_align,a_dedup,a_bam_utils,a_read_counts module
 
   cli_align --> a_tool_check
-  cli_align --> a_trim
+  cli_align --> a_resolve
+  a_resolve --> a_detect
+  a_resolve --> a_trim
+  a_resolve --> a_dedup
   cli_align --> a_contam
   cli_align --> a_align
   cli_align --> a_bam_utils
-  cli_align --> a_dedup
   cli_align --> a_read_counts
 
   subgraph RPF_PKG["mitoribopy rpf (pipeline + io + analysis + plotting)"]
@@ -85,19 +91,21 @@ graph TD
   fs_fastq["FASTQ/<br/>input reads"]
   fs_align_bed["align/bed/<br/>BED6 strand-aware"]
   fs_align_counts["align/read_counts.tsv"]
-  fs_align_settings["align/run_settings.json"]
+  fs_align_kit["align/kit_resolution.tsv<br/>(per-sample provenance)"]
+  fs_align_settings["align/run_settings.json<br/>+ per_sample[]"]
   fs_rpf_counts["rpf/rpf_counts.tsv"]
   fs_rpf_settings["rpf/run_settings.json<br/>reference_checksum"]
   fs_rpf_outputs["rpf/{footprint_density,<br/>translating_frame,<br/>codon_usage, ...}"]
   fs_de_table["DE table<br/>(external)"]
   fs_rnaseq_out["rnaseq/{te.tsv,<br/>delta_te.tsv, plots/}"]
   fs_manifest["run_manifest.json<br/>(composed by 'all')"]
-  class fs_fastq,fs_align_bed,fs_align_counts,fs_align_settings,fs_rpf_counts,fs_rpf_settings,fs_rpf_outputs,fs_rnaseq_out,fs_manifest fs
+  class fs_fastq,fs_align_bed,fs_align_counts,fs_align_kit,fs_align_settings,fs_rpf_counts,fs_rpf_settings,fs_rpf_outputs,fs_rnaseq_out,fs_manifest fs
   class fs_de_table external
 
   fs_fastq --> cli_align
   cli_align --> fs_align_bed
   cli_align --> fs_align_counts
+  cli_align --> fs_align_kit
   cli_align --> fs_align_settings
   fs_align_bed --> cli_rpf
   cli_rpf --> fs_rpf_counts

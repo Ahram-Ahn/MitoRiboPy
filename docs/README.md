@@ -1,23 +1,17 @@
 # Documentation
 
-This directory collects package documentation that is useful after installation,
-for development, and for release tracking.
+Pointers to the package documentation. The repo's top-level [`README.md`](../README.md) is the canonical, standalone description of the current version (v0.4.1) including pipeline overview, every CLI flag, input formats, and example invocations.
 
-## Start here
+## For users
 
-- [../README.md](../README.md): package overview, installation, CLI usage, and input/output formats
-- [release-notes/README.md](release-notes/README.md): version-by-version release notes
-- [PACKAGE_REFACTOR_SCHEME.md](PACKAGE_REFACTOR_SCHEME.md): historical refactor design notes with current-status annotations
+- [`tutorials/01_end_to_end_fastq.md`](tutorials/01_end_to_end_fastq.md) — step-by-step walk through `mitoribopy all` from raw FASTQ to per-sample translation profile and codon usage.
+- [`tutorials/02_rnaseq_integration.md`](tutorials/02_rnaseq_integration.md) — the optional `mitoribopy rnaseq` stage: DE-table integration, SHA256 reference-consistency gate, TE / ΔTE outputs.
+- [`reference/cli.md`](reference/cli.md) — at-a-glance per-subcommand flag list. Run `mitoribopy <subcommand> --help` for the full per-flag help text.
+- [`environment/environment.yml`](environment/environment.yml) — bioconda environment file with every external tool (cutadapt, bowtie2, umi_tools, samtools, …).
+- [`environment/Dockerfile`](environment/Dockerfile) — container build for reproducible runs.
 
-## Architecture
+## For maintainers
 
-- [diagrams/mitoribopy_package_flow.mmd](diagrams/mitoribopy_package_flow.mmd): authoritative Mermaid source for the current package flow
-- [diagrams/render_mitoribopy_diagram.sh](diagrams/render_mitoribopy_diagram.sh): helper script to render the Mermaid source to SVG
-
-## Historical reports
-
-The files under [reports](reports) are archived migration, validation, and audit
-notes from the packaging effort. They are kept for scientific traceability and
-project history. Some of those reports intentionally use historical module names
-such as `inframe_analysis`, `igv`, or `VARNA` because they describe older
-development stages.
+- [`release-notes/`](release-notes/) — version-by-version highlights aimed at users upgrading. The authoritative changelog is at [`CHANGELOG.md`](../CHANGELOG.md) at the repo root.
+- [`validation/taco1_ko_regression.md`](validation/taco1_ko_regression.md) — biological regression test plan (TACO1-KO polyproline stalling) the package must pass before tagging a release candidate.
+- [`diagrams/`](diagrams/) — Mermaid sources for the pipeline architecture diagram.
