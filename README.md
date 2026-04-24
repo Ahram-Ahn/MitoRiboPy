@@ -12,11 +12,13 @@ MitoRiboPy is a Python package for mitochondrial ribosome profiling (mt-Ribo-seq
 - Subcommand CLI (`align` / `rpf` / `rnaseq` / `all`) with shared `--config`, `--dry-run`, `--threads`, `--log-level`
 - Config files in JSON, YAML, or TOML (auto-detected by path suffix)
 - Kit-aware FASTQ trimming: `truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, `qiaseq_mirna`, or explicit `--adapter`
+- Adapter auto-detection (`--adapter-detection auto`, default): scans the head of the FASTQ against every known preset and either picks the matching one or (in `strict` mode) hard-fails on mismatch &mdash; catches the silent failure where a wrong `--kit-preset` drops ~99% of reads as "too long"
 - Strand-aware mt-transcriptome alignment (`--library-strandedness forward` by default) so ND5 / ND6 antisense overlap is resolved by construction on Path A (transcriptome reference)
 - Deduplication safe by default: `--dedup-strategy auto` picks UMI-aware when UMIs are present and skips otherwise; `mark-duplicates` is behind a long confirmation flag because coordinate-only dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries
 - BAM input to `rpf` via pysam (no samtools / bedtools PATH dependency)
 - SHA256 reference-consistency gate on `rnaseq`: Ribo-seq and RNA-seq sides must be aligned to the identical transcript reference; mismatches are a hard fail
-- Built-in human and yeast reference data (annotation CSVs + codon tables)
+- Strain presets (`-s h` / `-s y` / `-s vm` / `-s ym` / `-s custom`): human + yeast ship a built-in annotation; `vm` / `ym` / `custom` pick up the matching codon table but require user-supplied `--annotation_file` and an explicit `-rpf` range
+- Footprint-class defaults (`--footprint_class monosome|disome|custom`): monosome uses the canonical 28-34 nt (vertebrate) / 37-41 nt (yeast) RPF window; disome widens to 60-90 nt / 65-95 nt for collided-ribosome studies
 - End-specific 5'/3' offset selection, P-site vs A-site workflows, bicistronic ATP8/ATP6 and ND4L/ND4 handling
 - Custom organism support via `--annotation_file`, `--codon_tables_file`, `--codon_table_name`, `--start_codons`
 - Persistent per-run logging in `<output>/mitoribopy.log`
@@ -50,6 +52,45 @@ PYTHONPATH=src python -m mitoribopy --help
 ```
 
 ## Quick Start
+
+### Starting a new project (zero to working config)
+
+```bash
+# 1. Conda env with cutadapt / bowtie2 / umi_tools / samtools / pysam.
+conda env create -f docs/environment/environment.yml
+conda activate mitoribopy
+
+# 2. Drop a working YAML template next to your data and fill in the paths.
+mitoribopy all --print-config-template > pipeline_config.yaml
+
+# 3. Inspect a stage's flag list without running it.
+mitoribopy all --show-stage-help align
+mitoribopy all --show-stage-help rpf
+
+# 4. Dry-run to see the resolved argv per stage, then actually run.
+mitoribopy all --config pipeline_config.yaml --output results/ --dry-run
+mitoribopy all --config pipeline_config.yaml --output results/
+```
+
+### Strain presets
+
+| `-s` | Organism / codon table | Ships annotation? | Ships `-rpf` default? |
+|------|------------------------|:-:|:-:|
+| `h`      | Human mt (`vertebrate_mitochondrial`) | yes | yes (28-34 nt monosome) |
+| `y`      | Yeast mt (`yeast_mitochondrial`)      | yes | yes (37-41 nt monosome) |
+| `vm`     | Any vertebrate mt (`vertebrate_mitochondrial`) | no | no &mdash; pass `--annotation_file` + `-rpf` |
+| `ym`     | Any fungus with yeast-mito code (`yeast_mitochondrial`) | no | no &mdash; pass `--annotation_file` + `-rpf` |
+| `custom` | Fully user-specified                  | no | no &mdash; also requires `--codon_tables_file` or `--codon_table_name` |
+
+Pair `-s` with `--footprint_class`:
+
+| `--footprint_class` | RPF window default | `--unfiltered_read_length_range` default | Use for |
+|---------------------|--------------------|------------------------------------------|---------|
+| `monosome` (default) | h/vm: 28-34, y/ym: 37-41 | 15-50 | Standard single-ribosome footprints |
+| `disome`             | h/vm: 60-90, y/ym: 65-95 | 40-110 | Collided-ribosome studies (e.g. eIF5A depletion, stalling) |
+| `custom`             | user must pass `-rpf` | unchanged | Any non-standard footprint class |
+
+An explicit `-rpf MIN MAX` or `--unfiltered_read_length_range MIN MAX` always wins over the footprint-class default.
 
 ### `mitoribopy rpf` &mdash; BED/BAM through the analysis pipeline
 
@@ -395,6 +436,46 @@ For the full interface, run:
 ```bash
 mitoribopy --help
 ```
+
+## Troubleshooting
+
+**~99 % of reads disappear at the trim step, `post_trim` is a tiny fraction of `total_reads` in `read_counts.tsv`.**
+The named `--kit-preset` has the wrong 3' adapter for your library.
+`mitoribopy align` runs adapter detection by default
+(`--adapter-detection auto`); the `[ADAPTER]` INFO line in the log
+tells you which preset the data actually looks like. Re-run with that
+preset, or add `--adapter-detection strict` to fail-fast on the
+mismatch instead of silently continuing.
+
+**Filtered BED is empty &rarr; "no data remained after BED filtering".**
+Either your RPF range does not cover the actual read-length
+distribution (open the per-sample `*_read_length_distribution.svg`;
+the shaded band shows the currently selected window) or every
+mapped read has been filtered earlier by MAPQ / contaminant
+subtraction. Widen `-rpf MIN MAX`, try `--footprint_class disome` if
+you are studying collided ribosomes, or lower `--mapq`.
+
+**Offset selection produced no rows &rarr; `p_site_offsets_*.csv` is empty.**
+The `--min_5_offset` / `--max_5_offset` window (default 10-22 nt) did
+not overlap the enrichment peak. Re-open the
+`offset_enrichment_heatmap_*.svg` and widen the window explicitly.
+
+**`RPM` is 0 for every sample.**
+Either `--read_counts_file` was not passed, or the file does not
+contain entries for the sample name(s) the pipeline inferred from
+the BED filenames. The `[QC] WARNING: No total read-count entry found
+for sample(s): ...` log line lists the samples that missed the
+lookup. Add a matching row to the counts file and re-run.
+
+**`--show-stage-help` output is too dense.**
+It is the full argparse `--help` for that stage. Pair it with
+`mitoribopy all --print-config-template` to get a pre-populated YAML
+and only override the keys you care about.
+
+**Reference-consistency gate failure in `rnaseq`.**
+The reference FASTA you just passed does not hash-match the one the
+prior `rpf` stage recorded in its `run_settings.json`. You must
+re-align both sides against the identical transcript set.
 
 ## Development
 
