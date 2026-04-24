@@ -40,27 +40,27 @@ def plot_read_length_distribution(
     output_path: str | os.PathLike[str],
 ) -> None:
     """Render a per-sample read-length distribution bar chart."""
-    plt.figure(figsize=(6, 4))
-    plt.bar(read_length_counts.index, read_length_counts.values, width=0.6, color="skyblue")
-    plt.xlabel("Read Length (nt)", fontsize=14, fontname="Arial", fontweight="bold")
-    plt.ylabel("Read Count", fontsize=14, fontname="Arial")
-    plt.title(
-        f"Read Length Distribution ({sample_name})",
-        fontsize=16,
-        fontweight="bold",
-        fontname="Arial",
-    )
-    plt.xticks(
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    ax.bar(
         read_length_counts.index,
-        rotation=45,
-        fontsize=10,
-        fontweight="bold",
-        fontname="Arial",
+        read_length_counts.values,
+        width=0.82,
+        color="#4C78A8",
+        edgecolor="white",
+        linewidth=0.6,
     )
-    plt.gca().yaxis.set_major_locator(MaxNLocator(nbins=4))
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
+    ax.set_xlabel("Read Length (nt)", fontsize=13, fontweight="bold")
+    ax.set_ylabel("Read Count", fontsize=13, fontweight="bold")
+    ax.set_title(f"Read-Length Distribution: {sample_name}", fontsize=15, fontweight="bold")
+    ax.set_xticks(read_length_counts.index)
+    ax.tick_params(axis="x", rotation=45, labelsize=10)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.grid(axis="y", alpha=0.22, linewidth=0.8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
     log_info("VIS", f"Read-length distribution plot saved => {output_path}")
 
 
@@ -81,10 +81,10 @@ def plot_unfiltered_read_length_heatmap(
 
     pivot_df = df.pivot(index="sample_name", columns="read_length", values=value_col).fillna(0)
 
-    plt.figure(figsize=(10, max(3, len(pivot_df) * 0.6)))
+    plt.figure(figsize=(10.5, max(3.2, len(pivot_df) * 0.7)))
     ax = sns.heatmap(
         pivot_df,
-        cmap=("Blues" if value_col.upper() == "RPM" else "Greens"),
+        cmap=("mako" if value_col.upper() == "RPM" else "crest"),
         linewidths=0.5,
         cbar_kws={"label": value_col.upper()},
     )
@@ -92,13 +92,12 @@ def plot_unfiltered_read_length_heatmap(
         f"Read-Length Heatmap ({value_col.upper()})",
         fontsize=16,
         fontweight="bold",
-        fontname="Arial",
     )
-    plt.xlabel("Read Length (nt)", fontsize=14, fontname="Arial")
-    plt.ylabel("Sample Name", fontsize=14, fontname="Arial")
+    plt.xlabel("Read Length (nt)", fontsize=13, fontweight="bold")
+    plt.ylabel("Sample", fontsize=13, fontweight="bold")
 
     cbar = ax.collections[0].colorbar
-    cbar.ax.set_ylabel(value_col.upper(), fontsize=12, fontname="Arial")
+    cbar.ax.set_ylabel(value_col.upper(), fontsize=12, fontweight="bold")
     cbar.ax.tick_params(labelsize=10)
 
     plt.tight_layout()

@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mitoribopy rnaseq",
         description=RNASEQ_SUBCOMMAND_HELP,
+        formatter_class=common.MitoRiboPyHelpFormatter,
     )
     common.add_common_arguments(parser)
 

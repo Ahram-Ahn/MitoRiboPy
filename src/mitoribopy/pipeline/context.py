@@ -18,7 +18,10 @@ class PipelineContext:
     base_output_dir: Path
     plot_output_dir: Path
     annotation_df: pd.DataFrame
+    resolved_codon_table: dict[str, str]
+    resolved_start_codons: list[str]
     rpf_range: list[int]
+    unfiltered_read_length_range: tuple[int, int]
     total_counts_map: dict[str, int | float] = field(default_factory=dict)
     filtered_bed_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     sample_dirs: list[str] = field(default_factory=list)

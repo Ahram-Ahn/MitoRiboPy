@@ -7,34 +7,12 @@ import os
 from pathlib import Path
 from typing import Callable, Iterable
 
+from ..cli.common import MitoRiboPyHelpFormatter
 from ..console import configure_file_logging, log_message
 from ..config import DEFAULT_CONFIG, load_user_config
 from ..data import available_codon_table_names
 
 StatusWriter = Callable[[str], None]
-
-
-class PipelineHelpFormatter(argparse.RawTextHelpFormatter):
-    """Formatter with slightly wider spacing for CLI help output."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        kwargs.setdefault("max_help_position", 38)
-        super().__init__(*args, **kwargs)
-
-    def _get_help_string(self, action) -> str:
-        help_text = action.help or ""
-        if "%(default)" in help_text:
-            return help_text
-        if not action.option_strings or action.required:
-            return help_text
-
-        default = getattr(action, "default_display", action.default)
-        if default in (None, False, argparse.SUPPRESS):
-            return help_text
-        if isinstance(default, (list, tuple)) and len(default) == 0:
-            return help_text
-
-        return f"{help_text} [default: {default}]"
 
 
 def configure_plot_defaults() -> None:
@@ -66,7 +44,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
             "Tip: prefer the end-specific 5'/3' offset bounds.\n"
             "Use --min_offset/--max_offset only as shared fallback bounds."
         ),
-        formatter_class=PipelineHelpFormatter,
+        formatter_class=MitoRiboPyHelpFormatter,
     )
 
     core_group = parser.add_argument_group("Core Inputs")
@@ -388,6 +366,17 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     normalization_group.add_argument(
+        "--unfiltered_read_length_range",
+        nargs=2,
+        type=int,
+        metavar=("MIN_LEN", "MAX_LEN"),
+        default=defaults["unfiltered_read_length_range"],
+        help=(
+            "Inclusive read-length range used for the unfiltered QC summary and heatmaps.\n"
+            "Broaden this when you want to inspect longer footprints such as disomes."
+        ),
+    )
+    normalization_group.add_argument(
         "--rpm_norm_mode",
         choices=["total", "mt_mrna"],
         default=defaults["rpm_norm_mode"],
@@ -529,6 +518,12 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
         parser.error("--range must be a positive integer")
     if args.cap_percentile <= 0 or args.cap_percentile > 1:
         parser.error("--cap_percentile must be in (0, 1]")
+    if len(args.unfiltered_read_length_range) != 2:
+        parser.error("--unfiltered_read_length_range requires MIN_LEN MAX_LEN")
+    if int(args.unfiltered_read_length_range[0]) > int(args.unfiltered_read_length_range[1]):
+        parser.error(
+            "--unfiltered_read_length_range MIN_LEN cannot be greater than MAX_LEN"
+        )
     if args.structure_density_norm_perc <= 0 or args.structure_density_norm_perc > 1:
         parser.error("--structure_density_norm_perc must be in (0, 1]")
     if args.cor_mask_method == "percentile" and (

@@ -54,6 +54,7 @@ def test_all_help_mentions_three_stages(capsys) -> None:
     assert "--skip-rpf" in out
     assert "--skip-rnaseq" in out
     assert "--manifest" in out
+    assert "--show-stage-help" in out
 
 
 def test_all_dry_run_without_config_prints_plan_and_exits_zero(capsys) -> None:
@@ -88,6 +89,15 @@ def test_all_dry_run_with_config_lists_per_stage_argv(tmp_path, capsys) -> None:
     assert "rpf: " in out
     assert "rnaseq: " in out
     assert "--gene-id-convention hgnc" in out
+    assert "--read-counts-file" in out
+
+
+def test_all_show_stage_help_prints_full_stage_help(capsys) -> None:
+    exit_code = cli.main(["all", "--show-stage-help", "rpf"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Run the standalone MitoRiboPy Ribo-seq pipeline." in out
+    assert "--unfiltered_read_length_range" in out
 
 
 # ---------- required args ---------------------------------------------------

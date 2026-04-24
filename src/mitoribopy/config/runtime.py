@@ -44,6 +44,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "read_counts_file": "read_counts_summary.txt",
     "read_counts_sample_col": None,
     "read_counts_reads_col": None,
+    "unfiltered_read_length_range": [15, 50],
     "rpm_norm_mode": "total",
     "read_counts_reference_col": None,
     "mrna_ref_patterns": ["mt_genome", "mt-mrna", "mt_mrna"],

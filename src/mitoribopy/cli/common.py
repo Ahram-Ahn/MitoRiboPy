@@ -33,6 +33,29 @@ from ..console import LOGGER, log_warning
 _LOG_LEVEL_CHOICES = ("DEBUG", "INFO", "WARNING", "ERROR")
 
 
+class MitoRiboPyHelpFormatter(argparse.RawTextHelpFormatter):
+    """Consistent help formatter with readable defaults."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("max_help_position", 38)
+        super().__init__(*args, **kwargs)
+
+    def _get_help_string(self, action) -> str:
+        help_text = action.help or ""
+        if "%(default)" in help_text:
+            return help_text
+        if not action.option_strings or action.required:
+            return help_text
+
+        default = getattr(action, "default_display", action.default)
+        if default in (None, False, argparse.SUPPRESS):
+            return help_text
+        if isinstance(default, (list, tuple)) and len(default) == 0:
+            return help_text
+
+        return f"{help_text} [default: {default}]"
+
+
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     """Register --config, --dry-run, --threads, and --log-level on *parser*."""
     common = parser.add_argument_group("Shared options")

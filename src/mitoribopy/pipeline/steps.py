@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from typing import Callable
 
@@ -49,7 +50,7 @@ def _resolved_offset_plot_limit(args) -> int:
     )
 
 
-def build_pipeline_context(args) -> PipelineContext:
+def build_pipeline_context(args: argparse.Namespace) -> PipelineContext:
     """Create shared runtime state for a package-native pipeline run."""
     base_output_dir = Path(args.output).resolve()
     base_output_dir.mkdir(parents=True, exist_ok=True)
@@ -63,19 +64,25 @@ def build_pipeline_context(args) -> PipelineContext:
         atp8_atp6_baseline=args.atp8_atp6_baseline,
         nd4l_nd4_baseline=args.nd4l_nd4_baseline,
     )
-    args.resolved_codon_table = load_codon_table(
+    resolved_codon_table = load_codon_table(
         preset=args.strain,
         table_name=args.codon_table_name,
         table_file=args.codon_tables_file,
     )
-    args.resolved_start_codons = resolve_start_codons(args.strain, args.start_codons)
+    resolved_start_codons = resolve_start_codons(args.strain, args.start_codons)
+    unfiltered_read_length_range = tuple(
+        int(value) for value in args.unfiltered_read_length_range
+    )
 
     return PipelineContext(
         args=args,
         base_output_dir=base_output_dir,
         plot_output_dir=plot_output_dir,
         annotation_df=annotation_df,
+        resolved_codon_table=resolved_codon_table,
+        resolved_start_codons=resolved_start_codons,
         rpf_range=resolve_rpf_range(args.strain, args.rpf),
+        unfiltered_read_length_range=unfiltered_read_length_range,
     )
 
 
@@ -116,15 +123,19 @@ def run_unfiltered_read_length_qc(
     emit_status: StatusWriter,
 ) -> None:
     """Generate unfiltered read-length summary tables and heatmaps."""
-    unfiltered_summary_csv = context.plot_output_dir / "unfiltered_read_length_summary_15_50.csv"
+    min_len, max_len = context.unfiltered_read_length_range
+    unfiltered_summary_csv = (
+        context.plot_output_dir
+        / f"unfiltered_read_length_summary_{min_len}_{max_len}.csv"
+    )
     compute_unfiltered_read_length_summary(
         input_dir=context.args.directory,
         output_csv=str(unfiltered_summary_csv),
         total_counts_map=context.total_counts_map,
-        read_length_range=(15, 50),
+        read_length_range=context.unfiltered_read_length_range,
     )
 
-    heatmap_base = context.plot_output_dir / "unfiltered_heatmap_15_50"
+    heatmap_base = context.plot_output_dir / f"unfiltered_heatmap_{min_len}_{max_len}"
     plot_unfiltered_read_length_heatmap(
         summary_csv_path=str(unfiltered_summary_csv),
         output_png_base=str(heatmap_base),
@@ -391,6 +402,8 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
             args=context.args,
             annotation_df=context.annotation_df,
             filtered_bed_df=context.filtered_bed_df,
+            resolved_codon_table=context.resolved_codon_table,
+            resolved_start_codons=context.resolved_start_codons,
         )
         ran_modules.append("translation-profile analysis")
 

@@ -56,10 +56,60 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from Bio import SeqIO
 from ..console import iter_with_progress, log_info
-from ..data import build_sequence_display_map
+from ..data import build_sequence_display_map, resolve_sequence_name
 from .style import apply_publication_style
 
 apply_publication_style()
+
+
+def _build_cds_lookup(
+    annotation_df: pd.DataFrame,
+    sequence_names: set[str],
+) -> dict[str, tuple[int, int]]:
+    """Map resolved transcript ids to CDS start/end (end-exclusive) bounds."""
+    normalized = annotation_df.copy()
+    if "start_codon" not in normalized.columns and {"l_utr5"}.issubset(normalized.columns):
+        normalized["start_codon"] = normalized["l_utr5"]
+    if "stop_codon" not in normalized.columns and {"l_tr", "l_utr3"}.issubset(normalized.columns):
+        normalized["stop_codon"] = normalized["l_tr"] - normalized["l_utr3"] - 3
+
+    lookup: dict[str, tuple[int, int]] = {}
+    for _, row in normalized.iterrows():
+        resolved_name = resolve_sequence_name(row, sequence_names)
+        if resolved_name is None:
+            continue
+        cds_start = int(row["start_codon"])
+        cds_end = int(row["stop_codon"]) + 3
+        if cds_end <= cds_start:
+            continue
+        lookup[resolved_name] = (cds_start, cds_end)
+    return lookup
+
+
+def _build_codon_binned_map(
+    cov_map: Dict[str, Dict[str, np.ndarray]],
+    cds_lookup: dict[str, tuple[int, int]],
+) -> Dict[str, Dict[str, np.ndarray]]:
+    """Aggregate nucleotide-resolution coverage into CDS codon bins."""
+    codon_map: Dict[str, Dict[str, np.ndarray]] = {}
+    for sample, transcript_map in cov_map.items():
+        codon_map[sample] = {}
+        for transcript, arr in transcript_map.items():
+            cds_bounds = cds_lookup.get(transcript)
+            if cds_bounds is None:
+                continue
+            cds_start, cds_end = cds_bounds
+            cds_end = min(cds_end, len(arr))
+            cds_start = max(cds_start, 0)
+            cds_len = cds_end - cds_start
+            if cds_len < 3:
+                continue
+            usable_len = cds_len - (cds_len % 3)
+            if usable_len < 3:
+                continue
+            cds_slice = np.asarray(arr[cds_start : cds_start + usable_len])
+            codon_map[sample][transcript] = cds_slice.reshape(-1, 3).sum(axis=1)
+    return codon_map
 
 # -----------------------------------------------------------------------------
 # Public entry point
@@ -110,6 +160,7 @@ def run_coverage_profile_plots(
     # ------------------------------------------------------------------
     fasta_dict: Dict[str, SeqIO.SeqRecord] = SeqIO.to_dict(SeqIO.parse(str(fasta_file), "fasta"))
     sequence_display_map = build_sequence_display_map(annotation_df, fasta_dict.keys())
+    cds_lookup = _build_cds_lookup(annotation_df, set(fasta_dict.keys()))
 
     # ------------------------------------------------------------------
     # B) Prepare containers keyed by sample → transcript → numpy array
@@ -253,14 +304,44 @@ def run_coverage_profile_plots(
     psite_dir_rpm = output_dir / "p_site_coverage_rpm"
     read_dir_raw = output_dir / "read_coverage_raw"
     psite_dir_raw = output_dir / "p_site_coverage_raw"
-    for d in (read_dir_rpm, psite_dir_rpm, read_dir_raw, psite_dir_raw):
+    read_dir_rpm_codon = output_dir / "read_coverage_rpm_codon"
+    psite_dir_rpm_codon = output_dir / "p_site_coverage_rpm_codon"
+    read_dir_raw_codon = output_dir / "read_coverage_raw_codon"
+    psite_dir_raw_codon = output_dir / "p_site_coverage_raw_codon"
+    for d in (
+        read_dir_rpm,
+        psite_dir_rpm,
+        read_dir_raw,
+        psite_dir_raw,
+        read_dir_rpm_codon,
+        psite_dir_rpm_codon,
+        read_dir_raw_codon,
+        psite_dir_raw_codon,
+    ):
         d.mkdir(exist_ok=True)
 
     # ------------------------------------------------------------------
     # H) Helper to plot a multi‑panel coverage figure
     # ------------------------------------------------------------------
-    def _plot_cov(tr: str, cov_map, ymax_map, out_dir: Path, title_suffix: str, bar_color: str):
-        seqlen = len(fasta_dict[tr].seq)
+    def _plot_cov(
+        tr: str,
+        cov_map,
+        ymax_map,
+        out_dir: Path,
+        title_suffix: str,
+        bar_color: str,
+        *,
+        x_label: str = "Nucleotide Position",
+        start_at_one: bool = False,
+        rotation: int = 45,
+    ):
+        arr_ref = next(
+            (cov_map[sample].get(tr) for sample, _ in sample_list if cov_map[sample].get(tr) is not None),
+            None,
+        )
+        if arr_ref is None:
+            return None
+        seqlen = len(arr_ref)
         ymax = ymax_map.get(tr, 1)
         ymax = max(ymax, 1)
 
@@ -278,14 +359,22 @@ def run_coverage_profile_plots(
                 ax.set_xticks([])
                 ax.set_yticks([])
                 continue
-            X = np.arange(seqlen)
-            ax.bar(X, arr, width=3.0, color=bar_color)
+            X = np.arange(1, seqlen + 1) if start_at_one else np.arange(seqlen)
+            ax.bar(X, arr, width=0.95, color=bar_color, edgecolor="none")
             ax.set_ylim(0, ymax * 1.1)
             ax.set_ylabel(sample, fontsize=12, fontweight="bold")
+            ax.grid(axis="y", alpha=0.2, linewidth=0.8)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
             if row == len(sample_list) - 1:
-                ax.set_xlabel("Nucleotide Position", fontsize=14, fontweight="bold")
-            ax.set_xticks(np.arange(0, seqlen, 100))
-            ax.tick_params(axis="x", rotation=45)
+                ax.set_xlabel(x_label, fontsize=14, fontweight="bold")
+            if not start_at_one:
+                ax.set_xticks(np.arange(0, seqlen, 100))
+            else:
+                tick_count = min(10, seqlen)
+                tick_positions = np.linspace(1, seqlen, num=tick_count, dtype=int)
+                ax.set_xticks(np.unique(tick_positions))
+            ax.tick_params(axis="x", rotation=rotation)
 
         fig.suptitle(
             f"{sequence_display_map.get(tr, tr)} - {title_suffix}",
@@ -302,6 +391,14 @@ def run_coverage_profile_plots(
     # I) Iterate over all transcripts and create four figures each
     # ------------------------------------------------------------------
     transcripts = sorted({chrom for cov in read_cov_map.values() for chrom in cov})
+    read_cov_map_codon = _build_codon_binned_map(read_cov_map, cds_lookup)
+    psite_cov_map_codon = _build_codon_binned_map(psite_cov_map, cds_lookup)
+    raw_read_cov_map_codon = _build_codon_binned_map(raw_read_cov_map, cds_lookup)
+    raw_psite_cov_map_codon = _build_codon_binned_map(raw_psite_cov_map, cds_lookup)
+    read_global_max_codon = build_global_max(read_cov_map_codon)
+    psite_global_max_codon = build_global_max(psite_cov_map_codon)
+    raw_read_global_max_codon = build_global_max(raw_read_cov_map_codon)
+    raw_psite_global_max_codon = build_global_max(raw_psite_cov_map_codon)
 
     for tr in transcripts:
         # RPM
@@ -310,9 +407,59 @@ def run_coverage_profile_plots(
         # RAW
         out_r_raw = _plot_cov(tr, raw_read_cov_map, raw_read_global_max, read_dir_raw, "Read Coverage (Raw Counts)", "steelblue")
         out_p_raw = _plot_cov(tr, raw_psite_cov_map, raw_psite_global_max, psite_dir_raw, "P-site Density (Raw Counts)", "forestgreen")
+        out_r_rpm_codon = _plot_cov(
+            tr,
+            read_cov_map_codon,
+            read_global_max_codon,
+            read_dir_rpm_codon,
+            "Read Coverage (RPM, Codon-binned CDS)",
+            "steelblue",
+            x_label="CDS Codon Position",
+            start_at_one=True,
+            rotation=0,
+        )
+        out_p_rpm_codon = _plot_cov(
+            tr,
+            psite_cov_map_codon,
+            psite_global_max_codon,
+            psite_dir_rpm_codon,
+            "P-site Density (RPM, Codon-binned CDS)",
+            "forestgreen",
+            x_label="CDS Codon Position",
+            start_at_one=True,
+            rotation=0,
+        )
+        out_r_raw_codon = _plot_cov(
+            tr,
+            raw_read_cov_map_codon,
+            raw_read_global_max_codon,
+            read_dir_raw_codon,
+            "Read Coverage (Raw Counts, Codon-binned CDS)",
+            "steelblue",
+            x_label="CDS Codon Position",
+            start_at_one=True,
+            rotation=0,
+        )
+        out_p_raw_codon = _plot_cov(
+            tr,
+            raw_psite_cov_map_codon,
+            raw_psite_global_max_codon,
+            psite_dir_raw_codon,
+            "P-site Density (Raw Counts, Codon-binned CDS)",
+            "forestgreen",
+            x_label="CDS Codon Position",
+            start_at_one=True,
+            rotation=0,
+        )
         log_info(
             "COVERAGE",
-            f"{tr} -> rpm:({out_r_rpm.name},{out_p_rpm.name}) | raw:({out_r_raw.name},{out_p_raw.name})",
+            f"{tr} -> rpm:({out_r_rpm.name},{out_p_rpm.name}) | raw:({out_r_raw.name},{out_p_raw.name})"
+            + (
+                f" | codon:({out_r_rpm_codon.name if out_r_rpm_codon else 'n/a'},"
+                f"{out_p_rpm_codon.name if out_p_rpm_codon else 'n/a'},"
+                f"{out_r_raw_codon.name if out_r_raw_codon else 'n/a'},"
+                f"{out_p_raw_codon.name if out_p_raw_codon else 'n/a'})"
+            ),
         )
 
     log_info("COVERAGE", "All coverage-profile plots generated.")

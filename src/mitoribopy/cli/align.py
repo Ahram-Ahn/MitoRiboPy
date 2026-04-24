@@ -35,7 +35,7 @@ from ..align import (
     trim as trim_step,
 )
 from ..align._types import KIT_PRESETS, SampleCounts
-from ..console import log_info, log_warning
+from ..console import configure_file_logging, log_info, log_progress, log_warning
 from . import common
 
 
@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mitoribopy align",
         description=ALIGN_SUBCOMMAND_HELP,
+        formatter_class=common.MitoRiboPyHelpFormatter,
     )
     common.add_common_arguments(parser)
 
@@ -382,6 +383,7 @@ def _process_one_sample(
 
     threads = getattr(args, "threads", None) or 1
 
+    _log_sample_stage(sample, "trim", f"adapter={resolved_kit.adapter}, umi_length={resolved_kit.umi_length}")
     cutadapt = trim_step.run_cutadapt(
         fastq_in=fastq_in,
         fastq_out=trimmed_fq,
@@ -392,7 +394,13 @@ def _process_one_sample(
         threads=threads,
         log_json=cutadapt_log,
     )
+    _log_sample_stage(
+        sample,
+        "trim",
+        f"kept {cutadapt.reads_passing_filters}/{cutadapt.input_reads} reads after cutadapt",
+    )
 
+    _log_sample_stage(sample, "contam-filter", f"subtracting contaminants with index {args.contam_index}")
     contam = contam_step.subtract_contaminants(
         fastq_in=trimmed_fq,
         contam_index=Path(args.contam_index),
@@ -401,7 +409,13 @@ def _process_one_sample(
         threads=threads,
         seed=args.seed,
     )
+    _log_sample_stage(
+        sample,
+        "contam-filter",
+        f"{contam.unaligned_reads} reads passed through; {contam.aligned_to_contam} removed as contaminants",
+    )
 
+    _log_sample_stage(sample, "mt-align", f"aligning against {args.mt_index}")
     alignment = align_step.align_mt(
         fastq_in=nocontam_fq,
         mt_index=Path(args.mt_index),
@@ -410,13 +424,21 @@ def _process_one_sample(
         threads=threads,
         seed=args.seed,
     )
+    _log_sample_stage(
+        sample,
+        "mt-align",
+        f"aligned {alignment.aligned}/{alignment.total_reads} reads to the mt-transcriptome",
+    )
 
+    _log_sample_stage(sample, "mapq-filter", f"keeping reads with MAPQ >= {args.mapq}")
     mapq_kept = bam_utils.filter_bam_mapq(
         bam_in=aligned_bam,
         bam_out=mapq_bam,
         mapq_threshold=args.mapq,
     )
+    _log_sample_stage(sample, "mapq-filter", f"kept {mapq_kept} reads")
 
+    _log_sample_stage(sample, "dedup", f"strategy={resolved_dedup}")
     dedup = dedup_step.run_dedup(
         strategy=args.dedup_strategy,
         umi_length=resolved_kit.umi_length,
@@ -426,8 +448,15 @@ def _process_one_sample(
         log_path=dedup_log,
         umi_tools_method=args.umi_dedup_method,
     )
+    _log_sample_stage(
+        sample,
+        "dedup",
+        f"kept {dedup.output_reads}/{dedup.input_reads} reads after deduplication",
+    )
 
+    _log_sample_stage(sample, "bam-to-bed", f"writing {bed_out.name}")
     bam_utils.bam_to_bed6(bam_in=dedup.bam_path, bed_out=bed_out)
+    _log_sample_stage(sample, "bam-to-bed", "finished BED6 export")
 
     return counts_step.assemble_sample_counts(
         sample=sample,
@@ -437,6 +466,11 @@ def _process_one_sample(
         mapq_count=mapq_kept,
         dedup=dedup,
     )
+
+
+def _log_sample_stage(sample: str, stage: str, detail: str) -> None:
+    """Emit a concise, consistent per-sample status line."""
+    log_info("ALIGN", f"{sample}: {stage} - {detail}")
 
 
 def _apply_adapter_detection(
@@ -641,11 +675,17 @@ def run(argv: Iterable[str]) -> int:
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
+    log_path = configure_file_logging(output_dir / "mitoribopy.log")
+    log_info("ALIGN", f"Log file: {log_path}")
 
     tool_versions = {
         name: (info.version if info is not None else None)
         for name, info in tools.items()
     }
+    log_info(
+        "ALIGN",
+        f"Starting align pipeline for {len(inputs)} sample(s) with dedup='{resolved_dedup}' and strand='{args.library_strandedness}'.",
+    )
     _write_run_settings(
         output_dir,
         args=args,
@@ -656,8 +696,14 @@ def run(argv: Iterable[str]) -> int:
     )
 
     rows: list[SampleCounts] = []
-    for fastq_in in inputs:
+    for index, fastq_in in enumerate(inputs, start=1):
         sample = _sample_name(fastq_in)
+        log_progress(
+            "ALIGN",
+            index,
+            len(inputs),
+            f"Processing sample {index}/{len(inputs)} ({sample}).",
+        )
         counts = _process_one_sample(
             fastq_in=fastq_in,
             sample=sample,
@@ -667,8 +713,16 @@ def run(argv: Iterable[str]) -> int:
             resolved_dedup=resolved_dedup,
         )
         rows.append(counts)
+        log_info(
+            "ALIGN",
+            f"{sample}: complete (post_trim={counts.post_trim}, mt_aligned={counts.mt_aligned}, post_dedup={counts.mt_aligned_after_dedup}).",
+        )
 
     # Deterministic sort by sample name.
     rows.sort(key=lambda row: row.sample)
     counts_step.write_read_counts_table(rows, output_dir / "read_counts.tsv")
+    log_info(
+        "ALIGN",
+        f"Finished align pipeline for {len(rows)} sample(s). Wrote read_counts.tsv and run_settings.json to {output_dir}.",
+    )
     return 0

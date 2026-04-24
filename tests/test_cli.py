@@ -43,6 +43,7 @@ def test_build_parser_help_groups_and_key_guidance() -> None:
     assert "--annotation_file" in help_text
     assert "--codon_table_name" in help_text
     assert "--start_codons" in help_text
+    assert "--unfiltered_read_length_range" in help_text
     assert "--atp8_atp6_baseline" in help_text
     assert "--varna" not in help_text
     assert "[default: current working directory]" in help_text

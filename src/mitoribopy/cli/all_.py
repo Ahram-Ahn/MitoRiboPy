@@ -48,6 +48,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mitoribopy all",
         description=ALL_SUBCOMMAND_HELP,
+        epilog=(
+            "This subcommand owns only the orchestrator flags. Stage-specific options live\n"
+            "inside the config file sections whose keys match the subcommand flags:\n"
+            "  align:  keys for 'mitoribopy align --help'\n"
+            "  rpf:    keys for 'mitoribopy rpf --help'\n"
+            "  rnaseq: keys for 'mitoribopy rnaseq --help'\n"
+            "\n"
+            "Useful commands:\n"
+            "  mitoribopy all --show-stage-help align\n"
+            "  mitoribopy all --show-stage-help rpf\n"
+            "  mitoribopy all --show-stage-help rnaseq"
+        ),
+        formatter_class=common.MitoRiboPyHelpFormatter,
     )
     common.add_common_arguments(parser)
     parser.add_argument(
@@ -94,6 +107,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="run_manifest.json",
         metavar="PATH",
         help="Manifest filename (relative to --output).",
+    )
+    parser.add_argument(
+        "--show-stage-help",
+        choices=["align", "rpf", "rnaseq"],
+        default=None,
+        metavar="STAGE",
+        help=(
+            "Print the full help for one stage and exit. Useful because "
+            "'mitoribopy all --help' only shows orchestrator-level flags."
+        ),
     )
     return parser
 
@@ -221,8 +244,9 @@ def _auto_wire_paths(
         rpf_cfg.setdefault("output", str(run_root / "rpf"))
         # When align ran, its BED6 outputs live at <align>/bed/.
         if has_align:
+            rpf_cfg.setdefault("directory", str(run_root / "align" / "bed"))
             rpf_cfg.setdefault(
-                "directory", str(run_root / "align" / "bed")
+                "read_counts_file", str(run_root / "align" / "read_counts.tsv")
             )
 
     if has_rnaseq and has_de_table:
@@ -248,6 +272,20 @@ def run(argv: Iterable[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv))
     common.apply_common_arguments(args)
+
+    if args.show_stage_help:
+        from . import align as align_cli
+        from . import rnaseq as rnaseq_cli
+        from ..config import DEFAULT_CONFIG
+        from ..pipeline import runner as pipeline_runner
+
+        stage_parsers = {
+            "align": align_cli.build_parser,
+            "rpf": lambda: pipeline_runner.build_parser(dict(DEFAULT_CONFIG)),
+            "rnaseq": rnaseq_cli.build_parser,
+        }
+        stage_parsers[args.show_stage_help]().print_help()
+        return 0
 
     if not args.config:
         if args.dry_run:

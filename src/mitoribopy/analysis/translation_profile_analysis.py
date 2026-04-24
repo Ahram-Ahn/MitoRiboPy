@@ -31,6 +31,8 @@ def run_translation_profile_analysis(
     args,
     annotation_df,
     filtered_bed_df=None,
+    resolved_codon_table=None,
+    resolved_start_codons=None,
 ):
     """Compute translation-profile summaries and write the paired plotting outputs."""
 
@@ -44,10 +46,17 @@ def run_translation_profile_analysis(
     fasta_dict = SeqIO.to_dict(SeqIO.parse(fasta_file, "fasta"))
 
     # 2) Pick codon table and start codons
-    codon_table = getattr(args, "resolved_codon_table", None)
+    codon_table = resolved_codon_table
     if codon_table is None:
         codon_table = load_codon_table(preset=getattr(args, "strain", None))
-    start_codons = set(resolve_start_codons(getattr(args, "strain", "custom"), getattr(args, "start_codons", None)))
+    start_codons = set(
+        resolved_start_codons
+        if resolved_start_codons is not None
+        else resolve_start_codons(
+            getattr(args, "strain", "custom"),
+            getattr(args, "start_codons", None),
+        )
+    )
     hydrophobic = {"A", "F", "L", "I", "M", "V", "W", "Y"}
     hydrophilic = {"S", "T", "N", "Q"}
     ionic = {"K", "R", "H", "D", "E"}

@@ -20,6 +20,7 @@ MitoRiboPy is a Python package for mitochondrial ribosome profiling (mt-Ribo-seq
 - End-specific 5'/3' offset selection, P-site vs A-site workflows, bicistronic ATP8/ATP6 and ND4L/ND4 handling
 - Custom organism support via `--annotation_file`, `--codon_tables_file`, `--codon_table_name`, `--start_codons`
 - Persistent per-run logging in `<output>/mitoribopy.log`
+- Consistent terminal + file progress reporting for `align` and `rpf`
 - Provenance: every stage writes a `run_settings.json`; `mitoribopy all` composes them into `run_manifest.json`
 
 ## Installation
@@ -99,6 +100,24 @@ mitoribopy all --config pipeline_config.yaml --output <run_root>
 ```
 
 Where `pipeline_config.yaml` has `align:`, `rpf:`, and optional `rnaseq:` sections; each section's keys correspond to the subcommand's CLI flag names. See [docs/tutorials/01_end_to_end_fastq.md](docs/tutorials/01_end_to_end_fastq.md) for a worked example.
+
+Useful details for `mitoribopy all`:
+
+- `mitoribopy all --help` shows only orchestrator-level flags. For full stage help, use:
+  - `mitoribopy all --show-stage-help align`
+  - `mitoribopy all --show-stage-help rpf`
+  - `mitoribopy all --show-stage-help rnaseq`
+- When `align` and `rpf` both run, `all` auto-wires:
+  - `rpf.directory -> <run_root>/align/bed`
+  - `rpf.read_counts_file -> <run_root>/align/read_counts.tsv`
+- When `rpf` and `rnaseq` both run, `all` auto-wires:
+  - `rnaseq.ribo_dir -> <run_root>/rpf`
+
+### Logs and progress
+
+- `mitoribopy align` writes `<output>/mitoribopy.log` and emits per-sample stage updates for trim, contaminant filtering, mt alignment, MAPQ filtering, deduplication, and BED export.
+- `mitoribopy rpf` writes `<output>/mitoribopy.log` and emits numbered pipeline-step progress plus downstream plotting/profile progress.
+- The same status lines are written to both the terminal and the log file.
 
 ## Built-In References
 
@@ -181,6 +200,7 @@ These are not all technically mandatory in the parser, but they are the recommen
 - `--read_counts_sample_col`
 - `--read_counts_reference_col`
 - `--read_counts_reads_col`
+- `--unfiltered_read_length_range <min> <max>`
 - `--rpm_norm_mode total|mt_mrna`
 - `--plot_format png|pdf|svg`
 - `-m, --merge_density`
@@ -193,7 +213,7 @@ These are not all technically mandatory in the parser, but they are the recommen
 ### Human or yeast with default-style analysis
 
 ```bash
-mitoribopy \
+mitoribopy rpf \
   -s h \
   -f <reference.fa> \
   --directory <ribo_bed_dir> \
@@ -228,6 +248,20 @@ mitoribopy \
   --mrna_ref_patterns mt_genome \
   --output <results_dir>
 ```
+
+### Inspect broader read-length QC ranges
+
+```bash
+mitoribopy rpf \
+  -s h \
+  -f <reference.fa> \
+  --directory <ribo_bed_dir> \
+  -rpf 29 34 \
+  --unfiltered_read_length_range 15 60 \
+  --output <results_dir>
+```
+
+This keeps the filtered analysis range at `29-34 nt` while broadening the unfiltered QC tables and heatmaps so longer footprints remain visible.
 
 ### Run optional downstream modules
 
@@ -343,6 +377,7 @@ Key outputs include:
 - frame-usage summaries
 - transcript-level and total codon-usage summaries
 - RPM and raw coverage-profile plots
+- CDS-aware codon-binned coverage plots (`*_codon/`, 3 nt combined per codon)
 - optional structure-density exports from footprint-density tables
 
 ## Important Runtime Notes
