@@ -30,6 +30,9 @@ read_counts_summary.txt
 
 # Generated analysis outputs (dated runs / smoke runs)
 local_reports/
+reports/
+analysis_results/
+results/
 human_compare_asite_20260329/
 human_full_input_phase23/
 human_full_phase23_asite_mt_mrna_20260330/
