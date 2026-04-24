@@ -50,12 +50,18 @@ def build_parser() -> argparse.ArgumentParser:
         description=ALL_SUBCOMMAND_HELP,
         epilog=(
             "This subcommand owns only the orchestrator flags. Stage-specific options live\n"
-            "inside the config file sections whose keys match the subcommand flags:\n"
+            "inside the config file sections whose keys match the subcommand flags\n"
+            "(with dashes replaced by underscores, e.g. '--kit-preset' -> 'kit_preset').\n"
             "  align:  keys for 'mitoribopy align --help'\n"
             "  rpf:    keys for 'mitoribopy rpf --help'\n"
             "  rnaseq: keys for 'mitoribopy rnaseq --help'\n"
             "\n"
-            "Useful commands:\n"
+            "Start a new project:\n"
+            "  mitoribopy all --print-config-template > pipeline_config.yaml\n"
+            "  # edit the file to point at your FASTQs / indexes, then:\n"
+            "  mitoribopy all --config pipeline_config.yaml --output results/\n"
+            "\n"
+            "Inspect a stage's full flag list:\n"
             "  mitoribopy all --show-stage-help align\n"
             "  mitoribopy all --show-stage-help rpf\n"
             "  mitoribopy all --show-stage-help rnaseq"
@@ -118,6 +124,17 @@ def build_parser() -> argparse.ArgumentParser:
             "'mitoribopy all --help' only shows orchestrator-level flags."
         ),
     )
+    parser.add_argument(
+        "--print-config-template",
+        action="store_true",
+        default=False,
+        help=(
+            "Print a commented YAML config template covering every stage "
+            "(align / rpf / rnaseq) with sensible defaults, then exit. "
+            "Pipe this into a file to start a new project: "
+            "'mitoribopy all --print-config-template > pipeline_config.yaml'."
+        ),
+    )
     return parser
 
 
@@ -126,19 +143,37 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _dict_to_argv(section: dict) -> list[str]:
+def _dict_to_argv(section: dict, *, flag_style: str = "hyphen") -> list[str]:
     """Serialize a section dict into a CLI-style argv list.
 
     Rules:
 
-    * Keys with underscores become ``--dashed-form`` flags.
+    * ``flag_style="hyphen"`` (default, for ``align`` and ``rnaseq``):
+      keys with underscores become ``--dashed-form`` flags.
+    * ``flag_style="underscore"`` (for ``rpf``, whose argparse declares
+      its flags with underscores like ``--offset_type``): keys are
+      emitted verbatim with a ``--`` prefix.
     * Boolean ``True`` emits just the flag; ``False`` emits nothing.
-    * Lists are emitted as ``--flag v1 v2 v3`` (nargs="+" style).
+    * Lists / tuples are emitted as ``--flag v1 v2 v3`` (nargs="+" style).
     * ``None`` values are skipped.
+
+    The per-stage ``flag_style`` is necessary because the ``rpf`` stage
+    parser (``pipeline.runner``) declares its flags in the legacy
+    underscore form (``--offset_type``, ``--min_5_offset``, ...), so
+    emitting hyphenated flags would be rejected with
+    ``unrecognized arguments``.
     """
+    if flag_style not in {"hyphen", "underscore"}:
+        raise ValueError(
+            f"flag_style must be 'hyphen' or 'underscore', got {flag_style!r}."
+        )
+
     argv: list[str] = []
     for key, value in section.items():
-        flag = f"--{key.replace('_', '-')}"
+        if flag_style == "underscore":
+            flag = f"--{key.replace('-', '_')}"
+        else:
+            flag = f"--{key.replace('_', '-')}"
         if value is None:
             continue
         if isinstance(value, bool):
@@ -151,6 +186,91 @@ def _dict_to_argv(section: dict) -> list[str]:
             continue
         argv.extend([flag, str(value)])
     return argv
+
+
+# Per-stage config-template comment, also used by --print-config-template.
+_CONFIG_TEMPLATE = """\
+# mitoribopy all --config pipeline_config.yaml --output results/
+#
+# Every key below corresponds one-to-one to the matching subcommand's
+# CLI flag (dashes replaced by underscores). Unset keys fall back to
+# that subcommand's documented default. Omit a whole section to skip
+# that stage; 'mitoribopy all' will record it as skipped in the manifest.
+#
+# Use 'mitoribopy all --show-stage-help {align,rpf,rnaseq}' for the
+# full flag list with defaults.
+
+# ---- align -----------------------------------------------------------------
+align:
+  # Library chemistry
+  kit_preset: custom              # truseq_smallrna | nebnext_smallrna |
+                                  # nebnext_ultra_umi | qiaseq_mirna | custom
+  adapter: null                   # required when kit_preset=custom, else optional
+  adapter_detection: auto         # auto | off | strict
+  umi_length: null                # overrides kit preset
+  umi_position: null              # 5p | 3p
+
+  # Inputs / reference indexes (bowtie2 prefixes built by bowtie2-build)
+  fastq_dir: null
+  # OR explicit list:
+  # fastq:
+  #   - /path/to/sample_A.fq.gz
+  #   - /path/to/sample_B.fq.gz
+  contam_index: null              # REQUIRED: rRNA/tRNA bowtie2 index prefix
+  mt_index: null                  # REQUIRED: mt-transcriptome bowtie2 index prefix
+
+  # Strandedness / length window / MAPQ / dedup
+  library_strandedness: forward   # forward | reverse | unstranded
+  min_length: 15
+  max_length: 45
+  quality: 20
+  mapq: 10
+  seed: 42
+  dedup_strategy: auto            # auto | umi-tools | skip | mark-duplicates
+
+# ---- rpf -------------------------------------------------------------------
+rpf:
+  # Organism + RPF length window
+  strain: h                       # h | y | vm | ym | custom
+  rpf: [29, 34]                   # min and max RPF length
+  fasta: null                     # reference FASTA (mt-transcriptome)
+  directory: null                 # BED input dir (auto-wired from align/bed/)
+
+  # Offset anchor + selection bounds
+  align: stop                     # start | stop
+  offset_type: "5"                # "5" | "3"  (report offsets from the 5' or 3' end)
+  offset_site: p                  # p | a      (P-site vs A-site)
+  offset_pick_reference: p_site
+  min_5_offset: 10
+  max_5_offset: 22
+  min_3_offset: 10
+  max_3_offset: 22
+  offset_mask_nt: 5
+
+  # Output / plotting
+  plot_format: svg                # png | pdf | svg
+  merge_density: true
+  structure_density: false
+
+  # Optional downstream modules
+  cor_plot: false
+  base_sample: null
+
+# ---- rnaseq (optional) -----------------------------------------------------
+# Uncomment + populate de_table to enable the translation-efficiency stage.
+# rnaseq:
+#   de_table: /path/to/de_table.tsv
+#   gene_id_convention: hgnc       # hgnc | ensembl | refseq | entrez
+#   reference_gtf: /path/to/reference.fa  # must match align's --mt-index source
+#   condition_map: /path/to/conditions.tsv
+#   condition_a: control
+#   condition_b: knockdown
+"""
+
+
+def _print_config_template() -> None:
+    """Write the commented config template to stdout."""
+    sys.stdout.write(_CONFIG_TEMPLATE)
 
 
 def _sha256_of(path: Path) -> str | None:
@@ -273,6 +393,10 @@ def run(argv: Iterable[str]) -> int:
     args = parser.parse_args(list(argv))
     common.apply_common_arguments(args)
 
+    if args.print_config_template:
+        _print_config_template()
+        return 0
+
     if args.show_stage_help:
         from . import align as align_cli
         from . import rnaseq as rnaseq_cli
@@ -339,15 +463,20 @@ def run(argv: Iterable[str]) -> int:
         plan: list[str] = []
         if has_align:
             plan.append(
-                "align: " + " ".join(_dict_to_argv(config.get("align", {})))
+                "align: "
+                + " ".join(_dict_to_argv(config.get("align", {}), flag_style="hyphen"))
             )
         if has_rpf:
             plan.append(
-                "rpf: " + " ".join(_dict_to_argv(config.get("rpf", {})))
+                "rpf: "
+                + " ".join(
+                    _dict_to_argv(config.get("rpf", {}), flag_style="underscore")
+                )
             )
         if has_rnaseq and has_de_table:
             plan.append(
-                "rnaseq: " + " ".join(_dict_to_argv(config.get("rnaseq", {})))
+                "rnaseq: "
+                + " ".join(_dict_to_argv(config.get("rnaseq", {}), flag_style="hyphen"))
             )
         if not plan:
             plan.append("(no stages selected after --skip-*/config evaluation)")
@@ -368,7 +497,7 @@ def run(argv: Iterable[str]) -> int:
         if args.resume and _should_skip_align(run_root):
             stages_skipped.append("align")
         else:
-            align_argv = _dict_to_argv(config["align"])
+            align_argv = _dict_to_argv(config["align"], flag_style="hyphen")
             rc = align_cli.run(align_argv)
             if rc != 0:
                 print(
@@ -385,7 +514,7 @@ def run(argv: Iterable[str]) -> int:
         if args.resume and _should_skip_rpf(run_root):
             stages_skipped.append("rpf")
         else:
-            rpf_argv = _dict_to_argv(config["rpf"])
+            rpf_argv = _dict_to_argv(config["rpf"], flag_style="underscore")
             rc = rpf_cli.run(rpf_argv)
             if rc != 0:
                 print(
@@ -402,7 +531,7 @@ def run(argv: Iterable[str]) -> int:
         if args.resume and _should_skip_rnaseq(run_root):
             stages_skipped.append("rnaseq")
         else:
-            rnaseq_argv = _dict_to_argv(config["rnaseq"])
+            rnaseq_argv = _dict_to_argv(config["rnaseq"], flag_style="hyphen")
             rc = rnaseq_cli.run(rnaseq_argv)
             if rc != 0:
                 print(

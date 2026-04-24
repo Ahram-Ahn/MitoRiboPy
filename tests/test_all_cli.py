@@ -40,6 +40,52 @@ def test_dict_to_argv_handles_scalars_bools_and_lists() -> None:
     assert argv[idx + 2] == "mt-mrna"
 
 
+def test_dict_to_argv_underscore_style_preserves_underscores() -> None:
+    """rpf's argparse declares --offset_type etc. with underscores, so the
+    orchestrator must NOT hyphen-convert when serializing the rpf section."""
+    argv = all_cli._dict_to_argv(
+        {
+            "offset_type": "5",
+            "min_5_offset": 10,
+            "mrna_ref_patterns": ["mt_genome", "mt-mrna"],
+            "merge_density": True,
+        },
+        flag_style="underscore",
+    )
+    assert "--offset_type" in argv and "--offset-type" not in argv
+    assert "--min_5_offset" in argv and "--min-5-offset" not in argv
+    assert "--mrna_ref_patterns" in argv
+    assert "--merge_density" in argv
+
+
+def test_dict_to_argv_rejects_unknown_flag_style() -> None:
+    with pytest.raises(ValueError):
+        all_cli._dict_to_argv({"x": 1}, flag_style="weird")
+
+
+def test_dict_to_argv_round_trip_preserves_list_and_bool() -> None:
+    """Serializing and re-parsing preserves list-valued and boolean flags."""
+    import argparse
+
+    section = {
+        "rpf": [29, 34],
+        "mrna_ref_patterns": ["mt_genome", "mt-mrna"],
+        "merge_density": True,
+        "structure_density": False,
+    }
+    argv = all_cli._dict_to_argv(section, flag_style="hyphen")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rpf", nargs="+", type=int)
+    parser.add_argument("--mrna-ref-patterns", nargs="+")
+    parser.add_argument("--merge-density", action="store_true")
+    parser.add_argument("--structure-density", action="store_true")
+    ns = parser.parse_args(argv)
+    assert ns.rpf == [29, 34]
+    assert ns.mrna_ref_patterns == ["mt_genome", "mt-mrna"]
+    assert ns.merge_density is True
+    assert ns.structure_density is False  # bool False was dropped entirely
+
+
 # ---------- CLI help / dry-run ---------------------------------------------
 
 
@@ -89,7 +135,9 @@ def test_all_dry_run_with_config_lists_per_stage_argv(tmp_path, capsys) -> None:
     assert "rpf: " in out
     assert "rnaseq: " in out
     assert "--gene-id-convention hgnc" in out
-    assert "--read-counts-file" in out
+    # rpf uses underscored flag style because pipeline.runner declares
+    # --read_counts_file that way. The orchestrator must emit it verbatim.
+    assert "--read_counts_file" in out
 
 
 def test_all_show_stage_help_prints_full_stage_help(capsys) -> None:
@@ -98,6 +146,47 @@ def test_all_show_stage_help_prints_full_stage_help(capsys) -> None:
     out = capsys.readouterr().out
     assert "Run the standalone MitoRiboPy Ribo-seq pipeline." in out
     assert "--unfiltered_read_length_range" in out
+
+
+def test_all_print_config_template_exits_zero_with_all_three_sections(capsys) -> None:
+    exit_code = cli.main(["all", "--print-config-template"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "align:" in out
+    assert "rpf:" in out
+    assert "rnaseq:" in out.lower()  # rnaseq is commented out, but the header appears
+    # Template is valid YAML (the active parts, at least).
+    import yaml
+
+    yaml_text = out
+    parsed = yaml.safe_load(yaml_text)
+    assert "align" in parsed and "rpf" in parsed
+
+
+def test_all_dry_run_rpf_section_uses_underscored_flags(tmp_path, capsys) -> None:
+    """Regression: the rpf parser declares --offset_type with underscores,
+    so the dry-run plan must emit underscored flags for rpf."""
+    cfg = tmp_path / "p.yaml"
+    cfg.write_text(
+        "rpf:\n"
+        "  strain: h\n"
+        "  offset_type: '5'\n"
+        "  offset_site: p\n"
+        "  min_5_offset: 10\n"
+        "  merge_density: true\n"
+    )
+    exit_code = cli.main([
+        "all",
+        "--dry-run",
+        "--config", str(cfg),
+        "--output", str(tmp_path / "out"),
+    ])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "--offset_type 5" in out
+    assert "--offset-type" not in out
+    assert "--min_5_offset 10" in out
+    assert "--merge_density" in out
 
 
 # ---------- required args ---------------------------------------------------
