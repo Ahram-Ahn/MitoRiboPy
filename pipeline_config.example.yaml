@@ -1,0 +1,229 @@
+# MitoRiboPy -- exhaustive pipeline_config example.
+#
+# Every flag from `mitoribopy align --help`, `mitoribopy rpf --help`,
+# and `mitoribopy rnaseq --help` is listed here with its default value
+# and a one-line comment, so you can see exactly what is being passed
+# to each stage. Copy this file, edit the values you care about, and
+# run:
+#
+#   mitoribopy all --config pipeline_config.example.yaml --output results/
+#
+# The values below match the defaults baked into the code (no drift).
+# Keys with `null` are off / left to the stage's own resolver. Booleans
+# emit the bare flag (`true`) or are omitted entirely (`false`); a list
+# becomes `--flag v1 v2 v3`.
+#
+# A curated minimal version of this template is also available at
+# runtime:
+#
+#   mitoribopy all --print-config-template > pipeline_config.yaml
+#
+# For the full per-flag help text, run:
+#
+#   mitoribopy <subcommand> --help
+#   mitoribopy all --show-stage-help <align|rpf|rnaseq>
+
+
+# ============================================================================
+# align
+# ============================================================================
+align:
+
+  # --- Inputs (REQUIRED for non-dry-run) -----------------------------------
+  fastq: input_data/                       # directory shortcut OR list of paths;
+                                           # accepts *.fq, *.fq.gz, *.fastq, *.fastq.gz
+  contam_index: input_data/indexes/rrna_contam   # bowtie2 prefix; REQUIRED
+  mt_index: input_data/indexes/mt_tx       # bowtie2 prefix; REQUIRED
+  # output is set automatically by `mitoribopy all` to <run_root>/align/
+
+  # --- Library prep / kit ---------------------------------------------------
+  kit_preset: auto                         # auto | illumina_smallrna | illumina_truseq |
+                                           #   illumina_truseq_umi | qiaseq_mirna |
+                                           #   pretrimmed | custom
+                                           # Vendor synonyms (truseq_smallrna,
+                                           # nebnext_smallrna, nebnext_ultra_umi,
+                                           # truseq_stranded_total, smarter_pico_v3,
+                                           # sequoia_express) are also accepted.
+  adapter: null                            # explicit 3' adapter (REQUIRED when kit_preset=custom)
+  umi_length: null                         # global UMI override; null -> use kit-preset default
+  umi_position: null                       # 5p | 3p; null -> use kit-preset default
+
+  # --- Per-sample overrides (mixed-UMI batches) -----------------------------
+  # Use this when each sample's UMI / kit is different. The orchestrator
+  # materialises this block as <output>/align/sample_overrides.tsv and
+  # feeds it to `mitoribopy align --sample-overrides`. Any field left
+  # unset on a sample falls through to the global default above.
+  # samples:
+  #   - name: sampleA                      # FASTQ basename without .fq[.gz]
+  #     kit_preset: illumina_truseq_umi
+  #     umi_length: 8
+  #     umi_position: 5p
+  #   - name: sampleB
+  #     kit_preset: qiaseq_mirna
+  #     umi_length: 12
+  #     umi_position: 3p
+  #   - name: sampleC                      # SRA-deposited, already adapter-clipped
+  #     kit_preset: pretrimmed
+  #     umi_length: 0
+
+  # --- Adapter detection ----------------------------------------------------
+  adapter_detection: auto                  # auto | off | strict
+  adapter_detect_reads: 5000               # head-of-FASTQ scan size
+  adapter_detect_min_rate: 0.30            # min match rate to call a kit detected
+  adapter_detect_min_len: 12               # adapter prefix length used as the scan needle
+  adapter_detect_pretrimmed_threshold: 0.05  # all-kits below this -> classify as pretrimmed
+  # allow_pretrimmed_inference: true       # set false to disable the pretrimmed auto-fallback
+
+  # --- Trim / align ---------------------------------------------------------
+  library_strandedness: forward            # forward | reverse | unstranded
+  min_length: 15                           # cutadapt --minimum-length
+  max_length: 45                           # cutadapt --maximum-length
+  quality: 20                              # cutadapt 3' quality trim threshold
+  mapq: 10                                 # MAPQ threshold (NUMT suppression)
+  seed: 42                                 # bowtie2 --seed (deterministic output)
+
+  # --- Deduplication --------------------------------------------------------
+  dedup_strategy: auto                     # auto | umi-tools | skip | mark-duplicates
+                                           # auto -> umi-tools when UMIs present, skip otherwise.
+                                           # When the resolved strategy is `skip`, the orchestrator
+                                           # wires aligned/<sample>.mapq.bam straight into BED
+                                           # conversion -- no duplicate dedup.bam is written.
+  umi_dedup_method: unique                 # unique | percentile | cluster | adjacency | directional
+  # i_understand_mark_duplicates_destroys_mt_ribo_seq_signal: false  # required to opt into mark-duplicates
+
+  # --- Intermediate files + resume -----------------------------------------
+  keep_intermediates: false                # default false -> trimmed.fq.gz, nocontam.fq.gz,
+                                           # pre-MAPQ .bam are deleted as soon as the next
+                                           # step consumes them; set true for debugging.
+  # resume: false                          # auto-set by `mitoribopy all --resume` when
+                                           # read_counts.tsv is missing; reloads samples
+                                           # whose .sample_done/<sample>.json marker exists.
+
+
+# ============================================================================
+# rpf
+# ============================================================================
+rpf:
+
+  # --- Core inputs (REQUIRED) -----------------------------------------------
+  fasta: input_data/human-mt-mRNA.fasta    # mt-transcriptome FASTA; REQUIRED
+  # directory is auto-wired to <run_root>/align/bed when align ran.
+  bam_mapq: 10                             # MAPQ threshold for BAM inputs (BAM->BED6)
+
+  # --- Organism / strain ---------------------------------------------------
+  strain: h.sapiens                        # h.sapiens | s.cerevisiae | custom
+                                           # Synonyms `h` and `y` are accepted.
+                                           # `custom` requires --annotation_file plus
+                                           # --codon_table_name (built-in NCBI Genetic
+                                           # Codes list) or --codon_tables_file.
+  annotation_file: null                    # CSV (REQUIRED for --strain custom)
+  codon_tables_file: null                  # custom JSON (only when your code is not
+                                           # in the bundled NCBI list)
+  codon_table_name: null                   # NCBI Genetic Code name (e.g.
+                                           # vertebrate_mitochondrial,
+                                           # mold_mitochondrial,
+                                           # invertebrate_mitochondrial). Run
+                                           # `mitoribopy rpf --help` for the full
+                                           # list of 27 bundled tables.
+  start_codons: null                       # override strain default
+  atp8_atp6_baseline: ATP6                 # ATP6 | ATP8 -- baseline for the bicistronic pair
+  nd4l_nd4_baseline: ND4                   # ND4  | ND4L
+
+  # --- RPF length window ----------------------------------------------------
+  footprint_class: monosome                # short | monosome | disome | custom
+                                           # short:    h.sapiens / s.cerevisiae 16-24 nt
+                                           # monosome: h.sapiens 28-34, s.cerevisiae 37-41
+                                           # disome:   h.sapiens 50-70, s.cerevisiae 60-90
+  rpf: [29, 34]                            # explicit [min, max] (overrides footprint_class)
+  unfiltered_read_length_range: [15, 50]   # range used in the unfiltered-length QC heatmap;
+                                           # auto-widened by --footprint_class when not set
+
+  # --- Offset enrichment + selection ----------------------------------------
+  align: start                             # start | stop -- which anchor codon to align to
+  range: 20                                # plot offsets from -range to +range
+  min_offset: 11                           # shared min absolute offset (legacy fallback)
+  max_offset: 20                           # shared max absolute offset (legacy fallback)
+  min_5_offset: null                       # end-specific 5' min (preferred over shared)
+  max_5_offset: null                       # end-specific 5' max
+  min_3_offset: null                       # end-specific 3' min
+  max_3_offset: null                       # end-specific 3' max
+  offset_mask_nt: 5                        # mask -N..-1 and +1..+N near the anchor codon
+  offset_pick_reference: p_site            # p_site | reported_site
+                                           # p_site:        pick in canonical P-site space then convert
+                                           # reported_site: pick directly in --offset_site space
+  offset_type: "5"                         # 5 | 3 -- which read end the offset is measured from
+  offset_site: p                           # p | a -- coordinate space of the SELECTED OFFSETS table
+  analysis_sites: both                     # p | a | both -- which downstream sites to generate
+  codon_overlap_mode: full                 # full | any -- full: read must span all 3 nt of
+                                           # the anchor codon; any: any 1+ nt overlap counts
+  psite_offset: null                       # fixed offset for every read length (bypass enrichment)
+  offset_mode: per_sample                  # per_sample | combined
+
+  # --- Outputs + plotting ---------------------------------------------------
+  # output is auto-wired to <run_root>/rpf when running through `mitoribopy all`.
+  downstream_dir: footprint_density        # per-sample subdir for frame and codon analyses
+  plot_dir: plots_and_csv                  # subdir for offset CSVs and plots
+  plot_format: png                         # png | pdf | svg
+  x_breaks: null                           # custom x-axis tick marks for offset line plots
+  line_plot_style: combined                # combined | separate -- 5'/3' panels
+  cap_percentile: 0.999                    # upper percentile cap for coverage-style plots
+  codon_density_window: false              # sum coverage at codon centre +/- 1 nt for codon
+                                           # density tables / plots (smooths short-window noise)
+  order_samples: null                      # explicit sample order for plots
+
+  # --- Read-count normalization --------------------------------------------
+  read_counts_file: read_counts_summary.txt   # auto-wired to align/read_counts.tsv when align ran
+  read_counts_sample_col: null             # column override (null -> auto-detect)
+  read_counts_reads_col: null
+  read_counts_reference_col: null          # used when rpm_norm_mode=mt_mrna
+  rpm_norm_mode: total                     # total | mt_mrna
+  mt_mrna_substring_patterns:              # used when rpm_norm_mode=mt_mrna
+    - mt_genome
+    - mt-mrna
+    - mt_mrna
+
+  # --- Optional modules -----------------------------------------------------
+  structure_density: false                 # export log2 + scaled density values
+  structure_density_norm_perc: 0.99        # upper percentile used to cap structure density
+
+  cor_plot: false                          # publication-quality codon-correlation scatter
+  base_sample: null                        # reference sample (REQUIRED when cor_plot=true)
+  cor_mask_method: percentile              # percentile | fixed | none
+  cor_mask_percentile: 0.99                # used when cor_mask_method=percentile
+  cor_mask_threshold: null                 # used when cor_mask_method=fixed
+
+
+# ============================================================================
+# rnaseq (optional)  --  uncomment + set de_table to enable.
+# ============================================================================
+# rnaseq:
+#
+#   # --- DE table ----------------------------------------------------------
+#   de_table: results/de.tsv               # DESeq2 / Xtail / Anota2Seq output
+#   de_format: auto                        # auto | deseq2 | xtail | anota2seq | custom
+#   de_gene_col: null                      # only when de_format=custom
+#   de_log2fc_col: null
+#   de_padj_col: null
+#   de_basemean_col: null
+#
+#   # --- Gene identifier convention (REQUIRED, no default) -----------------
+#   gene_id_convention: hgnc               # ensembl | refseq | hgnc | mt_prefixed | bare
+#   organism: h.sapiens                    # h.sapiens | s.cerevisiae
+#                                          # Synonyms: h, y, human, yeast.
+#
+#   # --- Ribo-seq inputs ---------------------------------------------------
+#   # ribo_dir is auto-wired to <run_root>/rpf when rpf ran.
+#   # ribo_counts: results/rpf/rpf_counts.tsv  # explicit override
+#
+#   # --- Reference-consistency gate (exactly one) --------------------------
+#   reference_gtf: input_data/human-mt-mRNA.fasta   # SHA256-hash-compared against
+#                                                    # rpf's reference_checksum
+#   # reference_checksum: <sha256>            # OR pre-computed checksum
+#
+#   # --- Conditions (optional; required for replicate-based dTE) ----------
+#   condition_map: samples.tsv               # TSV with `sample` and `condition` columns
+#   condition_a: control
+#   condition_b: knockdown
+#
+#   # output is auto-wired to <run_root>/rnaseq when running through
+#   # `mitoribopy all`.
