@@ -7,6 +7,96 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-25
+
+### Added
+- **Per-sample UMI / kit overrides** via `align.samples:` YAML list (or
+  `--sample-overrides TSV`). Each sample can independently set
+  `kit_preset`, `adapter`, `umi_length`, `umi_position`, `dedup_strategy`.
+  Overrides are reported in `kit_resolution.tsv` with a
+  `per_sample_override:*` source label.
+- **`short` footprint class** (16-24 nt RNase truncation products);
+  unfiltered window 10-30 nt. Same defaults across `h.sapiens` and
+  `s.cerevisiae`.
+- **Per-sample resume markers** at `<output>/.sample_done/<sample>.json`.
+  `mitoribopy align --resume` (auto-set by `mitoribopy all --resume`
+  when `read_counts.tsv` is missing) reloads completed samples from
+  marker JSON instead of re-running. Markers are written atomically.
+- **`--keep-intermediates` flag** to retain the trimmed FASTQ /
+  contam-filtered FASTQ / pre-MAPQ BAM that are otherwise deleted as
+  soon as the next step consumes them.
+- **PyPI install** path: `pip install mitoribopy`.
+- **Custom organisms section in README** documenting the codon-table
+  picker (NCBI Genetic Codes by organism group), annotation CSV
+  schema, and a worked mouse mt example.
+- **Comprehensive `pipeline_config.example.yaml`** at the repo root
+  showing every flag with its default and a 1-line comment.
+- **Four new pipeline diagrams** under `docs/diagrams/` (PNG, >=1920 px
+  wide): pipeline overview + per-stage detail. Generated with
+  `python docs/diagrams/render_diagrams.py` (matplotlib; no Node
+  required).
+
+### Changed
+- **Strain values renamed** to species names: `h` -> `h.sapiens`
+  (default), `y` -> `s.cerevisiae`. `vm` and `ym` removed; use
+  `--strain custom` and pick a built-in NCBI Genetic Code with
+  `--codon_table_name`. Old short forms `h` and `y` are accepted as
+  deprecated synonyms with a one-line `[mitoribopy] DEPRECATED:`
+  warning.
+- **Output layout unified** under per-stage roots:
+  `translation_profile/<sample>/{p,a}/...` and
+  `coverage_profile_plots/{read_coverage_*, {p,a}/site_density_*}/`.
+  The `translation_profile_p/`/`translation_profile_a/` and
+  `coverage_profile_plots_p/`/`coverage_profile_plots_a/` split
+  directories are gone. `read_coverage_*` plots are written once per
+  run instead of duplicated per site.
+- **`p_site_coverage_*` subdirs renamed to `site_density_*`** under the
+  per-site (`p/` or `a/`) parent.
+- **`footprint_density.csv` columns** are now
+  `Position, Nucleotide, A_site, P_site`. `E_site` (always
+  `P_site - 3`) and `*_selected_depth` (an outlier-capped duplicate)
+  removed; A-site comes before P-site.
+- **`disome` footprint windows rebalanced** to current literature:
+  `h.sapiens` 50-70 (was 60-90), `s.cerevisiae` 60-90 (was 65-95).
+  Disome unfiltered window tightened to 40-100 nt.
+- **`dedup_strategy=skip` no longer writes a duplicate BAM** under
+  `deduped/`. The orchestrator wires `aligned/<sample>.mapq.bam`
+  straight into BED conversion for no-UMI samples.
+- **Codon-correlation scatter is now publication-ready**: identity
+  line, OLS regression, `r / R^2 / p / slope / intercept / N` stat
+  box, leader-line labels for top-10 residual codons (no overlap),
+  Okabe-Ito colour-blind-safe palette, SVG + 300 dpi PNG outputs.
+- **Renamed CLI flags** with deprecated synonyms: `--merge_density` ->
+  `--codon_density_window`; `--mrna_ref_patterns` ->
+  `--mt_mrna_substring_patterns`; `--offset_pick_reference selected_site`
+  -> `reported_site`. All old names emit a one-line
+  `[mitoribopy] DEPRECATED:` notice on first use.
+- **README rewritten as a standalone reference** (no version-history
+  language). Synonyms for deprecated flags listed in one neutral
+  table.
+- **Tutorial 01 rewritten** against the current API (output tree,
+  YAML config, codon-usage paths).
+
+### Removed
+- **`debug_csv/`** subdirectory under translation-profile output --
+  unread by anything downstream.
+- **Strain values `vm` and `ym`** (use `--strain custom`).
+- **`src/mitoribopy/utils/`** empty subpackage scaffold.
+- **`pipeline_config.example.json`** -- replaced by
+  `pipeline_config.example.yaml` which is YAML, supports comments, and
+  matches the actual three-section shape that `mitoribopy all --config`
+  expects.
+- **Mermaid diagram sources** (`docs/diagrams/*.mmd`) and the
+  `generate_mitoribopy_diagram.py` / `render_mitoribopy_diagram.sh`
+  helpers -- replaced by `render_diagrams.py` + checked-in PNGs.
+
+### Fixed
+- **Two-pass 3' UMI cutadapt** (QIAseq miRNA and similar) now uses
+  `min_length + umi_length` for pass 1, so the post-pass-2 insert is
+  guaranteed to meet the user-requested minimum length floor. Without
+  this fix, a 12 nt UMI with the default `--min-length 15` could
+  produce 3 nt inserts.
+
 ## [0.4.1] - 2026-04-24
 
 ### Added
