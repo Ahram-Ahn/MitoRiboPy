@@ -204,6 +204,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     library.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip samples that have already completed in a previous "
+            "invocation against this --output directory. Each completed "
+            "sample writes a small JSON file under "
+            "<output>/.sample_done/; on resume, samples whose JSON is "
+            "present and parses are reloaded instead of re-run. Use this "
+            "after a crash or kill mid-batch to avoid redoing the "
+            "samples that already finished. The orchestrator "
+            "('mitoribopy all --resume') sets this automatically when "
+            "the align stage's read_counts.tsv is missing."
+        ),
+    )
+    library.add_argument(
         "--adapter-detection",
         choices=["auto", "off", "strict"],
         default="auto",
@@ -658,6 +674,52 @@ def _process_one_sample(
     )
 
 
+def _sample_done_path(sample_done_dir: Path, sample: str) -> Path:
+    """Return the per-sample done-marker JSON path."""
+    return Path(sample_done_dir) / f"{sample}.json"
+
+
+def _write_sample_done(sample_done_dir: Path, counts: SampleCounts) -> Path:
+    """Persist a per-sample completion marker so --resume can skip it later.
+
+    The JSON body is the full :class:`SampleCounts` dict so we can rebuild
+    the read_counts.tsv row without re-running the sample. Written
+    atomically (write to .tmp, then rename) so a kill mid-write cannot
+    leave a half-flushed marker that would silently feed a wrong row
+    into the aggregated table.
+    """
+    sample_done_dir = Path(sample_done_dir)
+    sample_done_dir.mkdir(parents=True, exist_ok=True)
+    target = _sample_done_path(sample_done_dir, counts.sample)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(asdict(counts), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    tmp.replace(target)
+    return target
+
+
+def _load_sample_done(
+    sample_done_dir: Path, sample: str
+) -> SampleCounts | None:
+    """Load a per-sample done marker; return None if absent or malformed."""
+    path = _sample_done_path(sample_done_dir, sample)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    try:
+        return SampleCounts(**payload)
+    except TypeError:
+        # Schema drift: an old marker from a previous version that no
+        # longer fits SampleCounts. Treat as missing so the sample
+        # re-runs cleanly.
+        return None
+
+
 def _maybe_unlink(path: Path, *, keep: bool) -> None:
     """Best-effort delete an intermediate file unless the user asked to keep them."""
     if keep:
@@ -943,6 +1005,11 @@ def run(argv: Iterable[str]) -> int:
         inputs=inputs,
     )
 
+    sample_done_dir = output_dir / ".sample_done"
+    resume_active = bool(getattr(args, "resume", False))
+    if resume_active:
+        sample_done_dir.mkdir(parents=True, exist_ok=True)
+
     rows: list[SampleCounts] = []
     for index, resolution in enumerate(resolutions, start=1):
         log_progress(
@@ -951,11 +1018,27 @@ def run(argv: Iterable[str]) -> int:
             len(resolutions),
             f"Processing sample {index}/{len(resolutions)} ({resolution.sample}).",
         )
+
+        cached = (
+            _load_sample_done(sample_done_dir, resolution.sample)
+            if resume_active
+            else None
+        )
+        if cached is not None:
+            log_info(
+                "ALIGN",
+                f"{resolution.sample}: resumed from "
+                f".sample_done/{resolution.sample}.json (already complete).",
+            )
+            rows.append(cached)
+            continue
+
         counts = _process_one_sample(
             output_dir=output_dir,
             args=args,
             resolution=resolution,
         )
+        _write_sample_done(sample_done_dir, counts)
         rows.append(counts)
         log_info(
             "ALIGN",
