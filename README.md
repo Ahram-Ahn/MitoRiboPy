@@ -528,11 +528,11 @@ Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with
 | `--min_5_offset NT`, `--max_5_offset NT` | from `--min_offset` / `--max_offset` | End-specific 5' selection bounds. **Preferred** over the shared bounds. |
 | `--min_3_offset NT`, `--max_3_offset NT` | from `--min_offset` / `--max_offset` | End-specific 3' selection bounds. **Preferred**. |
 | `--offset_mask_nt NT` | 5 | Mask near-anchor bins from -N..-1 and +1..+N in summaries and plots. |
-| `--offset_pick_reference {selected_site,p_site}` | `p_site` | `p_site`: pick in canonical P-site space, then convert to the reported space. `selected_site`: pick directly in the final `--offset_site` space (legacy). |
+| `--offset_pick_reference {p_site,reported_site}` | `p_site` | `p_site`: pick in canonical P-site space, then convert to the reported space. `reported_site`: pick directly in the final `--offset_site` space (no P↔A conversion). The legacy value `selected_site` is accepted as a deprecated alias for `reported_site`. |
 | `--offset_type {5,3}` | `5` | Which read end the offset is measured from. |
 | `--offset_site {p,a}` | `p` | Coordinate space for the SELECTED OFFSETS table (the values in `p_site_offsets_<align>.csv`). Does NOT control which downstream outputs are generated; use `--analysis_sites` for that. |
 | `--analysis_sites {p,a,both}` | `both` | Which downstream sites to generate. `both` writes parallel P-site and A-site codon usage + coverage plots, side by side under per-site subdirs. `p` or `a` restricts to one site (legacy single-directory layout). |
-| `--codon_overlap_mode {full,any}` | `full` | `full`: read must span all 3 nt of the anchor codon. `any`: any partial overlap counts. |
+| `--codon_overlap_mode {full,any}` | `full` | How a read counts toward the codon-level enrichment table at the anchor codon. `full` (default, right for ribo-seq): the read must cover ALL 3 nt of the anchor codon. Example with anchor codon at positions 101–103 — a 30-nt read at 100–129 counts (read covers 101, 102, 103); a read at 102–131 does NOT count (does not cover 101). `any`: any 1-nt overlap counts; the same 102–131 read above WOULD count. Use `any` only for very short reads relative to a codon (rare for ribo-seq). |
 | `-p, --psite_offset NT` | — | Use one fixed offset for every read length and sample. Bypasses enrichment-based selection. |
 | `--offset_mode {per_sample,combined}` | `per_sample` | `per_sample`: each sample uses its own offsets; drift surfaced in `offset_drift_<align>.svg`. `combined`: pool all samples and apply one table (v0.3.x behaviour). |
 
@@ -547,7 +547,7 @@ Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with
 | `--x_breaks NT [NT ...]` | — | Optional custom x-axis tick marks for offset line plots. |
 | `--line_plot_style {combined,separate}` | `combined` | Draw 5'/3' offsets in one panel or two. |
 | `--cap_percentile FRAC` | 0.999 | Upper percentile cap for coverage-style plots. |
-| `-m, --merge_density` | off | Collapse frame 1 and frame 2 into frame 0 for codon-density summaries. |
+| `-m, --codon_density_window` | off | When set, the codon-level density at each codon centre is summed with its ±1 nt neighbours (a 3-nt sliding window) before being written into the codon coverage / usage tables and plots. Smooths short-window noise around the codon centre; does **not** collapse reading frames despite the historical flag name `--merge_density` (which is kept as a deprecated alias). |
 | `--order_samples NAME [NAME ...]` | — | Optional explicit sample order for plots and aggregated outputs. |
 
 #### Read-count normalization
@@ -560,7 +560,7 @@ Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with
 | `--read_counts_reference_col NAME` | auto | Reference column override; needed for `--rpm_norm_mode mt_mrna` if auto-detection fails. |
 | `--unfiltered_read_length_range MIN MAX` | `[15, 50]` | Range for the unfiltered QC summary and heatmaps. Broaden for disome studies. |
 | `--rpm_norm_mode {total,mt_mrna}` | `total` | RPM denominator: sum all rows or only mt-mRNA rows. |
-| `--mrna_ref_patterns PATTERN [PATTERN ...]` | `mt_genome mt-mrna mt_mrna` | Substring patterns identifying mt-mRNA rows for `--rpm_norm_mode mt_mrna`. |
+| `--mt_mrna_substring_patterns PATTERN [PATTERN ...]` | `mt_genome mt-mrna mt_mrna` | When `--rpm_norm_mode mt_mrna` is selected, the RPM denominator uses only rows from the read-count table whose value in the reference column (set via `--read_counts_reference_col`, or auto-detected) contains ANY of these substrings. Example: in a read-count table with rows for `rrna`, `trna`, `mt_mrna_ND1`, and `mt_mrna_COX1`, the default pattern keeps the latter two and drops the (r/t)RNA rows. The legacy flag name `--mrna_ref_patterns` is kept as a deprecated alias. |
 
 #### Optional modules
 
@@ -575,6 +575,16 @@ Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with
 | `--cor_mask_threshold FLOAT` | — | Used when `--cor_mask_method fixed`. |
 
 `--use_rna_seq` is **deprecated** in v0.3.0 and **removed** in v0.4.0+ — use the dedicated `mitoribopy rnaseq` subcommand instead.
+
+#### Deprecated CLI / YAML aliases (still accepted)
+
+| Old name | Canonical name | Notes |
+|---|---|---|
+| `--merge_density`, YAML `merge_density:` | `--codon_density_window`, YAML `codon_density_window:` | Renamed because the old name implied "frame collapse" but the flag actually applies a ±1 nt smoothing window around the codon centre. |
+| `--mrna_ref_patterns`, YAML `mrna_ref_patterns:` | `--mt_mrna_substring_patterns`, YAML `mt_mrna_substring_patterns:` | Renamed for self-documentation: the value is a list of substrings matched against the read-count table's reference column. |
+| `--offset_pick_reference selected_site` | `--offset_pick_reference reported_site` | Renamed because "selected_site" was indistinguishable from `--offset_site` at a glance; the new name says exactly what it does (pick in the reported coordinate space). |
+
+The deprecated names emit a single `[mitoribopy] DEPRECATED:` line to stderr the first time they are encountered, then keep working.
 
 ---
 
@@ -711,7 +721,6 @@ For an `mitoribopy all` run with the v0.4.1 defaults (`--offset_mode per_sample`
         translating_frame/             # frame_usage_total.csv, frame_usage_by_transcript.csv
         codon_usage/                   # codon_usage_<transcript>.csv, codon_usage_total.csv,
                                        # a_site_codon_usage_<transcript>.csv, ...
-        debug_csv/                     # raw position-by-transcript CSV dumps for debugging
     translation_profile_a/             # A-site outputs (when analysis_sites=both); same shape
       <sample>/...
     coverage_profile_plots_p/          # per-site coverage plots
@@ -892,7 +901,9 @@ mitoribopy all --config pipeline_config.yaml --output results/ --resume
 
 ### H. Pre-trimmed inputs (e.g. SRA-deposited)
 
-No special configuration needed — when adapter detection finds 0% across every kit, the resolver falls through to the `pretrimmed` kit automatically and cutadapt skips the `-a` flag. To opt in explicitly:
+The `pretrimmed` preset name describes the **input state** ("the FASTQ has already been adapter-clipped"), not an action this pipeline takes. SRA-deposited FASTQs typically arrive in this state — the adapter and (when present) the UMI are already stripped before upload.
+
+No special configuration is needed — when adapter detection finds 0% across every kit, the resolver falls through to the `pretrimmed` kit automatically and cutadapt skips the `-a` flag (length and quality filtering still run). To opt in explicitly:
 
 ```yaml
 align:
@@ -900,6 +911,45 @@ align:
 ```
 
 To force the v0.4.0 hard-fail behaviour back: pass `--no-pretrimmed-inference` (or set `allow_pretrimmed_inference: false` in YAML).
+
+> **Wording note:** `pretrimmed` describes the input. The per-sample read-count column `post_trim` describes the output stage (read count **after** the cutadapt step has run, regardless of whether anything was actually clipped).
+
+### I. Per-sample UMI / kit overrides (mixed-UMI batches)
+
+When samples in the same batch have different UMI lengths or positions (e.g. one library preps with the NEBNext UMI 5' kit, another with QIAseq miRNA 3' UMI, a third already-trimmed from SRA), put a per-sample list under `align.samples:`:
+
+```yaml
+align:
+  kit_preset: auto                 # global default for samples not listed below
+  fastq: input_data/seq            # FASTQ directory
+  contam_index: input_data/indexes/rrna_contam
+  mt_index: input_data/indexes/mt_tx
+  samples:
+    - name: sampleA                # FASTQ basename (sampleA.fq.gz -> sampleA)
+      kit_preset: illumina_truseq_umi
+      umi_length: 8
+      umi_position: 5p
+    - name: sampleB
+      kit_preset: qiaseq_mirna
+      umi_length: 12
+      umi_position: 3p
+    - name: sampleC                # SRA-deposited, already adapter-clipped
+      kit_preset: pretrimmed
+      umi_length: 0
+```
+
+`mitoribopy all` materializes this block as a sidecar file at `<output>/align/sample_overrides.tsv` and passes it to `mitoribopy align` via `--sample-overrides`. Any field left unset in a sample entry falls through to the global default for that field, so a sample can override only its UMI length without restating the rest of the kit. Per-sample overrides are reported in `kit_resolution.tsv` with a `source` column starting with `per_sample_override:` so the provenance file tells the truth.
+
+You can also write the TSV by hand and skip the YAML samples list:
+
+```
+sample      kit_preset            adapter  umi_length  umi_position  dedup_strategy
+sampleA     illumina_truseq_umi              8           5p
+sampleB     qiaseq_mirna                     12          3p
+sampleC     pretrimmed                       0
+```
+
+then call `mitoribopy align --sample-overrides path/to/overrides.tsv …`.
 
 ---
 
