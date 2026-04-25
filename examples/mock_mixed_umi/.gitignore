@@ -1,0 +1,7 @@
+# Generated artefacts. Regenerate with `python make_mock.py`
+# and `bash build_indexes.sh`.
+indexes/
+*.fq.gz
+*.fastq.gz
+human-mt-mRNA.mini.fasta
+human_rrna.mini.fa

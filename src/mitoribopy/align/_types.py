@@ -100,11 +100,13 @@ KIT_PRESETS: dict[str, KitPreset] = {
         umi_length=0,
         umi_position="5p",
         description=(
-            "FASTQs that have already been adapter-trimmed (e.g. SRA-deposited "
-            "data, or output of a prior trim step). cutadapt still runs for "
-            "length and quality filtering but skips the -a flag. Auto-inferred "
-            "when no known kit signature is found across every preset; can "
-            "also be set explicitly to skip detection entirely."
+            "Already-trimmed FASTQs (e.g. SRA-deposited data, or output of "
+            "a prior trim step) — the adapter has already been clipped, so "
+            "cutadapt skips the -a flag and only enforces length and "
+            "quality filtering. Note: 'pretrimmed' describes the INPUT "
+            "STATE ('already trimmed'), not an action this pipeline takes. "
+            "Auto-inferred when adapter detection finds no known kit "
+            "signature; can also be set explicitly to skip detection."
         ),
     ),
     "custom": KitPreset(
@@ -267,6 +269,29 @@ class DedupResult:
 
 
 @dataclass(frozen=True)
+class SampleOverride:
+    """Per-sample CLI/YAML override for kit + dedup resolution.
+
+    Populated from the ``align.samples:`` YAML list (via the ``mitoribopy
+    all`` orchestrator) or from a TSV passed as ``--sample-overrides``
+    to ``mitoribopy align``. Any field set to ``None`` falls through to
+    the global CLI default for that field, so a user can override only
+    ``umi_length`` for one sample and let everything else inherit.
+
+    The ``sample`` field matches the FASTQ basename with the trailing
+    ``.fq[.gz]`` / ``.fastq[.gz]`` suffix removed (the same naming
+    convention :func:`mitoribopy.cli.align._sample_name` produces).
+    """
+
+    sample: str
+    kit_preset: str | None = None
+    adapter: str | None = None
+    umi_length: int | None = None
+    umi_position: UmiPosition | None = None
+    dedup_strategy: DedupStrategy | None = None
+
+
+@dataclass(frozen=True)
 class SampleCounts:
     """Per-sample stage counts written into ``read_counts.tsv``.
 
@@ -278,6 +303,11 @@ class SampleCounts:
 
     sample: str
     total_reads: int
+    # ``post_trim`` = read count AFTER the cutadapt step has run. For a
+    # ``pretrimmed`` kit (already-clipped FASTQ) cutadapt only enforces
+    # length + quality, so this number can equal ``total_reads`` minus
+    # the length-filter losses. The name does NOT mean "reads were
+    # adapter-trimmed".
     post_trim: int
     rrna_aligned: int  # reads removed by the contam subtract step
     post_rrna_filter: int  # reads entering mt-transcriptome alignment

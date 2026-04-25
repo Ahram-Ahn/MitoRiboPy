@@ -35,10 +35,17 @@ from ..align import (
     tool_check,
     trim as trim_step,
 )
-from ..align._types import KIT_PRESET_ALIASES, KIT_PRESETS, ResolvedKit, SampleCounts
+from ..align._types import (
+    KIT_PRESET_ALIASES,
+    KIT_PRESETS,
+    ResolvedKit,
+    SampleCounts,
+    SampleOverride,
+)
 from ..align.sample_resolve import (
     SampleResolution,
     SampleResolutionError,
+    read_sample_overrides_tsv,
     required_dedup_tools,
     resolution_summary_lines,
     resolve_sample_resolutions,
@@ -165,6 +172,23 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["5p", "3p"],
         default=None,
         help="UMI position within the insert (overrides kit preset).",
+    )
+    library.add_argument(
+        "--sample-overrides",
+        default=None,
+        metavar="TSV",
+        help=(
+            "Path to a TSV with per-sample overrides for "
+            "kit_preset / adapter / umi_length / umi_position / "
+            "dedup_strategy. Required header columns: 'sample' plus at "
+            "least one of the override columns. The 'sample' value must "
+            "match the FASTQ basename with the .fq[.gz] / .fastq[.gz] "
+            "suffix removed. Empty cells (or NA / None / null) fall "
+            "through to the global CLI default for that field, so a "
+            "single sample can override only its UMI without restating "
+            "the rest of the kit. Useful for mixed-UMI batches where "
+            "each sample's UMI length / position differs."
+        ),
     )
     library.add_argument(
         "--adapter-detection",
@@ -641,6 +665,11 @@ def _resolve_per_sample(
                 pretrimmed_threshold=detect_pretrimmed_threshold,
             )
 
+    overrides_path = getattr(args, "sample_overrides", None)
+    sample_overrides: dict[str, SampleOverride] | None = None
+    if overrides_path:
+        sample_overrides = read_sample_overrides_tsv(Path(overrides_path))
+
     return resolve_sample_resolutions(
         samples,
         kit_preset=args.kit_preset,
@@ -654,6 +683,7 @@ def _resolve_per_sample(
             args, "allow_pretrimmed_inference", True
         ),
         detector=detector,
+        sample_overrides=sample_overrides,
     )
 
 

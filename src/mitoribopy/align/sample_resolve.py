@@ -41,7 +41,13 @@ from pathlib import Path
 from typing import Iterable
 
 from . import adapter_detect
-from ._types import KIT_PRESETS, DedupStrategy, ResolvedKit, resolve_kit_alias
+from ._types import (
+    KIT_PRESETS,
+    DedupStrategy,
+    ResolvedKit,
+    SampleOverride,
+    resolve_kit_alias,
+)
 from .dedup import resolve_dedup_strategy
 from .trim import resolve_kit_settings
 
@@ -81,6 +87,21 @@ _KIT_RESOLUTION_COLUMNS: tuple[str, ...] = (
 )
 
 
+def _label_source(base_source: str, override_applied: bool) -> str:
+    """Compose the ``source`` column value for ``kit_resolution.tsv``.
+
+    Keeps the original detection-path label (``detected``,
+    ``user_fallback``, ``inferred_pretrimmed``, ``explicit_off``) so the
+    user can still see *how* the resolver landed on the resolved kit, but
+    prefixes ``per_sample_override:`` when an ``align.samples:`` /
+    ``--sample-overrides`` entry was applied so the provenance file
+    tells the truth about the user-supplied per-sample input.
+    """
+    if override_applied:
+        return f"per_sample_override:{base_source}"
+    return base_source
+
+
 def _user_supplied_explicit_preset(kit_preset: str, adapter: str | None) -> bool:
     """True when the user did NOT leave the kit at the auto sentinel.
 
@@ -103,8 +124,36 @@ def _resolve_one(
     adapter_detection_mode: str,
     allow_pretrimmed_inference: bool = True,
     detector=adapter_detect.detect_adapter,
+    override: SampleOverride | None = None,
 ) -> SampleResolution:
-    """Resolve one sample. May raise :class:`SampleResolutionError`."""
+    """Resolve one sample. May raise :class:`SampleResolutionError`.
+
+    When *override* is supplied, its non-``None`` fields swap in for the
+    matching incoming kwargs BEFORE the existing ``auto`` / ``off`` /
+    ``strict`` precedence runs. This makes a per-sample override look
+    identical to a user-supplied explicit preset on the CLI, so all the
+    existing detection / fallback / validation rules apply unchanged —
+    the only visible difference is the ``source`` label on the resulting
+    :class:`SampleResolution` (set to ``per_sample_override``).
+    """
+    override_applied = False
+    if override is not None:
+        if override.kit_preset is not None:
+            kit_preset = resolve_kit_alias(override.kit_preset)
+            override_applied = True
+        if override.adapter is not None:
+            adapter = override.adapter
+            override_applied = True
+        if override.umi_length is not None:
+            umi_length = override.umi_length
+            override_applied = True
+        if override.umi_position is not None:
+            umi_position = override.umi_position
+            override_applied = True
+        if override.dedup_strategy is not None:
+            dedup_strategy = override.dedup_strategy
+            override_applied = True
+
     user_explicit = _user_supplied_explicit_preset(kit_preset, adapter)
 
     if adapter_detection_mode == "off":
@@ -132,7 +181,7 @@ def _resolve_one(
             detected_kit=None,
             detection_match_rate=0.0,
             detection_ambiguous=False,
-            source="explicit_off",
+            source=_label_source("explicit_off", override_applied),
         )
 
     # auto / strict modes: scan the FASTQ.
@@ -170,7 +219,7 @@ def _resolve_one(
             detected_kit=None,
             detection_match_rate=0.0,
             detection_ambiguous=False,
-            source="user_fallback",
+            source=_label_source("user_fallback", override_applied),
         )
 
     detected = detection.preset_name
@@ -241,7 +290,7 @@ def _resolve_one(
         detected_kit=detected,
         detection_match_rate=detection.match_rate,
         detection_ambiguous=detection.ambiguous,
-        source=source,
+        source=_label_source(source, override_applied),
     )
 
 
@@ -257,12 +306,21 @@ def resolve_sample_resolutions(
     adapter_detection_mode: str,
     allow_pretrimmed_inference: bool = True,
     detector=adapter_detect.detect_adapter,
+    sample_overrides: dict[str, SampleOverride] | None = None,
 ) -> list[SampleResolution]:
     """Pre-flight resolution for every input sample.
 
     Failures raise :class:`SampleResolutionError` carrying a multi-line
     message that names every offending sample so the user can fix the
     config in one pass.
+
+    *sample_overrides* maps the sample basename to a :class:`SampleOverride`
+    whose non-``None`` fields take precedence over the corresponding
+    global kwargs for that sample only. Samples without an override
+    inherit every global. An override naming a sample that is not
+    present in *samples* triggers a :class:`SampleResolutionError` so a
+    typo'd sample name in the YAML / TSV is caught up front instead of
+    silently producing the wrong resolution for every sample.
     """
     # Translate any legacy alias up front so the rest of the resolver
     # only deals with canonical preset names.
@@ -273,9 +331,24 @@ def resolve_sample_resolutions(
             f"Unknown --kit-preset {kit_preset!r}. Known: {known}."
         )
 
+    samples_list = list(samples)
+    sample_overrides = dict(sample_overrides or {})
+    sample_names_seen = {name for name, _ in samples_list}
+    unknown_overrides = sorted(
+        name for name in sample_overrides if name not in sample_names_seen
+    )
+    if unknown_overrides:
+        raise SampleResolutionError(
+            "Sample override(s) reference unknown sample name(s): "
+            + ", ".join(unknown_overrides)
+            + ". Known sample names (FASTQ basenames): "
+            + ", ".join(sorted(sample_names_seen))
+            + "."
+        )
+
     resolutions: list[SampleResolution] = []
     errors: list[str] = []
-    for sample, fastq in samples:
+    for sample, fastq in samples_list:
         try:
             resolutions.append(
                 _resolve_one(
@@ -290,6 +363,7 @@ def resolve_sample_resolutions(
                     adapter_detection_mode=adapter_detection_mode,
                     allow_pretrimmed_inference=allow_pretrimmed_inference,
                     detector=detector,
+                    override=sample_overrides.get(sample),
                 )
             )
         except (SampleResolutionError, ValueError, KeyError) as exc:
@@ -302,6 +376,150 @@ def resolve_sample_resolutions(
             + bullet
         )
     return resolutions
+
+
+# ---------------------------------------------------------------------------
+# Sample-override TSV I/O
+# ---------------------------------------------------------------------------
+
+
+_SAMPLE_OVERRIDE_COLUMNS: tuple[str, ...] = (
+    "sample",
+    "kit_preset",
+    "adapter",
+    "umi_length",
+    "umi_position",
+    "dedup_strategy",
+)
+
+
+def read_sample_overrides_tsv(path: Path) -> dict[str, SampleOverride]:
+    """Parse a per-sample override TSV into a dict keyed by sample name.
+
+    The TSV must have a header row containing at least ``sample`` and at
+    least one of the override columns. Empty cells (``""``, ``"NA"``,
+    ``"None"``) are read as ``None`` so the resolver falls back to the
+    global default for that field.
+
+    Raises
+    ------
+    SampleResolutionError
+        if the file is missing required columns, has a duplicate sample
+        name, or contains a malformed integer ``umi_length``.
+    """
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SampleResolutionError(
+            f"--sample-overrides: cannot read {path}: {exc}"
+        ) from exc
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return {}
+
+    header = [col.strip() for col in lines[0].split("\t")]
+    if "sample" not in header:
+        raise SampleResolutionError(
+            f"--sample-overrides {path}: TSV is missing a 'sample' column. "
+            f"Found columns: {header}."
+        )
+    overridable = set(_SAMPLE_OVERRIDE_COLUMNS) - {"sample"}
+    if not overridable.intersection(header):
+        raise SampleResolutionError(
+            f"--sample-overrides {path}: TSV must contain at least one of "
+            f"{sorted(overridable)} alongside 'sample'."
+        )
+
+    overrides: dict[str, SampleOverride] = {}
+    for line_no, row_text in enumerate(lines[1:], start=2):
+        cells = [cell.strip() for cell in row_text.split("\t")]
+        if len(cells) < len(header):
+            cells.extend([""] * (len(header) - len(cells)))
+        row = dict(zip(header, cells))
+        sample = row.get("sample", "").strip()
+        if not sample:
+            raise SampleResolutionError(
+                f"--sample-overrides {path}: row {line_no} has an empty "
+                "'sample' field."
+            )
+        if sample in overrides:
+            raise SampleResolutionError(
+                f"--sample-overrides {path}: duplicate sample name "
+                f"{sample!r} on row {line_no}."
+            )
+
+        umi_length_raw = row.get("umi_length", "")
+        umi_length: int | None
+        if _is_blank(umi_length_raw):
+            umi_length = None
+        else:
+            try:
+                umi_length = int(umi_length_raw)
+            except ValueError as exc:
+                raise SampleResolutionError(
+                    f"--sample-overrides {path}: row {line_no} has a "
+                    f"non-integer umi_length {umi_length_raw!r}."
+                ) from exc
+
+        umi_position_raw = row.get("umi_position", "")
+        umi_position = None if _is_blank(umi_position_raw) else umi_position_raw
+        if umi_position is not None and umi_position not in ("5p", "3p"):
+            raise SampleResolutionError(
+                f"--sample-overrides {path}: row {line_no} has an invalid "
+                f"umi_position {umi_position!r} (must be '5p' or '3p')."
+            )
+
+        kit_preset_raw = row.get("kit_preset", "")
+        adapter_raw = row.get("adapter", "")
+        dedup_raw = row.get("dedup_strategy", "")
+
+        overrides[sample] = SampleOverride(
+            sample=sample,
+            kit_preset=None if _is_blank(kit_preset_raw) else kit_preset_raw,
+            adapter=None if _is_blank(adapter_raw) else adapter_raw,
+            umi_length=umi_length,
+            umi_position=umi_position,  # type: ignore[arg-type]
+            dedup_strategy=None if _is_blank(dedup_raw) else dedup_raw,  # type: ignore[arg-type]
+        )
+
+    return overrides
+
+
+def write_sample_overrides_tsv(
+    overrides: Iterable[SampleOverride], path: Path
+) -> Path:
+    """Write a per-sample override TSV (round-trips with
+    :func:`read_sample_overrides_tsv`).
+
+    Used by the ``mitoribopy all`` orchestrator to materialise an
+    ``align.samples:`` YAML block as a file the align CLI can consume
+    via ``--sample-overrides``.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write("\t".join(_SAMPLE_OVERRIDE_COLUMNS) + "\n")
+        for override in overrides:
+            row = {
+                "sample": override.sample,
+                "kit_preset": override.kit_preset or "",
+                "adapter": override.adapter or "",
+                "umi_length": (
+                    "" if override.umi_length is None else str(override.umi_length)
+                ),
+                "umi_position": override.umi_position or "",
+                "dedup_strategy": override.dedup_strategy or "",
+            }
+            handle.write(
+                "\t".join(row[col] for col in _SAMPLE_OVERRIDE_COLUMNS) + "\n"
+            )
+    return path
+
+
+def _is_blank(value: str) -> bool:
+    return value.strip().lower() in {"", "na", "none", "null"}
 
 
 def required_dedup_tools(resolutions: list[SampleResolution]) -> set[str]:

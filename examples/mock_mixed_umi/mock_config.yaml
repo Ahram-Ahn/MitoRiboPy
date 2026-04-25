@@ -1,0 +1,50 @@
+# End-to-end smoke test for per-sample UMI overrides.
+#
+# Two samples in one batch:
+#   sample_UMI    8 nt 5' UMI prepended + Illumina TruSeq R1 adapter
+#                 -> dedup with umi_tools (UMI collapsing).
+#   sample_NOUMI  Already-trimmed (SRA-style), no UMI.
+#                 -> dedup is skipped.
+#
+# Re-create the inputs:
+#   python make_mock.py
+#   bash build_indexes.sh
+#
+# Then run:
+#   mitoribopy all --config mock_config.yaml --output ./mock_run
+#
+# Expected provenance after the run:
+#   mock_run/align/kit_resolution.tsv has source 'per_sample_override:*'
+#   for both samples, applied_kit=illumina_truseq_umi for sample_UMI
+#   (umi_length=8, dedup=umi-tools), applied_kit=pretrimmed for
+#   sample_NOUMI (umi_length=0, dedup=skip).
+
+align:
+  kit_preset: auto
+  fastq: examples/mock_mixed_umi/
+  contam_index: examples/mock_mixed_umi/indexes/rrna
+  mt_index: examples/mock_mixed_umi/indexes/mt
+  library_strandedness: forward
+  min_length: 15
+  max_length: 45
+  mapq: 0                            # mock data has no MAPQ signal
+  dedup_strategy: auto
+
+  samples:
+    - name: sample_UMI
+      kit_preset: illumina_truseq_umi
+      umi_length: 8
+      umi_position: 5p
+    - name: sample_NOUMI
+      kit_preset: pretrimmed
+      umi_length: 0
+
+rpf:
+  strain: h
+  fasta: examples/mock_mixed_umi/human-mt-mRNA.mini.fasta
+  rpf: [25, 35]
+  align: stop
+  offset_type: "5"
+  offset_site: p
+  offset_pick_reference: reported_site
+  codon_density_window: true

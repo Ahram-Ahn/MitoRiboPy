@@ -205,16 +205,22 @@ def _dict_to_argv(
     return argv
 
 
-def _normalize_align_inputs(align_cfg: dict) -> dict:
-    """Make ``align.fastq`` polymorphic: a string is a directory shortcut.
+def _normalize_align_inputs(
+    align_cfg: dict, *, run_root: Path | None = None
+) -> dict:
+    """Make ``align.fastq`` polymorphic + materialise per-sample overrides.
 
     YAML users routinely want to point at a directory instead of listing
     every FASTQ. ``--fastq-dir`` already exists at the CLI; this helper
     lets the YAML key ``fastq:`` accept either a list (treated as
-    explicit paths) or a single string (treated as ``fastq_dir``). The
-    function returns a shallow copy of ``align_cfg`` with ``fastq`` /
-    ``fastq_dir`` rewritten to the unambiguous form ``_dict_to_argv``
-    will serialize correctly.
+    explicit paths) or a single string (treated as ``fastq_dir``).
+
+    A YAML ``samples:`` block (per-sample UMI / kit overrides) is
+    materialised as a TSV under ``<run_root>/align/sample_overrides.tsv``
+    and replaced in the returned dict with ``sample_overrides:`` so
+    :func:`_dict_to_argv` serialises it as ``--sample-overrides PATH``.
+    Pass ``run_root=None`` (e.g. in dry-run) to keep the ``samples:``
+    block in the dict for plan rendering only.
     """
     if not align_cfg:
         return align_cfg
@@ -225,7 +231,85 @@ def _normalize_align_inputs(align_cfg: dict) -> dict:
         # clobbering an existing fastq_dir if the user set both.
         cfg.setdefault("fastq_dir", fastq_value)
         cfg["fastq"] = None
+
+    samples_block = cfg.pop("samples", None)
+    if samples_block:
+        if run_root is None:
+            # Dry-run / non-materialising path: drop the block from the
+            # argv (the align CLI does not accept it) and rely on the
+            # caller to render it separately when planning.
+            cfg["sample_overrides"] = None
+        else:
+            tsv_path = Path(run_root) / "align" / "sample_overrides.tsv"
+            _write_samples_block_as_tsv(samples_block, tsv_path)
+            cfg["sample_overrides"] = str(tsv_path)
     return cfg
+
+
+def _write_samples_block_as_tsv(
+    samples_block: list, tsv_path: Path
+) -> Path:
+    """Materialise an ``align.samples:`` YAML list as a sample_overrides TSV.
+
+    Accepted item shape::
+
+        - name: sampleA            # required
+          kit_preset: …            # all five fields are optional
+          adapter: …
+          umi_length: 8
+          umi_position: 5p
+          dedup_strategy: skip
+
+    The TSV columns match :data:`mitoribopy.align.sample_resolve._SAMPLE_OVERRIDE_COLUMNS`
+    so :func:`mitoribopy.align.sample_resolve.read_sample_overrides_tsv`
+    round-trips it.
+    """
+    tsv_path = Path(tsv_path)
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    columns = (
+        "sample",
+        "kit_preset",
+        "adapter",
+        "umi_length",
+        "umi_position",
+        "dedup_strategy",
+    )
+    rows: list[dict[str, str]] = []
+    for index, entry in enumerate(samples_block):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"align.samples[{index}] must be a mapping with at least "
+                f"a 'name' field, got {type(entry).__name__}."
+            )
+        sample = entry.get("name") or entry.get("sample")
+        if not sample:
+            raise ValueError(
+                f"align.samples[{index}] is missing the required "
+                "'name' field (the FASTQ basename without extension)."
+            )
+        rows.append(
+            {
+                "sample": str(sample),
+                "kit_preset": _stringify(entry.get("kit_preset")),
+                "adapter": _stringify(entry.get("adapter")),
+                "umi_length": _stringify(entry.get("umi_length")),
+                "umi_position": _stringify(entry.get("umi_position")),
+                "dedup_strategy": _stringify(entry.get("dedup_strategy")),
+            }
+        )
+    with tsv_path.open("w", encoding="utf-8") as handle:
+        handle.write("\t".join(columns) + "\n")
+        for row in rows:
+            handle.write("\t".join(row[col] for col in columns) + "\n")
+    return tsv_path
+
+
+def _stringify(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 # Per-stage config-template comment, also used by --print-config-template.
@@ -289,6 +373,23 @@ align:
   seed: 42
   dedup_strategy: auto            # auto | umi-tools | skip | mark-duplicates
 
+  # Per-sample overrides (mixed-UMI batches). Use this when each FASTQ
+  # has a different UMI length / position / kit. The 'name' field must
+  # match the FASTQ basename with .fq[.gz] / .fastq[.gz] stripped.
+  # Any unset override field falls through to the globals above.
+  # samples:
+  #   - name: sampleA
+  #     kit_preset: illumina_truseq_umi
+  #     umi_length: 8
+  #     umi_position: 5p
+  #   - name: sampleB
+  #     kit_preset: qiaseq_mirna
+  #     umi_length: 12
+  #     umi_position: 3p
+  #   - name: sampleC               # SRA-deposited, already adapter-clipped
+  #     kit_preset: pretrimmed
+  #     umi_length: 0
+
 # ---- rpf -------------------------------------------------------------------
 rpf:
   # Organism + RPF length window
@@ -304,7 +405,13 @@ rpf:
                                   # OFFSETS table only. Use analysis_sites to
                                   # control which downstream outputs are
                                   # produced (codon usage, coverage plots).
-  offset_pick_reference: p_site
+  offset_pick_reference: p_site   # p_site (default) | reported_site
+                                  # p_site:        pick offset in canonical
+                                  #                P-site space, then convert
+                                  #                to --offset_site for output.
+                                  # reported_site: pick offset directly in
+                                  #                --offset_site space.
+                                  # (Legacy alias 'selected_site' = 'reported_site'.)
   offset_mode: per_sample         # per_sample (default) | combined.
                                   # per_sample: each sample uses its own
                                   # offsets; combined: pool all samples and
@@ -320,7 +427,8 @@ rpf:
 
   # Output / plotting
   plot_format: svg                # png | pdf | svg
-  merge_density: true
+  codon_density_window: true      # smooth codon-density with +/-1 nt window
+                                  # (legacy key: 'merge_density')
   structure_density: false
 
   # Optional downstream modules
@@ -537,7 +645,9 @@ def run(argv: Iterable[str]) -> int:
                 "align: "
                 + " ".join(
                     _dict_to_argv(
-                        _normalize_align_inputs(config.get("align", {})),
+                        _normalize_align_inputs(
+                            config.get("align", {}), run_root=None
+                        ),
                         flag_style="hyphen",
                         repeat_flags={"fastq"},
                     )
@@ -579,7 +689,7 @@ def run(argv: Iterable[str]) -> int:
             stages_skipped.append("align")
         else:
             align_argv = _dict_to_argv(
-                _normalize_align_inputs(config["align"]),
+                _normalize_align_inputs(config["align"], run_root=run_root),
                 flag_style="hyphen",
                 repeat_flags={"fastq"},
             )
