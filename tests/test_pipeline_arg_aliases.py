@@ -25,7 +25,7 @@ from mitoribopy.pipeline.runner import parse_pipeline_args
 def _base_argv(tmp_path: Path) -> list[str]:
     """Smallest valid argv for parse_pipeline_args (no --config required)."""
     return [
-        "-s", "h",
+        "-s", "h.sapiens",
         "-f", str(tmp_path / "fasta.fa"),
         "-d", str(tmp_path),
     ]

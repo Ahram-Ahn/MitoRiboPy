@@ -10,7 +10,7 @@ from ..console import log_warning
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "strain": "y",
+    "strain": "h.sapiens",
     "directory": ".",
     "rpf": None,
     "annotation_file": None,
@@ -78,26 +78,40 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 # Biological RPF windows per footprint class.
+#
+# short:    truncated RNase products (~16-24 nt). These are partial
+#           protections produced when the RNase digest cuts inside the
+#           ribosome footprint. They sit just below the canonical
+#           monosome window and are useful for mapping context-dependent
+#           pausing and for QC of digest aggressiveness. Same range
+#           across species (RNase truncation products do not strongly
+#           vary by mt-genome lineage).
 # monosome: a single ribosome footprint, ~28-34 nt in metazoan mt-Ribo-seq
 #           (mt-monosomes are short compared to cytoplasmic ~28-32 nt; yeast
 #           mt is longer at 37-41 nt because of the extended mS37 tail).
-# disome:   two stacked ribosomes with a shared protected fragment, ~60-90 nt
-#           (collided-ribosome studies, e.g. eIF5A-depletion / queueing).
+# disome:   two stacked ribosomes with a shared protected fragment.
+#           Vertebrate mt: 50-70 nt; yeast mt: 60-90 nt.
+#           Used for collided-ribosome studies (eIF5A-depletion,
+#           queueing, ribosome-stalling).
+# custom:   the user will supply --rpf and --unfiltered_read_length_range
+#           explicitly; no biological default.
 FOOTPRINT_CLASS_DEFAULTS: dict[str, dict[str, tuple[int, int]]] = {
+    "short": {
+        "unfiltered_read_length_range": (10, 30),
+        "rpf_h.sapiens": (16, 24),
+        "rpf_s.cerevisiae": (16, 24),
+    },
     "monosome": {
         "unfiltered_read_length_range": (15, 50),
-        "rpf_h": (28, 34),   # vertebrate mt-mono footprint
-        "rpf_y": (37, 41),   # yeast mt-mono footprint
+        "rpf_h.sapiens": (28, 34),
+        "rpf_s.cerevisiae": (37, 41),
     },
     "disome": {
-        "unfiltered_read_length_range": (40, 110),
-        "rpf_h": (60, 90),   # vertebrate mt-disome footprint (loose)
-        "rpf_y": (65, 95),   # yeast mt-disome footprint
+        "unfiltered_read_length_range": (40, 100),
+        "rpf_h.sapiens": (50, 70),
+        "rpf_s.cerevisiae": (60, 90),
     },
-    "custom": {
-        # "custom" implies the user will supply --rpf and
-        # --unfiltered_read_length_range explicitly; no biological default.
-    },
+    "custom": {},
 }
 
 
@@ -191,19 +205,21 @@ def resolve_rpf_range(
     *,
     footprint_class: str = "monosome",
 ) -> list[int]:
-    """Resolve RPF range from CLI/config or fallback defaults.
+    """Resolve the RPF length window from the CLI / config or a default.
 
-    Explicit ``rpf_arg`` always wins. Otherwise the default comes from
-    ``FOOTPRINT_CLASS_DEFAULTS[footprint_class]`` keyed by strain:
-
-    * ``strain='h'`` or ``'vm'`` -> ``rpf_h``
-    * ``strain='y'`` or ``'ym'`` -> ``rpf_y``
-
-    For ``footprint_class='custom'`` or any strain without a built-in
-    (including ``'custom'`` strain), ``rpf_arg`` is required; we raise
-    a clear ``ValueError`` otherwise so the caller can surface it as a
-    user-facing CLI error.
+    Explicit ``rpf_arg`` (a 2-tuple [min, max]) always wins. Otherwise
+    the default comes from
+    ``FOOTPRINT_CLASS_DEFAULTS[footprint_class]['rpf_<strain>']``. The
+    only built-in defaults are for ``h.sapiens`` and ``s.cerevisiae``;
+    any other strain (including ``'custom'``) MUST supply
+    ``-rpf MIN MAX`` explicitly. Unknown strain or unknown footprint
+    class raises ``ValueError`` so the caller can surface a clear CLI
+    message.
     """
+    # Local import keeps the package layering clean — config/ should
+    # not pull in data/ at module load time.
+    from ..data.reference_data import canonical_strain
+
     if rpf_arg:
         start, end = int(rpf_arg[0]), int(rpf_arg[1])
         if end < start:
@@ -211,16 +227,15 @@ def resolve_rpf_range(
         return list(range(start, end + 1))
 
     class_defaults = FOOTPRINT_CLASS_DEFAULTS.get(footprint_class, {})
-    if strain in {"h", "vm"}:
-        window = class_defaults.get("rpf_h")
-    elif strain in {"y", "ym"}:
-        window = class_defaults.get("rpf_y")
-    else:
-        window = None
+    canonical = canonical_strain(strain)
+    window = class_defaults.get(f"rpf_{canonical}")
 
     if window is None:
         raise ValueError(
-            f"Cannot default RPF range for strain={strain!r}, "
-            f"footprint_class={footprint_class!r}. Pass -rpf MIN MAX explicitly."
+            f"Cannot default the RPF range for strain={strain!r}, "
+            f"footprint_class={footprint_class!r}. Either choose a "
+            "footprint_class with a built-in default for this strain "
+            "(short / monosome / disome work for h.sapiens and "
+            "s.cerevisiae) or pass -rpf MIN MAX explicitly."
         )
     return list(range(window[0], window[1] + 1))

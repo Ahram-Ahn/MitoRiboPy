@@ -51,3 +51,46 @@ def test_resolve_sequence_name_uses_legacy_bicistronic_aliases() -> None:
 
     assert resolve_sequence_name(atp8_row, {"ATP86"}) == "ATP86"
     assert resolve_sequence_name(nd4_row, {"ND4L4"}) == "ND4L4"
+
+
+def test_canonical_strain_resolves_short_aliases() -> None:
+    from mitoribopy.data.reference_data import (
+        BUILTIN_STRAIN_PRESETS,
+        STRAIN_ALIASES,
+        canonical_strain,
+    )
+
+    assert STRAIN_ALIASES == {"h": "h.sapiens", "y": "s.cerevisiae"}
+    assert canonical_strain("h") == "h.sapiens"
+    assert canonical_strain("y") == "s.cerevisiae"
+    assert canonical_strain("h.sapiens") == "h.sapiens"
+    assert canonical_strain("custom") == "custom"
+    assert BUILTIN_STRAIN_PRESETS == frozenset({"h.sapiens", "s.cerevisiae"})
+
+
+def test_load_annotation_table_canonicalises_short_alias() -> None:
+    """A pre-existing pipeline_config.yaml that still uses `strain: h`
+    must still load the built-in human annotation."""
+    df_short = load_annotation_table(preset="h")
+    df_long = load_annotation_table(preset="h.sapiens")
+    assert list(df_short["transcript"]) == list(df_long["transcript"])
+
+
+def test_load_annotation_table_rejects_dropped_strain() -> None:
+    """`vm` and `ym` no longer exist; they are not in STRAIN_ALIASES so
+    they fall through to the 'no built-in annotation' error path."""
+    import pytest
+
+    with pytest.raises(ValueError, match="built-in annotation table"):
+        load_annotation_table(preset="vm")
+    with pytest.raises(ValueError, match="built-in annotation table"):
+        load_annotation_table(preset="ym")
+
+
+def test_load_codon_table_picks_default_for_short_strain_alias() -> None:
+    """The default codon-table picker must canonicalise the short alias
+    so `preset='h'` still picks vertebrate_mitochondrial."""
+    table_short = load_codon_table(preset="h")
+    table_long = load_codon_table(preset="h.sapiens")
+    assert table_short == table_long
+    assert table_short["AGA"] == "*"  # vertebrate_mitochondrial signature

@@ -40,7 +40,7 @@ align:
       umi_length: 0
 
 rpf:
-  strain: h
+  strain: h.sapiens
   fasta: examples/mock_mixed_umi/human-mt-mRNA.mini.fasta
   rpf: [25, 35]
   align: stop

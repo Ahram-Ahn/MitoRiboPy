@@ -70,17 +70,27 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     core_group.add_argument(
         "-s",
         "--strain",
-        choices=["y", "h", "vm", "ym", "custom"],
+        choices=["h.sapiens", "s.cerevisiae", "custom", "h", "y"],
         default=defaults["strain"],
+        metavar="STRAIN",
         help=(
-            "Reference preset:\n"
-            "  h      human mt (ships annotation + vertebrate_mitochondrial codons)\n"
-            "  y      yeast mt (ships annotation + yeast_mitochondrial codons)\n"
-            "  vm     any vertebrate mt (uses vertebrate_mitochondrial codons;\n"
-            "         requires --annotation_file and an explicit -rpf range)\n"
-            "  ym     any fungus with yeast-mito code (uses yeast_mitochondrial\n"
-            "         codons; requires --annotation_file and explicit -rpf)\n"
-            "  custom fully user-specified (annotation + codon table + -rpf)"
+            "Reference preset (organism). Built-in strains ship a complete\n"
+            "annotation table and codon table, so the user only needs to\n"
+            "supply the FASTA reference. Other organisms must use\n"
+            "'custom' and supply their own annotation + codon-table\n"
+            "choice (see --annotation_file / --codon_table_name).\n"
+            "  h.sapiens     human mt (default; vertebrate_mitochondrial\n"
+            "                codon table; ATG/ATA start codons)\n"
+            "  s.cerevisiae  budding yeast mt (yeast_mitochondrial codon\n"
+            "                table; ATG start codon)\n"
+            "  custom        any other organism (mouse, fly, A. thaliana,\n"
+            "                fungi, ...); requires --annotation_file plus\n"
+            "                a --codon_table_name picked from the\n"
+            "                built-in NCBI Genetic Codes list (see\n"
+            "                --codon_table_name help) or a\n"
+            "                --codon_tables_file you supply.\n"
+            "  h, y          deprecated short aliases for h.sapiens and\n"
+            "                s.cerevisiae; still accepted for one cycle."
         ),
     )
     directory_action = core_group.add_argument(
@@ -115,22 +125,31 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Inclusive read-length filter range, for example: -rpf 29 34",
     )
     rpf_action.default_display = (
-        "monosome h/vm: 28-34, y/ym: 37-41; "
-        "disome h/vm: 60-90, y/ym: 65-95"
+        "short    h.sapiens / s.cerevisiae: 16-24; "
+        "monosome h.sapiens: 28-34, s.cerevisiae: 37-41; "
+        "disome   h.sapiens: 50-70, s.cerevisiae: 60-90"
     )
     footprint_action = core_group.add_argument(
         "--footprint_class",
-        choices=["monosome", "disome", "custom"],
+        choices=["short", "monosome", "disome", "custom"],
         default=defaults["footprint_class"],
         help=(
-            "Expected RPF class, selects sensible --rpf and\n"
-            "--unfiltered_read_length_range defaults when the user does\n"
-            "not pass them explicitly:\n"
-            "  monosome  single-ribosome footprint (default)\n"
-            "  disome    collided-ribosome footprint (~60-90 nt, e.g.\n"
-            "            eIF5A-depletion / queueing studies)\n"
-            "  custom    no biological default; pass -rpf / \n"
-            "            --unfiltered_read_length_range yourself"
+            "Expected ribosome-protected fragment class. Selects the\n"
+            "default --rpf and --unfiltered_read_length_range windows for\n"
+            "the chosen --strain when the user does not pass them\n"
+            "explicitly. Built-in defaults exist for h.sapiens and\n"
+            "s.cerevisiae; for --strain custom you must also pass -rpf.\n"
+            "  short     truncated RNase products (~16-24 nt). Sit just\n"
+            "            below the canonical monosome window; useful for\n"
+            "            mapping context-dependent pausing and as a QC\n"
+            "            indicator of digest aggressiveness.\n"
+            "  monosome  single-ribosome footprint (default).\n"
+            "            h.sapiens 28-34 nt, s.cerevisiae 37-41 nt.\n"
+            "  disome    collided-ribosome footprint. h.sapiens 50-70 nt,\n"
+            "            s.cerevisiae 60-90 nt. Used for ribosome-stalling /\n"
+            "            queueing studies (e.g. eIF5A-depletion).\n"
+            "  custom    no biological default; supply -rpf and\n"
+            "            --unfiltered_read_length_range yourself."
         ),
     )
     footprint_action.default_display = "monosome"
@@ -139,9 +158,13 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=defaults["annotation_file"],
         metavar="ANNOTATION.csv",
         help=(
-            "Optional annotation CSV override.\n"
-            "Required for --strain custom / vm / ym; built-in yeast (y)\n"
-            "and human (h) tables are used otherwise."
+            "Per-transcript annotation CSV. Required when --strain\n"
+            "custom; the built-in human (h.sapiens) and yeast\n"
+            "(s.cerevisiae) tables are used otherwise. The CSV must have\n"
+            "one row per transcript with the columns: transcript,\n"
+            "sequence_name, display_name, sequence_aliases, l_utr5,\n"
+            "l_cds, l_utr3, start_codon, stop_codon. See the 'Custom\n"
+            "organisms' section of the README for a worked example."
         ),
     )
     core_group.add_argument(
@@ -149,8 +172,12 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=defaults["codon_tables_file"],
         metavar="CODON_TABLES.json",
         help=(
-            "Optional codon-table JSON override.\n"
-            "Supports either one flat 64-codon table or multiple named tables."
+            "Optional path to a codon-table JSON file. Supports either\n"
+            "(a) ONE flat 64-codon mapping {codon: amino_acid}, or\n"
+            "(b) multiple named tables {table_name: {codon: amino_acid}}.\n"
+            "Combine with --codon_table_name when (b). Use this only when\n"
+            "your organism's genetic code is not already in the built-in\n"
+            "list — see --codon_table_name help."
         ),
     )
     codon_table_action = core_group.add_argument(
@@ -158,11 +185,37 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=defaults["codon_table_name"],
         metavar="TABLE_NAME",
         help=(
-            "Codon-table name to load from built-ins or from --codon_tables_file.\n"
-            f"Built-in names: {', '.join(available_codon_table_names())}"
+            "Codon-table name to load from built-ins or from\n"
+            "--codon_tables_file. The built-in tables are the NCBI\n"
+            "Genetic Codes (ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi)\n"
+            "with NCBI numbers converted to descriptive names. Pick the\n"
+            "one matching your organism's MITOCHONDRIAL code (or NUCLEAR\n"
+            "code for ciliate / candida / etc.):\n"
+            "  vertebrate_mitochondrial   (NCBI #2)  mouse, fish, frog,\n"
+            "                                       any non-human vertebrate\n"
+            "  yeast_mitochondrial        (NCBI #3)  S. cerevisiae and\n"
+            "                                       close relatives\n"
+            "  mold_mitochondrial         (NCBI #4)  Neurospora, Aspergillus,\n"
+            "                                       Trichoderma, mycoplasmas\n"
+            "  invertebrate_mitochondrial (NCBI #5)  fruit fly, mosquito,\n"
+            "                                       nematodes\n"
+            "  echinoderm_mitochondrial   (NCBI #9)  sea urchin, starfish\n"
+            "  ascidian_mitochondrial     (NCBI #13) sea squirts\n"
+            "  alternative_flatworm_mitochondrial (NCBI #14) flatworms\n"
+            "  trematode_mitochondrial    (NCBI #21) trematodes\n"
+            "  standard                   (NCBI #1)  use this when the\n"
+            "                                       organism uses the\n"
+            "                                       standard genetic code\n"
+            "                                       (most plants, including\n"
+            "                                       A. thaliana mt + plastid)\n"
+            f"Full list of {len(available_codon_table_names())} built-in tables: "
+            f"{', '.join(available_codon_table_names())}."
         ),
     )
-    codon_table_action.default_display = "y: yeast_mitochondrial, h: vertebrate_mitochondrial"
+    codon_table_action.default_display = (
+        "h.sapiens: vertebrate_mitochondrial, "
+        "s.cerevisiae: yeast_mitochondrial"
+    )
     start_codons_action = core_group.add_argument(
         "--start_codons",
         nargs="+",
@@ -652,8 +705,27 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
         parser.error("--cor_mask_percentile must be in (0, 1)")
     if args.use_rna_seq and (not args.rna_seq_dir or not args.rna_order):
         parser.error("--use_rna_seq requires both --rna_seq_dir and --rna_order")
-    # Strain-preset requirements. Order of checks matches how a user
-    # would experience the failures.
+    # Canonicalise the deprecated short strain aliases (h, y) to their
+    # full species names so the rest of the pipeline only sees the
+    # canonical form. Emit one DEPRECATED line so the user knows to
+    # update their config.
+    from ..data.reference_data import (
+        BUILTIN_STRAIN_PRESETS,
+        STRAIN_ALIASES,
+        canonical_strain,
+    )
+
+    if args.strain in STRAIN_ALIASES:
+        canonical = STRAIN_ALIASES[args.strain]
+        _warn_deprecated(
+            f"--strain {args.strain} -> {canonical} (use the full species name)."
+        )
+        args.strain = canonical
+
+    # Strain-preset requirements. Built-in strains (h.sapiens,
+    # s.cerevisiae) ship a complete annotation + codon table and need
+    # no extra files. 'custom' MUST supply an annotation, an explicit
+    # -rpf range, and a codon-table source.
     if args.strain == "custom":
         if not args.annotation_file:
             parser.error("--strain custom requires --annotation_file")
@@ -663,24 +735,20 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
             )
         if not (args.codon_tables_file or args.codon_table_name):
             parser.error(
-                "--strain custom requires --codon_tables_file or --codon_table_name"
-            )
-    if args.strain in {"vm", "ym"}:
-        if not args.annotation_file:
-            parser.error(
-                f"--strain {args.strain} requires --annotation_file "
-                "(only h and y ship a built-in annotation)"
-            )
-        if args.rpf is None:
-            parser.error(
-                f"--strain {args.strain} requires an explicit -rpf MIN_LEN MAX_LEN "
-                "range (only h and y have a built-in default)"
+                "--strain custom requires --codon_table_name (pick from "
+                "the built-in NCBI Genetic Codes list, see "
+                "--codon_table_name help) or --codon_tables_file (your "
+                "own codon-table JSON)"
             )
 
-    # --footprint_class=custom requires an explicit -rpf even for h/y,
-    # because the whole point of 'custom' is "I know my footprint class,
-    # don't pick one for me".
-    if args.footprint_class == "custom" and args.rpf is None and args.strain not in {"h", "y"}:
+    # --footprint_class=custom requires an explicit -rpf even for the
+    # built-in strains, because the whole point of 'custom' is
+    # "I know my footprint class, don't pick one for me".
+    if (
+        args.footprint_class == "custom"
+        and args.rpf is None
+        and args.strain not in BUILTIN_STRAIN_PRESETS
+    ):
         parser.error(
             "--footprint_class custom requires an explicit -rpf MIN_LEN MAX_LEN range"
         )

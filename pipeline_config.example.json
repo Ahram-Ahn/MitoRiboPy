@@ -1,5 +1,5 @@
 {
-  "strain": "y",
+  "strain": "s.cerevisiae",
   "directory": ".",
   "rpf": [37, 41],
   "align": "start",
@@ -20,7 +20,7 @@
   "read_counts_reads_col": null,
   "rpm_norm_mode": "total",
   "read_counts_reference_col": null,
-  "mrna_ref_patterns": ["mt_genome", "mt-mrna", "mt_mrna"],
+  "mt_mrna_substring_patterns": ["mt_genome", "mt-mrna", "mt_mrna"],
   "structure_density": false,
   "cor_mask_method": "percentile",
   "cor_mask_percentile": 0.99,

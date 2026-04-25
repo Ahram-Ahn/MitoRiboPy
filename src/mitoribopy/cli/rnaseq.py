@@ -80,9 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gene.add_argument(
         "--organism",
-        choices=["h", "y", "human", "yeast"],
-        default="h",
-        help="Organism for the mt-mRNA registry (default human).",
+        choices=["h.sapiens", "s.cerevisiae", "h", "y", "human", "yeast"],
+        default="h.sapiens",
+        help=(
+            "Organism for the mt-mRNA registry. Use 'h.sapiens' for "
+            "human, 's.cerevisiae' for budding yeast. Short / spelled-"
+            "out forms ('h', 'y', 'human', 'yeast') are accepted as "
+            "synonyms."
+        ),
     )
 
     ribo = parser.add_argument_group("Ribo-seq inputs")

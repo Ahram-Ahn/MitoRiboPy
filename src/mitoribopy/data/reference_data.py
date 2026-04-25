@@ -10,36 +10,47 @@ from pathlib import Path
 import pandas as pd
 
 
+# Built-in strain presets ship annotation + codon table out of the box.
+# All other organisms (mouse, plants, fungi, invertebrates, ...) use
+# --strain custom and supply their own annotation + codon-table choice.
 DEFAULT_CODON_TABLE_BY_STRAIN = {
-    # Built-in presets ship annotation + codon table out of the box.
-    "y": "yeast_mitochondrial",
-    "h": "vertebrate_mitochondrial",
-    # "Any ___ mitochondria" presets share the codon table with their
-    # anchor strain (vm = any vertebrate mito, ym = any yeast-mito-code
-    # fungus). They require a user-supplied --annotation_file.
-    "vm": "vertebrate_mitochondrial",
-    "ym": "yeast_mitochondrial",
+    "h.sapiens": "vertebrate_mitochondrial",
+    "s.cerevisiae": "yeast_mitochondrial",
 }
 
 DEFAULT_START_CODONS_BY_STRAIN = {
-    "y": ["ATG"],
-    "h": ["ATG", "ATA"],
-    "vm": ["ATG", "ATA", "ATT"],  # vertebrate mito: MT-ND2 uses ATT; be permissive
-    "ym": ["ATG"],
+    "h.sapiens": ["ATG", "ATA"],
+    "s.cerevisiae": ["ATG"],
     "custom": ["ATG"],
 }
 
 BUILTIN_ANNOTATION_FILES = {
-    "y": "yeast_annotation.csv",
-    "h": "human_annotation.csv",
-    # vm / ym deliberately absent: user must supply --annotation_file.
+    "h.sapiens": "human_annotation.csv",
+    "s.cerevisiae": "yeast_annotation.csv",
 }
+
+
+# Strain alias map: short legacy names that still parse for backward
+# compatibility. The CLI canonicalises through this map at parse time
+# and emits a one-line deprecation notice the first time an alias is
+# encountered. Any name not in the map nor in the canonical strain set
+# (and not 'custom') is rejected.
+STRAIN_ALIASES = {
+    "h": "h.sapiens",
+    "y": "s.cerevisiae",
+}
+
+
+def canonical_strain(name: str) -> str:
+    """Return the canonical strain name, resolving any deprecated alias."""
+    return STRAIN_ALIASES.get(name, name)
 
 
 # Presets that ship a ready-to-use annotation + RPF range with no user
 # input required. Anything not in this set must have --annotation_file
 # and an explicit -rpf MIN MAX.
 BUILTIN_ANNOTATION_PRESETS = frozenset(BUILTIN_ANNOTATION_FILES)
+BUILTIN_STRAIN_PRESETS = frozenset(BUILTIN_ANNOTATION_FILES)
 
 BICISTRONIC_CONFIGS = (
     {
@@ -103,8 +114,9 @@ def load_codon_table(
     if resolved_table_name is None:
         if table_file and len(tables) == 1:
             return next(iter(tables.values()))
-        if preset in DEFAULT_CODON_TABLE_BY_STRAIN:
-            resolved_table_name = DEFAULT_CODON_TABLE_BY_STRAIN[preset]
+        canonical_preset = canonical_strain(preset) if preset else preset
+        if canonical_preset in DEFAULT_CODON_TABLE_BY_STRAIN:
+            resolved_table_name = DEFAULT_CODON_TABLE_BY_STRAIN[canonical_preset]
         elif "standard" in tables:
             resolved_table_name = "standard"
         elif len(tables) == 1:
@@ -308,11 +320,16 @@ def load_annotation_table(
 ) -> pd.DataFrame:
     """Load an annotation CSV from built-ins or from a user-provided path."""
     if annotation_file is None:
-        if preset not in BUILTIN_ANNOTATION_FILES:
+        canonical_preset = canonical_strain(preset) if preset else preset
+        if canonical_preset not in BUILTIN_ANNOTATION_FILES:
+            built_in = ", ".join(sorted(BUILTIN_ANNOTATION_FILES))
             raise ValueError(
-                "A built-in annotation table is only available for strain presets 'y' and 'h'."
+                "A built-in annotation table is only available for the "
+                f"following strain presets: {built_in}. For any other "
+                "organism use --strain custom and pass --annotation_file "
+                "<your-annotation.csv>."
             )
-        annotation_path = _package_data_path(BUILTIN_ANNOTATION_FILES[preset])
+        annotation_path = _package_data_path(BUILTIN_ANNOTATION_FILES[canonical_preset])
     else:
         annotation_path = Path(annotation_file)
 

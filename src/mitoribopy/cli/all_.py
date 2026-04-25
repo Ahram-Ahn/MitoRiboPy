@@ -13,7 +13,7 @@ Invocation pattern::
 The YAML (or JSON / TOML) config has three optional sections::
 
     align:   { kit_preset: truseq_smallrna, fastq_dir: fastqs/, ... }
-    rpf:     { strain: h, rpf: [29, 34], ... }
+    rpf:     { strain: h.sapiens, rpf: [29, 34], ... }
     rnaseq:  { de_table: de.tsv, gene_id_convention: hgnc, ... }
 
 Each section's keys correspond to the CLI flag names of the matching
@@ -392,9 +392,19 @@ align:
 
 # ---- rpf -------------------------------------------------------------------
 rpf:
-  # Organism + RPF length window
-  strain: h                       # h | y | vm | ym | custom
-  rpf: [29, 34]                   # min and max RPF length
+  # Organism + RPF length window.
+  #   h.sapiens     human mt (default; ships annotation + codon table)
+  #   s.cerevisiae  budding yeast mt (ships annotation + codon table)
+  #   custom        any other organism; supply --annotation_file +
+  #                 --codon_table_name (or --codon_tables_file).
+  # `h` and `y` are still accepted as deprecated short aliases.
+  strain: h.sapiens
+  # `rpf: null` lets --footprint_class drive the default range.
+  # short:    h.sapiens / s.cerevisiae 16-24 nt   (RNase truncation products)
+  # monosome: h.sapiens 28-34 nt, s.cerevisiae 37-41 nt
+  # disome:   h.sapiens 50-70 nt, s.cerevisiae 60-90 nt
+  footprint_class: monosome
+  rpf: [29, 34]
   fasta: null                     # reference FASTA (mt-transcriptome)
   directory: null                 # BED input dir (auto-wired from align/bed/)
 
@@ -688,8 +698,16 @@ def run(argv: Iterable[str]) -> int:
         if args.resume and _should_skip_align(run_root):
             stages_skipped.append("align")
         else:
+            align_cfg = _normalize_align_inputs(config["align"], run_root=run_root)
+            if args.resume:
+                # Propagate the orchestrator's --resume into the align
+                # CLI so it skips per-sample work that already completed
+                # (read_counts.tsv is missing -- we are running the
+                # stage -- but individual .sample_done/<sample>.json
+                # markers may exist from a previous crash).
+                align_cfg = {**align_cfg, "resume": True}
             align_argv = _dict_to_argv(
-                _normalize_align_inputs(config["align"], run_root=run_root),
+                align_cfg,
                 flag_style="hyphen",
                 repeat_flags={"fastq"},
             )
