@@ -112,26 +112,36 @@ What MitoRiboPy is **not**:
 
 ## Installation
 
-From the repository root:
+### From PyPI (recommended)
 
 ```bash
+python -m pip install mitoribopy
+```
+
+The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). This pulls in every Python dependency (`numpy`, `pandas`, `matplotlib`, `seaborn`, `biopython`, `scipy`, `PyYAML`, `pysam`) automatically. The external bioinformatics tools (`cutadapt`, `bowtie2`, `umi_tools`, …) still need to be on `$PATH` separately — see [External tool dependencies](#external-tool-dependencies) below.
+
+### From source (latest development version)
+
+```bash
+git clone https://github.com/Ahram-Ahn/MitoRiboPy.git
+cd MitoRiboPy
 python -m pip install -e .
 ```
 
-For development and tests:
+Use this when you need a fix or feature that has not yet been released to PyPI. For development and tests, install the dev extras:
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-Confirm the CLI is available:
+### Verify the install
 
 ```bash
-mitoribopy --version    # should print "MitoRiboPy 0.4.1"
+mitoribopy --version
 mitoribopy --help
 ```
 
-If you prefer not to install yet:
+If you prefer not to install at all:
 
 ```bash
 PYTHONPATH=src python -m mitoribopy --help
