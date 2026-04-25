@@ -73,17 +73,27 @@ def compute_total_counts(
     reads_col: str | None = None,
     normalization_mode: str = "total",
     reference_col: str | None = None,
+    mt_mrna_substring_patterns: list[str] | None = None,
+    *,
     mrna_ref_patterns: list[str] | None = None,
 ) -> tuple[dict[str, int], pd.DataFrame]:
-    """Aggregate read totals per sample from a count-summary table."""
+    """Aggregate read totals per sample from a count-summary table.
+
+    The ``mrna_ref_patterns`` keyword is a deprecated alias for the
+    canonical ``mt_mrna_substring_patterns`` and is accepted only so
+    pinned third-party callers keep working; new code should use the
+    new name.
+    """
     if normalization_mode not in {"total", "mt_mrna"}:
         raise ValueError(
             f"Unsupported normalization_mode='{normalization_mode}'. "
             "Use 'total' or 'mt_mrna'."
         )
 
-    if not mrna_ref_patterns:
-        mrna_ref_patterns = ["mt_genome", "mt-mrna", "mt_mrna"]
+    if mrna_ref_patterns is not None and mt_mrna_substring_patterns is None:
+        mt_mrna_substring_patterns = mrna_ref_patterns
+    if not mt_mrna_substring_patterns:
+        mt_mrna_substring_patterns = ["mt_genome", "mt-mrna", "mt_mrna"]
 
     counts_df = _read_count_table(count_summary_path)
     if counts_df.empty:
@@ -125,7 +135,9 @@ def compute_total_counts(
     if normalization_mode == "mt_mrna":
         work_df = work_df[
             work_df[reference_col].astype(str).apply(
-                lambda value: _match_any_substring(value, mrna_ref_patterns)
+                lambda value: _match_any_substring(
+                    value, mt_mrna_substring_patterns
+                )
             )
         ].copy()
 
@@ -158,7 +170,7 @@ def compute_total_counts(
         log_info(
             "COUNTS",
             "Reference filter substrings: "
-            + ", ".join(str(pattern) for pattern in mrna_ref_patterns),
+            + ", ".join(str(pattern) for pattern in mt_mrna_substring_patterns),
         )
     log_dataframe_preview("COUNTS", "Read-total summary", total_counts_df)
     return total_counts_map, total_counts_df

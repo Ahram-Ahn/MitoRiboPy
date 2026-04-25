@@ -37,8 +37,9 @@ def test_build_parser_help_groups_and_key_guidance() -> None:
     assert "Outputs and Plotting:" in help_text
     assert "Optional Modules:" in help_text
     assert "Which read end defines downstream site placement" in help_text
-    assert "How the best offset is chosen from enrichment tables" in help_text
-    assert "sum only rows whose reference matches --mrna_ref_patterns" in help_text
+    assert "Which coordinate space the best offset is chosen in" in help_text
+    assert "sum only rows whose reference matches" in help_text
+    assert "--mt_mrna_substring_patterns" in help_text
     assert "--structure_density" in help_text
     assert "--annotation_file" in help_text
     assert "--codon_table_name" in help_text

@@ -84,11 +84,17 @@ def determine_p_site_offsets(
         raise ValueError(f"Unsupported offset_site='{offset_site}'. Use 'p' or 'a'.")
 
     selection_reference = str(selection_reference).lower()
-    if selection_reference not in {"selected_site", "p_site"}:
+    # 'selected_site' is a deprecated alias for 'reported_site' (kept so
+    # old YAML configs still parse). Canonicalise here so the downstream
+    # checks only see the new name.
+    if selection_reference == "selected_site":
+        selection_reference = "reported_site"
+    if selection_reference not in {"reported_site", "p_site"}:
         raise ValueError(
             "Unsupported selection_reference='"
             + selection_reference
-            + "'. Use 'selected_site' or 'p_site'."
+            + "'. Use 'reported_site' or 'p_site' "
+            "(legacy alias 'selected_site' also accepted)."
         )
     offset_mask_nt = _validate_offset_mask_nt(offset_mask_nt)
     five_offset_min = offset_min if five_offset_min is None else int(five_offset_min)

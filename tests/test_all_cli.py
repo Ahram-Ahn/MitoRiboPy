@@ -21,7 +21,7 @@ def test_dict_to_argv_handles_scalars_bools_and_lists() -> None:
             "umi_length": 0,
             "resume": True,
             "skip_align": False,
-            "mrna_ref_patterns": ["mt_genome", "mt-mrna"],
+            "mt_mrna_substring_patterns": ["mt_genome", "mt-mrna"],
             "optional": None,
         }
     )
@@ -35,7 +35,7 @@ def test_dict_to_argv_handles_scalars_bools_and_lists() -> None:
     # None values -> omitted
     assert "--optional" not in argv
     # Lists -> flag followed by space-separated values
-    idx = argv.index("--mrna-ref-patterns")
+    idx = argv.index("--mt-mrna-substring-patterns")
     assert argv[idx + 1] == "mt_genome"
     assert argv[idx + 2] == "mt-mrna"
 
@@ -47,15 +47,15 @@ def test_dict_to_argv_underscore_style_preserves_underscores() -> None:
         {
             "offset_type": "5",
             "min_5_offset": 10,
-            "mrna_ref_patterns": ["mt_genome", "mt-mrna"],
-            "merge_density": True,
+            "mt_mrna_substring_patterns": ["mt_genome", "mt-mrna"],
+            "codon_density_window": True,
         },
         flag_style="underscore",
     )
     assert "--offset_type" in argv and "--offset-type" not in argv
     assert "--min_5_offset" in argv and "--min-5-offset" not in argv
-    assert "--mrna_ref_patterns" in argv
-    assert "--merge_density" in argv
+    assert "--mt_mrna_substring_patterns" in argv
+    assert "--codon_density_window" in argv
 
 
 def test_dict_to_argv_rejects_unknown_flag_style() -> None:
@@ -69,20 +69,20 @@ def test_dict_to_argv_round_trip_preserves_list_and_bool() -> None:
 
     section = {
         "rpf": [29, 34],
-        "mrna_ref_patterns": ["mt_genome", "mt-mrna"],
-        "merge_density": True,
+        "mt_mrna_substring_patterns": ["mt_genome", "mt-mrna"],
+        "codon_density_window": True,
         "structure_density": False,
     }
     argv = all_cli._dict_to_argv(section, flag_style="hyphen")
     parser = argparse.ArgumentParser()
     parser.add_argument("--rpf", nargs="+", type=int)
-    parser.add_argument("--mrna-ref-patterns", nargs="+")
-    parser.add_argument("--merge-density", action="store_true")
+    parser.add_argument("--mt-mrna-substring-patterns", nargs="+")
+    parser.add_argument("--codon-density-window", action="store_true")
     parser.add_argument("--structure-density", action="store_true")
     ns = parser.parse_args(argv)
     assert ns.rpf == [29, 34]
-    assert ns.mrna_ref_patterns == ["mt_genome", "mt-mrna"]
-    assert ns.merge_density is True
+    assert ns.mt_mrna_substring_patterns == ["mt_genome", "mt-mrna"]
+    assert ns.codon_density_window is True
     assert ns.structure_density is False  # bool False was dropped entirely
 
 
@@ -239,7 +239,7 @@ def test_all_dry_run_rpf_section_uses_underscored_flags(tmp_path, capsys) -> Non
         "  offset_type: '5'\n"
         "  offset_site: p\n"
         "  min_5_offset: 10\n"
-        "  merge_density: true\n"
+        "  codon_density_window: true\n"
     )
     exit_code = cli.main([
         "all",
@@ -253,7 +253,7 @@ def test_all_dry_run_rpf_section_uses_underscored_flags(tmp_path, capsys) -> Non
     assert "--offset-type" not in out
     assert "-rpf" not in out  # absent because this config did not set rpf
     assert "--min_5_offset 10" in out
-    assert "--merge_density" in out
+    assert "--codon_density_window" in out
 
 
 # ---------- required args ---------------------------------------------------

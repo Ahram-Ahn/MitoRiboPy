@@ -30,6 +30,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "min_3_offset": None,
     "max_3_offset": None,
     "offset_mask_nt": 5,
+    # 'p_site' (default): pick the offset in canonical P-site space then
+    # convert into the --offset_site space for reporting. 'reported_site'
+    # (formerly 'selected_site'): pick directly in --offset_site space.
     "offset_pick_reference": "p_site",
     "offset_type": "5",
     "offset_site": "p",
@@ -41,7 +44,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "x_breaks": None,
     "line_plot_style": "combined",
     "cap_percentile": 0.999,
-    "merge_density": False,
+    # When True, codon-density values are smoothed with a +/-1 nt
+    # window around the codon centre. Old name 'merge_density' is
+    # accepted via _DEPRECATED_CONFIG_KEY_ALIASES in pipeline/runner.py.
+    "codon_density_window": False,
     "psite_offset": None,
     "read_counts_file": "read_counts_summary.txt",
     "read_counts_sample_col": None,
@@ -49,7 +55,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "unfiltered_read_length_range": [15, 50],
     "rpm_norm_mode": "total",
     "read_counts_reference_col": None,
-    "mrna_ref_patterns": ["mt_genome", "mt-mrna", "mt_mrna"],
+    # Substring patterns identifying mt-mRNA rows in the read-count
+    # table when rpm_norm_mode == 'mt_mrna'. Old name 'mrna_ref_patterns'
+    # is accepted via _DEPRECATED_CONFIG_KEY_ALIASES in pipeline/runner.py.
+    "mt_mrna_substring_patterns": ["mt_genome", "mt-mrna", "mt_mrna"],
     "structure_density": False,
     "structure_density_norm_perc": 0.99,
     "order_samples": None,
@@ -92,6 +101,13 @@ FOOTPRINT_CLASS_DEFAULTS: dict[str, dict[str, tuple[int, int]]] = {
 }
 
 
+DEPRECATED_CONFIG_KEY_ALIASES: dict[str, str] = {
+    # legacy YAML key            -> canonical key
+    "merge_density": "codon_density_window",
+    "mrna_ref_patterns": "mt_mrna_substring_patterns",
+}
+
+
 def load_user_config(config_path: str | None) -> dict[str, Any]:
     """Load a JSON, YAML, or TOML config file and keep only recognized keys.
 
@@ -101,6 +117,12 @@ def load_user_config(config_path: str | None) -> dict[str, Any]:
     * ``.yaml`` / ``.yml``              - :mod:`yaml` (PyYAML, required dep)
     * ``.toml``                         - stdlib :mod:`tomllib` (Py 3.11+)
                                           or the optional :mod:`tomli` fallback
+
+    Legacy keys listed in :data:`DEPRECATED_CONFIG_KEY_ALIASES` are
+    silently rewritten to their canonical names before the unknown-key
+    check (the runner-level deprecation warning is emitted after this
+    pass so the user sees one line per renamed key, not one line per
+    pipeline invocation).
 
     Unknown keys are reported as a ``CONFIG`` warning and ignored.
     """
@@ -144,12 +166,23 @@ def load_user_config(config_path: str | None) -> dict[str, Any]:
             f"{type(raw).__name__}."
         )
 
+    # Rewrite deprecated keys before the unknown-key check so legacy
+    # configs continue to load cleanly.
+    canonicalized: dict[str, Any] = {}
+    for key, value in raw.items():
+        canonical = DEPRECATED_CONFIG_KEY_ALIASES.get(key, key)
+        if canonical in canonicalized:
+            # Both the legacy and canonical key were set; the canonical
+            # value already loaded wins.
+            continue
+        canonicalized[canonical] = value
+
     allowed = set(DEFAULT_CONFIG.keys())
-    unknown = sorted(key for key in raw.keys() if key not in allowed)
+    unknown = sorted(key for key in canonicalized.keys() if key not in allowed)
     if unknown:
         log_warning("CONFIG", f"Ignoring unknown keys: {', '.join(unknown)}")
 
-    return {key: value for key, value in raw.items() if key in allowed}
+    return {key: value for key, value in canonicalized.items() if key in allowed}
 
 
 def resolve_rpf_range(

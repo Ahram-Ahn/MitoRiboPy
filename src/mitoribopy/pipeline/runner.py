@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -270,12 +271,21 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     offset_group.add_argument(
         "--offset_pick_reference",
-        choices=["selected_site", "p_site"],
+        choices=["reported_site", "p_site", "selected_site"],
         default=defaults["offset_pick_reference"],
         help=(
-            "How the best offset is chosen from enrichment tables:\n"
-            "  p_site         choose in canonical P-site space first, then convert if needed\n"
-            "  selected_site  choose directly in the final --offset_site space (legacy)"
+            "Which coordinate space the best offset is chosen in.\n"
+            "  p_site         (default) pick the offset in canonical P-site\n"
+            "                 space first, then convert into the space\n"
+            "                 named by --offset_site if that is 'a'.\n"
+            "                 Use this when comparing across samples with\n"
+            "                 different offset_site choices.\n"
+            "  reported_site  pick the offset directly in the same space\n"
+            "                 named by --offset_site (no P<->A conversion).\n"
+            "                 Use this when you want what you see in the\n"
+            "                 enrichment table for --offset_site to be the\n"
+            "                 exact value picked.\n"
+            "  selected_site  DEPRECATED alias for 'reported_site'."
         ),
     )
     offset_group.add_argument(
@@ -319,9 +329,17 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         choices=["full", "any"],
         default=defaults["codon_overlap_mode"],
         help=(
-            "How reads count toward offset enrichment:\n"
-            "  full  the read must span all 3 nt of the anchor codon\n"
-            "  any   any partial codon overlap is enough"
+            "How reads count toward the codon-level offset-enrichment\n"
+            "table at each anchor codon (start or stop, per --align).\n"
+            "  full  (default) the read must span ALL 3 nt of the anchor\n"
+            "        codon. Example: anchor codon at positions 101-103;\n"
+            "        a 30-nt read at 100-129 counts (read covers 101, 102,\n"
+            "        103); a read at 102-131 does NOT count (does not\n"
+            "        cover position 101). Strict and the right default for\n"
+            "        ribo-seq footprints (>= ~26 nt).\n"
+            "  any   any 1+ nt overlap with the anchor codon counts. The\n"
+            "        102-131 read above WOULD count. Use only for very\n"
+            "        short reads relative to a codon (rare for ribo-seq)."
         ),
     )
     offset_group.add_argument(
@@ -398,10 +416,20 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     output_group.add_argument(
         "-m",
+        "--codon_density_window",
         "--merge_density",
+        dest="codon_density_window",
         action="store_true",
-        default=defaults["merge_density"],
-        help="Collapse frame 1 and frame 2 into frame 0 for codon-density summaries.",
+        default=defaults["codon_density_window"],
+        help=(
+            "When set, the codon-level density at each codon centre is "
+            "summed with its +/-1 nt neighbours (a 3-nt sliding window) "
+            "before being written into the codon coverage / usage tables "
+            "and plots. Smooths short-window noise around the codon "
+            "centre; does NOT collapse reading frames despite the "
+            "historical flag name '--merge_density' (which is kept as a "
+            "deprecated alias)."
+        ),
     )
     output_group.add_argument(
         "--order_samples",
@@ -449,7 +477,8 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help=(
             "RPM denominator used for unfiltered and coverage-profile normalization:\n"
             "  total    sum all rows in the read-count table\n"
-            "  mt_mrna  sum only rows whose reference matches --mrna_ref_patterns"
+            "  mt_mrna  sum only rows whose reference matches\n"
+            "           --mt_mrna_substring_patterns"
         ),
     )
     normalization_group.add_argument(
@@ -461,13 +490,23 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     normalization_group.add_argument(
+        "--mt_mrna_substring_patterns",
         "--mrna_ref_patterns",
+        dest="mt_mrna_substring_patterns",
         nargs="+",
         metavar="PATTERN",
-        default=defaults["mrna_ref_patterns"],
+        default=defaults["mt_mrna_substring_patterns"],
         help=(
-            "Substring pattern(s) used to identify mt-mRNA rows when\n"
-            "--rpm_norm_mode mt_mrna is selected."
+            "When --rpm_norm_mode mt_mrna is selected, the RPM denominator\n"
+            "uses only rows from the read-count table whose value in the\n"
+            "reference column (set via --read_counts_reference_col, or\n"
+            "auto-detected) contains ANY of these substrings. Default\n"
+            "matches reference names like 'mt_genome', 'mt-mrna', and\n"
+            "'mt_mrna'. Example: in a read-count table with rows for\n"
+            "'rrna', 'trna', 'mt_mrna_ND1', and 'mt_mrna_COX1', the\n"
+            "default pattern keeps the latter two and drops the\n"
+            "(r/t)RNA rows. The legacy flag name '--mrna_ref_patterns'\n"
+            "is kept as a deprecated alias."
         ),
     )
     optional_group.add_argument(
@@ -548,6 +587,11 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     return parser
 
 
+def _warn_deprecated(message: str) -> None:
+    """Emit a single-line deprecation notice on stderr."""
+    print(f"[mitoribopy] DEPRECATED: {message}", file=sys.stderr)
+
+
 def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """Parse and validate pipeline CLI arguments."""
     argv_list = None if argv is None else list(argv)
@@ -562,6 +606,16 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
 
     parser = build_parser(defaults)
     args = parser.parse_args(argv_list)
+
+    # Canonicalise the deprecated --offset_pick_reference value at the
+    # CLI boundary so every downstream consumer sees the new name and
+    # the user gets one (and only one) deprecation line.
+    if getattr(args, "offset_pick_reference", None) == "selected_site":
+        _warn_deprecated(
+            "--offset_pick_reference selected_site -> reported_site "
+            "(same behaviour, clearer name)."
+        )
+        args.offset_pick_reference = "reported_site"
 
     if args.min_5_offset is None:
         args.min_5_offset = args.min_offset

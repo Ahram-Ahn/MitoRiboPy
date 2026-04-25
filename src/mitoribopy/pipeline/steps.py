@@ -111,7 +111,7 @@ def load_total_read_counts(context: PipelineContext, emit_status: StatusWriter) 
                 reads_col=context.args.read_counts_reads_col,
                 normalization_mode=context.args.rpm_norm_mode,
                 reference_col=context.args.read_counts_reference_col,
-                mrna_ref_patterns=context.args.mrna_ref_patterns,
+                mt_mrna_substring_patterns=context.args.mt_mrna_substring_patterns,
             )
         except Exception as exc:
             emit_status(

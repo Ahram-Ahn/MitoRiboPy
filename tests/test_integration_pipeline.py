@@ -210,7 +210,7 @@ def test_offset_mask_excludes_near_anchor_bins_from_summary_and_selection(tmp_pa
         offset_max=10,
         offset_mask_nt=5,
         offset_site="p",
-        selection_reference="selected_site",
+        selection_reference="reported_site",
     )
 
     assert selected is not None
@@ -235,7 +235,7 @@ def test_determine_p_site_offsets_supports_separate_five_and_three_ranges(tmp_pa
         three_offset_min=15,
         three_offset_max=20,
         offset_site="p",
-        selection_reference="selected_site",
+        selection_reference="reported_site",
     )
 
     assert selected is not None
@@ -306,7 +306,7 @@ def test_translation_profile_analysis_writes_transcript_level_asite_stop_codon_u
         }
     )
     args = SimpleNamespace(
-        merge_density=False,
+        codon_density_window=False,
         strain="h",
         cap_percentile=0.999,
         offset_site="p",
