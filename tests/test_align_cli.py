@@ -226,6 +226,22 @@ def mocked_align_step_functions(monkeypatch, tmp_path):
 
     monkeypatch.setattr(align_cli.bam_utils, "filter_bam_mapq", fake_filter_mapq)
 
+    # The CLI bypasses dedup_step.skip_dedup for the no-UMI ('skip')
+    # path and instead calls dedup_step.skip_dedup_in_place. Stub the
+    # whole helper so the placeholder mapq.bam (empty bytes) does not
+    # blow up pysam.
+    def fake_skip_in_place(bam_path, **kwargs):
+        return DedupResult(
+            strategy="skip",
+            input_reads=470,
+            output_reads=470,
+            bam_path=Path(bam_path),
+        )
+
+    monkeypatch.setattr(
+        align_cli.dedup_step, "skip_dedup_in_place", fake_skip_in_place
+    )
+
     def fake_run_dedup(*, bam_in, bam_out, **kwargs):
         Path(bam_out).parent.mkdir(parents=True, exist_ok=True)
         Path(bam_out).write_bytes(b"")
@@ -285,18 +301,25 @@ def test_end_to_end_orchestration_produces_expected_outputs(
 
     assert exit_code == 0
 
-    # Directory layout:
-    for subdir in ("trimmed", "contam_filtered", "aligned", "deduped", "bed"):
+    # Directory layout — only the dirs that hold a kept artefact remain
+    # populated. trimmed/ and contam_filtered/ exist because cutadapt /
+    # contam-subtract created them, but the FASTQ files inside them
+    # have been deleted as soon as the next step consumed them.
+    for subdir in ("trimmed", "contam_filtered", "aligned", "bed"):
         assert (out_dir / subdir).is_dir(), f"missing {subdir}/"
 
-    # Per-sample artifacts:
+    # Per-sample artifacts. Intermediate FASTQs and the pre-MAPQ BAM
+    # are removed by the orchestrator unless --keep-intermediates is
+    # passed; only the cutadapt JSON log, the post-MAPQ BAM, and the
+    # final BED survive. There is no separate dedup.bam for the no-UMI
+    # path: the orchestrator wires mapq.bam straight into bam_to_bed6.
     for sample in ("sampleA", "sampleB"):
-        assert (out_dir / "trimmed" / f"{sample}.trimmed.fq.gz").exists()
+        assert not (out_dir / "trimmed" / f"{sample}.trimmed.fq.gz").exists()
         assert (out_dir / "trimmed" / f"{sample}.cutadapt.json").exists()
-        assert (out_dir / "contam_filtered" / f"{sample}.nocontam.fq.gz").exists()
-        assert (out_dir / "aligned" / f"{sample}.bam").exists()
+        assert not (out_dir / "contam_filtered" / f"{sample}.nocontam.fq.gz").exists()
+        assert not (out_dir / "aligned" / f"{sample}.bam").exists()
         assert (out_dir / "aligned" / f"{sample}.mapq.bam").exists()
-        assert (out_dir / "deduped" / f"{sample}.dedup.bam").exists()
+        assert not (out_dir / "deduped" / f"{sample}.dedup.bam").exists()
         assert (out_dir / "bed" / f"{sample}.bed").exists()
 
     # Provenance files:

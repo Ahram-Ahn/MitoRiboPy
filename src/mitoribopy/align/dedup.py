@@ -240,6 +240,35 @@ def run_mark_duplicates(
     )
 
 
+def skip_dedup_in_place(
+    bam_path: Path,
+    *,
+    counter=_count_mapped_reads,
+) -> DedupResult:
+    """Record a 'skip' dedup result without touching the filesystem.
+
+    The default code path in :func:`run_dedup` (when strategy='skip')
+    creates a hardlink/copy of the input BAM under deduped/. That
+    duplicated artefact is wasted disk for the common no-UMI case
+    because the downstream :func:`mitoribopy.align.bam_utils.bam_to_bed6`
+    reads BAM content, not a path. The CLI orchestrator calls THIS
+    function instead, then feeds the original (mapq.bam) BAM straight
+    into bam_to_bed6.
+
+    Returns a :class:`DedupResult` with ``strategy='skip'`` and equal
+    input/output counts so the read-counts table still records the
+    stage clearly.
+    """
+    bam_path = Path(bam_path)
+    count = counter(bam_path)
+    return DedupResult(
+        strategy="skip",
+        input_reads=count,
+        output_reads=count,
+        bam_path=bam_path,
+    )
+
+
 def skip_dedup(
     *,
     bam_in: Path,
@@ -258,6 +287,11 @@ def skip_dedup(
     Returns a :class:`DedupResult` with ``strategy='skip'`` and equal
     input/output counts so the Phase H read-counts table records the
     stage clearly.
+
+    The CLI orchestrator now prefers :func:`skip_dedup_in_place` for the
+    common no-UMI case (no on-disk duplication); this function is kept
+    for callers that explicitly want a separate output path (e.g. a
+    test harness that asserts the file exists).
     """
     bam_in = Path(bam_in)
     bam_out = Path(bam_out)

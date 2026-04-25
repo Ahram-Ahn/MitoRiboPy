@@ -191,6 +191,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     library.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep the per-step intermediate files (trimmed FASTQ, "
+            "contam-filtered FASTQ, pre-MAPQ BAM). By default these are "
+            "deleted as soon as the next step has consumed them, since "
+            "they are large, regenerable, and not needed by any "
+            "downstream stage. Pass this flag when debugging a sample "
+            "or comparing per-step intermediate counts."
+        ),
+    )
+    library.add_argument(
         "--adapter-detection",
         choices=["auto", "off", "strict"],
         default="auto",
@@ -515,6 +528,7 @@ def _process_one_sample(
     fastq_in = resolution.fastq
     resolved_kit = resolution.kit
     resolved_dedup = resolution.dedup_strategy
+    keep_intermediates = bool(getattr(args, "keep_intermediates", False))
 
     trimmed_dir = output_dir / "trimmed"
     contam_dir = output_dir / "contam_filtered"
@@ -569,6 +583,10 @@ def _process_one_sample(
         "contam-filter",
         f"{contam.unaligned_reads} reads passed through; {contam.aligned_to_contam} removed as contaminants",
     )
+    # The trimmed FASTQ is no longer read after contam-filter consumes
+    # it. Drop it now so a 1000-sample run does not fill the disk with
+    # ~50% of the original input size in regenerable .fq.gz copies.
+    _maybe_unlink(trimmed_fq, keep=keep_intermediates)
 
     _log_sample_stage(sample, "mt-align", f"aligning against {args.mt_index}")
     alignment = align_step.align_mt(
@@ -584,6 +602,7 @@ def _process_one_sample(
         "mt-align",
         f"aligned {alignment.aligned}/{alignment.total_reads} reads to the mt-transcriptome",
     )
+    _maybe_unlink(nocontam_fq, keep=keep_intermediates)
 
     _log_sample_stage(sample, "mapq-filter", f"keeping reads with MAPQ >= {args.mapq}")
     mapq_kept = bam_utils.filter_bam_mapq(
@@ -592,22 +611,38 @@ def _process_one_sample(
         mapq_threshold=args.mapq,
     )
     _log_sample_stage(sample, "mapq-filter", f"kept {mapq_kept} reads")
+    # The pre-MAPQ BAM is identical to mapq_bam minus the filtered reads;
+    # nothing downstream reads it again.
+    _maybe_unlink(aligned_bam, keep=keep_intermediates)
+    _maybe_unlink(aligned_bam.with_suffix(".bam.bai"), keep=keep_intermediates)
 
     _log_sample_stage(sample, "dedup", f"strategy={resolved_dedup}")
-    dedup = dedup_step.run_dedup(
-        strategy=resolved_dedup,
-        umi_length=resolved_kit.umi_length,
-        confirm_mark_duplicates=args.confirm_mark_duplicates,
-        bam_in=mapq_bam,
-        bam_out=dedup_bam,
-        log_path=dedup_log,
-        umi_tools_method=args.umi_dedup_method,
-    )
-    _log_sample_stage(
-        sample,
-        "dedup",
-        f"kept {dedup.output_reads}/{dedup.input_reads} reads after deduplication",
-    )
+    if resolved_dedup == "skip":
+        # Avoid the hardlink/copy of skip_dedup. bam_to_bed6 reads BAM
+        # content, not a path, so feeding mapq.bam directly is identical
+        # and saves the duplicated dedup.bam + dedup.bam.bai pair on
+        # every no-UMI sample.
+        dedup = dedup_step.skip_dedup_in_place(mapq_bam)
+        _log_sample_stage(
+            sample,
+            "dedup",
+            f"strategy=skip; passing {dedup.output_reads} reads through unchanged",
+        )
+    else:
+        dedup = dedup_step.run_dedup(
+            strategy=resolved_dedup,
+            umi_length=resolved_kit.umi_length,
+            confirm_mark_duplicates=args.confirm_mark_duplicates,
+            bam_in=mapq_bam,
+            bam_out=dedup_bam,
+            log_path=dedup_log,
+            umi_tools_method=args.umi_dedup_method,
+        )
+        _log_sample_stage(
+            sample,
+            "dedup",
+            f"kept {dedup.output_reads}/{dedup.input_reads} reads after deduplication",
+        )
 
     _log_sample_stage(sample, "bam-to-bed", f"writing {bed_out.name}")
     bam_utils.bam_to_bed6(bam_in=dedup.bam_path, bed_out=bed_out)
@@ -621,6 +656,20 @@ def _process_one_sample(
         mapq_count=mapq_kept,
         dedup=dedup,
     )
+
+
+def _maybe_unlink(path: Path, *, keep: bool) -> None:
+    """Best-effort delete an intermediate file unless the user asked to keep them."""
+    if keep:
+        return
+    try:
+        Path(path).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # Cross-fs hardlinks or read-only mounts can fail; not worth
+        # crashing the run over a leftover ~MB-sized file.
+        pass
 
 
 def _log_sample_stage(sample: str, stage: str, detail: str) -> None:
