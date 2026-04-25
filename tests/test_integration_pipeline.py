@@ -357,27 +357,37 @@ def test_end_to_end_cli_smoke_generates_codon_usage_outputs(tmp_path: Path) -> N
         assert f"[PIPELINE] Step {step_number}/7" in result.stdout
 
     offsets_csv = output_dir / "plots_and_csv" / "p_site_offsets_stop.csv"
-    # Default analysis_sites=both → translation profile + coverage land
-    # in per-site subdirectories.
+    # Default analysis_sites=both → translation_profile/<sample>/{p,a}/
+    # and coverage_profile_plots/{p,a}/site_density_*/. Read coverage
+    # plots are site-independent and live at coverage_profile_plots/
+    # (not nested under p/ or a/) so the orchestrator does not write
+    # them twice.
     footprint_csv = (
-        output_dir / "translation_profile_p" / "S1" / "footprint_density" / "ND1_footprint_density.csv"
+        output_dir / "translation_profile" / "p" / "S1" / "footprint_density" / "ND1_footprint_density.csv"
     )
     codon_usage_csv = (
-        output_dir / "translation_profile_p" / "S1" / "codon_usage" / "codon_usage_total.csv"
+        output_dir / "translation_profile" / "p" / "S1" / "codon_usage" / "codon_usage_total.csv"
     )
-    coverage_plot_dir = output_dir / "coverage_profile_plots_p"
+    coverage_root = output_dir / "coverage_profile_plots"
     filtered_bed_dir = output_dir / "plots_and_csv" / "filtered_bed"
     log_file = output_dir / "mitoribopy.log"
 
     assert offsets_csv.exists()
     assert footprint_csv.exists()
     assert codon_usage_csv.exists()
-    assert coverage_plot_dir.exists()
-    # A-site outputs are also written when analysis_sites=both.
-    assert (output_dir / "translation_profile_a" / "S1" / "codon_usage" / "codon_usage_total.csv").exists()
-    assert (output_dir / "coverage_profile_plots_a").exists()
+    # Site-independent read coverage at the top of coverage_profile_plots/.
+    assert (coverage_root / "read_coverage_rpm").exists()
+    # Site-specific density plots under p/ and a/.
+    assert (coverage_root / "p" / "site_density_rpm").exists()
+    assert (coverage_root / "a" / "site_density_rpm").exists()
+    # A-site translation_profile outputs are also written.
+    assert (output_dir / "translation_profile" / "a" / "S1" / "codon_usage" / "codon_usage_total.csv").exists()
     assert not filtered_bed_dir.exists()
-    assert list(coverage_plot_dir.rglob("*.svg")), "Expected at least one coverage-profile SVG output"
+    assert list(coverage_root.rglob("*.svg")), "Expected at least one coverage-profile SVG output"
+    # E_site column dropped from the CSV (v0.4.x cleanup); A_site comes
+    # before P_site, no *_selected_depth tail column.
+    fp_cols = pd.read_csv(footprint_csv, nrows=1).columns.tolist()
+    assert fp_cols == ["Position", "Nucleotide", "A_site", "P_site"]
     assert log_file.exists()
     assert "[PIPELINE] Step 7/7" in log_file.read_text(encoding="utf-8")
 

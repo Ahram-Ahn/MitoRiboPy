@@ -10,13 +10,20 @@ Each set contains a *read‑coverage* panel and a *P‑site* panel.
 All samples share the same y‑axis per transcript so that visual
 comparisons are not confounded by different scale bars.
 
-The directory layout after a successful run looks like this::
+Directory layout (v0.4.x, unified per-site)::
 
-    <output_dir>/
-        read_coverage_rpm/   *.<plot_format>
-        p_site_coverage_rpm/ *.<plot_format>
-        read_coverage_raw/   *.<plot_format>
-        p_site_coverage_raw/ *.<plot_format>
+    <coverage_profile_plots>/
+        read_coverage_rpm/         *.<plot_format>      (site-independent;
+        read_coverage_raw/                               written ONCE even
+        read_coverage_rpm_codon/                         when both sites are
+        read_coverage_raw_codon/                         analysed)
+        <site>/                                          # 'p' or 'a'
+            site_density_rpm/      *.<plot_format>
+            site_density_raw/
+            site_density_rpm_codon/
+            site_density_raw_codon/
+            site_density_rpm_frame/                      (CDS only,
+            site_density_raw_frame/                       frame-coloured)
 
 Usage
 -----
@@ -168,6 +175,8 @@ def run_coverage_profile_plots(
     total_mrna_map: dict[str, int | float] | None = None,
     selected_offsets_by_sample: dict | None = None,
     site_override: str | None = None,
+    read_coverage_dir: str | Path | None = None,
+    write_read_coverage: bool = True,
 ):
     """Create RPM and raw-count coverage-profile plots.
 
@@ -175,25 +184,43 @@ def run_coverage_profile_plots(
     ----------
     sample_dirs
         List of directories, each containing the sample's BED files.
-        Their order defines the row order in the multi‑panel figures.
+        Their order defines the row order in the multi-panel figures.
     selected_offsets_df
         DataFrame mapping read length to the selected 5' and 3' offsets.
     offset_type
-        Either "5" or "3" (use 5′ or 3′ offsets).
+        Either "5" or "3" (use 5' or 3' offsets).
     fasta_file
         FASTA file for sequence lengths.
     output_dir
-        Parent directory in which the four sub‑directories will be created.
+        Parent directory in which the SITE-DEPENDENT subdirectories will
+        be created (``site_density_rpm/`` etc.). For a per-site run this
+        is typically ``<coverage_profile_plots>/p`` or ``.../a``.
     args
         Parsed arguments namespace (expects .cap_percentile).
     annotation_df
-        Gene annotation – *only* used to decide whether a BED record is
+        Gene annotation - only used to decide whether a BED record is
         CDS, hence not detailed here.
+    read_coverage_dir
+        Optional separate parent for the SITE-INDEPENDENT
+        ``read_coverage_*`` subdirectories. Defaults to ``output_dir``
+        for backward-compatibility. The pipeline orchestrator passes
+        ``<coverage_profile_plots>`` (one level above the per-site
+        subdir) so the duplicate read_coverage figures are not written
+        twice when both sites are analysed.
+    write_read_coverage
+        When False, the read_coverage_* directories and figures are
+        skipped entirely. Used by the orchestrator on the second site
+        to avoid recomputing site-independent plots.
     """
 
     log_info("COVERAGE", "Generating coverage-profile plots (RPM + raw counts).")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    read_coverage_dir = (
+        Path(read_coverage_dir) if read_coverage_dir is not None else output_dir
+    )
+    if write_read_coverage:
+        read_coverage_dir.mkdir(parents=True, exist_ok=True)
     plot_format = getattr(args, "plot_format", "svg")
     if site_override is not None:
         offset_site = str(site_override).lower()
@@ -384,31 +411,45 @@ def run_coverage_profile_plots(
     # ------------------------------------------------------------------
     # G) Prepare output directories
     # ------------------------------------------------------------------
-    read_dir_rpm = output_dir / "read_coverage_rpm"
-    psite_dir_rpm = output_dir / "p_site_coverage_rpm"
-    read_dir_raw = output_dir / "read_coverage_raw"
-    psite_dir_raw = output_dir / "p_site_coverage_raw"
-    read_dir_rpm_codon = output_dir / "read_coverage_rpm_codon"
-    psite_dir_rpm_codon = output_dir / "p_site_coverage_rpm_codon"
-    read_dir_raw_codon = output_dir / "read_coverage_raw_codon"
-    psite_dir_raw_codon = output_dir / "p_site_coverage_raw_codon"
-    # Frame-colored nucleotide-resolution plots scoped to the CDS only.
+    # Site-INDEPENDENT (always under read_coverage_dir, which the
+    # orchestrator points at <coverage_profile_plots>/ so the figures
+    # are not duplicated for both sites).
+    read_dir_rpm = read_coverage_dir / "read_coverage_rpm"
+    read_dir_raw = read_coverage_dir / "read_coverage_raw"
+    read_dir_rpm_codon = read_coverage_dir / "read_coverage_rpm_codon"
+    read_dir_raw_codon = read_coverage_dir / "read_coverage_raw_codon"
+    # Site-DEPENDENT (under output_dir, typically the per-site subdir
+    # <coverage_profile_plots>/p or .../a). Renamed from
+    # 'p_site_coverage_*' to 'site_density_*' because the parent dir
+    # already names the site (P or A) and the same plot type is also
+    # used in A-site mode.
+    site_density_dir_rpm = output_dir / "site_density_rpm"
+    site_density_dir_raw = output_dir / "site_density_raw"
+    site_density_dir_rpm_codon = output_dir / "site_density_rpm_codon"
+    site_density_dir_raw_codon = output_dir / "site_density_raw_codon"
+    # Frame-coloured nucleotide-resolution plots scoped to the CDS only.
     # Frame-0 dominance is the canonical mt-Ribo-seq QC signature.
-    psite_dir_rpm_frame = output_dir / "p_site_coverage_rpm_frame"
-    psite_dir_raw_frame = output_dir / "p_site_coverage_raw_frame"
-    for d in (
-        read_dir_rpm,
-        psite_dir_rpm,
-        read_dir_raw,
-        psite_dir_raw,
-        read_dir_rpm_codon,
-        psite_dir_rpm_codon,
-        read_dir_raw_codon,
-        psite_dir_raw_codon,
-        psite_dir_rpm_frame,
-        psite_dir_raw_frame,
-    ):
-        d.mkdir(exist_ok=True)
+    site_density_dir_rpm_frame = output_dir / "site_density_rpm_frame"
+    site_density_dir_raw_frame = output_dir / "site_density_raw_frame"
+
+    site_density_dirs = (
+        site_density_dir_rpm,
+        site_density_dir_raw,
+        site_density_dir_rpm_codon,
+        site_density_dir_raw_codon,
+        site_density_dir_rpm_frame,
+        site_density_dir_raw_frame,
+    )
+    for d in site_density_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+    if write_read_coverage:
+        for d in (
+            read_dir_rpm,
+            read_dir_raw,
+            read_dir_rpm_codon,
+            read_dir_raw_codon,
+        ):
+            d.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # H) Helper to plot a multi‑panel coverage figure
@@ -577,42 +618,35 @@ def run_coverage_profile_plots(
         plt.close(fig)
         return out_path
 
+    primary_label = "P-site" if offset_site == "p" else "A-site"
+
     for tr in transcripts:
-        # RPM
-        out_r_rpm = _plot_cov(tr, read_cov_map, read_global_max, read_dir_rpm, "Read Coverage (RPM)", "steelblue")
-        out_p_rpm = _plot_cov(tr, psite_cov_map, psite_global_max, psite_dir_rpm, "P-site Density (RPM)", "forestgreen")
-        # RAW
-        out_r_raw = _plot_cov(tr, raw_read_cov_map, raw_read_global_max, read_dir_raw, "Read Coverage (Raw Counts)", "steelblue")
-        out_p_raw = _plot_cov(tr, raw_psite_cov_map, raw_psite_global_max, psite_dir_raw, "P-site Density (Raw Counts)", "forestgreen")
-        out_r_rpm_codon = _plot_cov(
+        # Site-DEPENDENT plots (always written under output_dir; that
+        # parent encodes which site we are on, so the inner names use
+        # the neutral 'site_density' prefix).
+        out_p_rpm = _plot_cov(
             tr,
-            read_cov_map_codon,
-            read_global_max_codon,
-            read_dir_rpm_codon,
-            "Read Coverage (RPM, Codon-binned CDS)",
-            "steelblue",
-            x_label="CDS Codon Position",
-            start_at_one=True,
-            rotation=0,
+            psite_cov_map,
+            psite_global_max,
+            site_density_dir_rpm,
+            f"{primary_label} Density (RPM)",
+            "forestgreen",
+        )
+        out_p_raw = _plot_cov(
+            tr,
+            raw_psite_cov_map,
+            raw_psite_global_max,
+            site_density_dir_raw,
+            f"{primary_label} Density (Raw Counts)",
+            "forestgreen",
         )
         out_p_rpm_codon = _plot_cov(
             tr,
             psite_cov_map_codon,
             psite_global_max_codon,
-            psite_dir_rpm_codon,
-            "P-site Density (RPM, Codon-binned CDS)",
+            site_density_dir_rpm_codon,
+            f"{primary_label} Density (RPM, Codon-binned CDS)",
             "forestgreen",
-            x_label="CDS Codon Position",
-            start_at_one=True,
-            rotation=0,
-        )
-        out_r_raw_codon = _plot_cov(
-            tr,
-            raw_read_cov_map_codon,
-            raw_read_global_max_codon,
-            read_dir_raw_codon,
-            "Read Coverage (Raw Counts, Codon-binned CDS)",
-            "steelblue",
             x_label="CDS Codon Position",
             start_at_one=True,
             rotation=0,
@@ -621,31 +655,70 @@ def run_coverage_profile_plots(
             tr,
             raw_psite_cov_map_codon,
             raw_psite_global_max_codon,
-            psite_dir_raw_codon,
-            "P-site Density (Raw Counts, Codon-binned CDS)",
+            site_density_dir_raw_codon,
+            f"{primary_label} Density (Raw Counts, Codon-binned CDS)",
             "forestgreen",
             x_label="CDS Codon Position",
             start_at_one=True,
             rotation=0,
         )
-        # Frame-colored P-site nt plots (CDS only; Okabe-Ito palette).
         out_p_rpm_frame = _plot_frame_colored(
             tr,
             psite_cds_slice_rpm,
             psite_frame_max_rpm,
-            psite_dir_rpm_frame,
-            "P-site Density (RPM, CDS Frame Coloring)",
+            site_density_dir_rpm_frame,
+            f"{primary_label} Density (RPM, CDS Frame Coloring)",
         )
         out_p_raw_frame = _plot_frame_colored(
             tr,
             psite_cds_slice_raw,
             psite_frame_max_raw,
-            psite_dir_raw_frame,
-            "P-site Density (Raw Counts, CDS Frame Coloring)",
+            site_density_dir_raw_frame,
+            f"{primary_label} Density (Raw Counts, CDS Frame Coloring)",
         )
+
+        # Site-INDEPENDENT plots (skipped on the second site so the
+        # orchestrator does not redo identical work).
+        out_r_rpm = out_r_raw = out_r_rpm_codon = out_r_raw_codon = None
+        if write_read_coverage:
+            out_r_rpm = _plot_cov(
+                tr, read_cov_map, read_global_max, read_dir_rpm,
+                "Read Coverage (RPM)", "steelblue",
+            )
+            out_r_raw = _plot_cov(
+                tr, raw_read_cov_map, raw_read_global_max, read_dir_raw,
+                "Read Coverage (Raw Counts)", "steelblue",
+            )
+            out_r_rpm_codon = _plot_cov(
+                tr,
+                read_cov_map_codon,
+                read_global_max_codon,
+                read_dir_rpm_codon,
+                "Read Coverage (RPM, Codon-binned CDS)",
+                "steelblue",
+                x_label="CDS Codon Position",
+                start_at_one=True,
+                rotation=0,
+            )
+            out_r_raw_codon = _plot_cov(
+                tr,
+                raw_read_cov_map_codon,
+                raw_read_global_max_codon,
+                read_dir_raw_codon,
+                "Read Coverage (Raw Counts, Codon-binned CDS)",
+                "steelblue",
+                x_label="CDS Codon Position",
+                start_at_one=True,
+                rotation=0,
+            )
+
         log_info(
             "COVERAGE",
-            f"{tr} -> rpm:({out_r_rpm.name},{out_p_rpm.name}) | raw:({out_r_raw.name},{out_p_raw.name})"
+            f"{tr} -> "
+            + (
+                f"rpm:({out_r_rpm.name if out_r_rpm else 'n/a'},{out_p_rpm.name}) | "
+                f"raw:({out_r_raw.name if out_r_raw else 'n/a'},{out_p_raw.name})"
+            )
             + (
                 f" | codon:({out_r_rpm_codon.name if out_r_rpm_codon else 'n/a'},"
                 f"{out_p_rpm_codon.name if out_p_rpm_codon else 'n/a'},"

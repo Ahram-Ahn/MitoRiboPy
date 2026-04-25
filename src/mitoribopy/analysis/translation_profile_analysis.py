@@ -243,7 +243,7 @@ def run_translation_profile_analysis(
 
         # ----------
         # read_cov_map:
-        #   { transcript => { "A_site": [...], "P_site": [...], "E_site": [...], "seq": <string> } }
+        #   { transcript => { "A_site": [...], "P_site": [...], "seq": <string> } }
         # ----------
         read_cov_map = {}
         if filtered_bed_df is not None:
@@ -329,9 +329,11 @@ def run_translation_profile_analysis(
                     bed_df["P_site"] = bed_df["end"] - offset_ - 4
 
             bed_df["A_site"] = bed_df["P_site"] + 3
-            bed_df["E_site"] = bed_df["P_site"] - 3
 
-            # Update read_cov_map
+            # Update read_cov_map. E_site is no longer tracked: it was
+            # always P_site - 3 (a fixed ribosomal-geometry constant)
+            # and never used by anything other than the dropped CSV
+            # column.
             for t_ in bed_df["chrom"].unique():
                 if t_ not in fasta_dict:
                     continue
@@ -344,11 +346,10 @@ def run_translation_profile_analysis(
                         "seq": str(fasta_dict[t_].seq).upper(),
                         "A_site": [0] * seq_len,
                         "P_site": [0] * seq_len,
-                        "E_site": [0] * seq_len
                     }
 
                 local_df = bed_df[bed_df["chrom"] == t_]
-                for site_ in ["A_site", "P_site", "E_site"]:
+                for site_ in ("A_site", "P_site"):
                     c_ = local_df[site_].value_counts()
                     for px, cnt_ in c_.items():
                         if 0 <= px < len(read_cov_map[t_][site_]):
@@ -370,20 +371,30 @@ def run_translation_profile_analysis(
                 cap_val = 1
             primary_clipped = np.clip(primary_depth, None, cap_val).astype(int)
 
+            # CSV layout (v0.4.x):
+            #   Position, Nucleotide, A_site, P_site
+            # E_site dropped — it was always P_site shifted by -3 nt
+            # (a fixed ribosomal-geometry constant), redundant with the
+            # P_site column. *_selected_depth dropped — it was an
+            # outlier-capped duplicate of the primary site used only
+            # for the depth bar plot, which now caps in memory before
+            # plotting and never writes to disk. A_site comes first
+            # because the A-site is what protein-synthesis analyses
+            # care about; P_site is kept as the canonical reporting
+            # frame.
             foot_df = pd.DataFrame({
                 "Position": range(1, seq_len + 1),
                 "Nucleotide": list(coverage_row["seq"]),
-                "P_site": np.array(coverage_row["P_site"]),
                 "A_site": np.array(coverage_row["A_site"]),
-                "E_site": np.array(coverage_row["E_site"]),
-                f"{primary_site_key}_selected_depth": primary_clipped,
+                "P_site": np.array(coverage_row["P_site"]),
             })
             foot_csv_path = os.path.join(foot_dir, f"{sequence_id}_footprint_density.csv")
             foot_df.to_csv(foot_csv_path, index=False)
+            depth_plot_df = foot_df.assign(_clipped_depth=primary_clipped)
             plot_site_depth_profile(
-                foot_df,
+                depth_plot_df,
                 os.path.join(foot_dir, f"{sequence_id}_{primary_site_key}_depth.png"),
-                site_column=f"{primary_site_key}_selected_depth",
+                site_column="_clipped_depth",
                 site_label=primary_site_label,
                 sample_name=sample_name,
                 transcript_name=sequence_display_map.get(sequence_id, sequence_id),

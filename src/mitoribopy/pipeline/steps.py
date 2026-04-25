@@ -592,18 +592,21 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
         else:
             requested_sites = [analysis_sites]
 
-        for site in requested_sites:
+        # Unified per-site layout (v0.4.x):
+        #   <output>/translation_profile/<sample>/{p,a}/{footprint_density,...}/
+        #   <output>/coverage_profile_plots/{p,a}/<transcript-keyed plot dirs>/
+        # The site subdir is always present, even in single-site runs,
+        # so downstream tooling never has to branch on
+        # `--analysis_sites`. The legacy `translation_profile_p/` /
+        # `translation_profile_a/` and `coverage_profile_plots_p/` /
+        # `coverage_profile_plots_a/` layout is gone — those names were
+        # redundant once site is encoded in the directory tree.
+        translation_profile_root = context.base_output_dir / "translation_profile"
+        coverage_root = context.base_output_dir / "coverage_profile_plots"
+        for index, site in enumerate(requested_sites):
             site_label = "P-site" if site == "p" else "A-site"
-            if len(requested_sites) == 1:
-                # Single-site run: write to the legacy top-level layout
-                # so v0.3 consumers see no surprise rename.
-                profile_out = context.base_output_dir
-                coverage_out = context.base_output_dir / "coverage_profile_plots"
-            else:
-                # Multi-site run: per-site subdirectory keeps the two
-                # outputs side by side without overwriting each other.
-                profile_out = context.base_output_dir / f"translation_profile_{site}"
-                coverage_out = context.base_output_dir / f"coverage_profile_plots_{site}"
+            profile_out = translation_profile_root / site
+            coverage_out = coverage_root / site
             profile_out.mkdir(parents=True, exist_ok=True)
             coverage_out.mkdir(parents=True, exist_ok=True)
 
@@ -621,12 +624,17 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
                 selected_offsets_by_sample=context.selected_offsets_by_sample or None,
                 site_override=site,
             )
+            # Read-coverage plots are site-independent; render them once
+            # (under coverage_root) on the first iteration only. Site
+            # density plots go under coverage_root/<site>.
             run_coverage_profile_plots(
                 sample_dirs=context.sample_dirs,
                 selected_offsets_df=context.selected_offsets_df,
                 offset_type=context.args.offset_type,
                 fasta_file=context.args.fasta,
                 output_dir=str(coverage_out),
+                read_coverage_dir=str(coverage_root),
+                write_read_coverage=(index == 0),
                 args=context.args,
                 annotation_df=context.annotation_df,
                 filtered_bed_df=context.filtered_bed_df,
@@ -644,10 +652,7 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
             # default to P-site (matches v0.3.x behaviour).
             structure_site = "p" if "p" in requested_sites else "a"
             site_column = "P_site" if structure_site == "p" else "A_site"
-            if len(requested_sites) > 1:
-                tp_source = context.base_output_dir / f"translation_profile_{structure_site}"
-            else:
-                tp_source = context.base_output_dir
+            tp_source = translation_profile_root / structure_site
             run_structure_density_export(
                 translation_profile_dir=str(tp_source),
                 structure_density_norm_perc=context.args.structure_density_norm_perc,
@@ -673,10 +678,7 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
                 # When both sites were generated, default to the P-site
                 # subdir (matches v0.3.x).
                 cor_site = "p" if "p" in requested_sites else "a"
-                if len(requested_sites) > 1:
-                    cor_source = context.base_output_dir / f"translation_profile_{cor_site}"
-                else:
-                    cor_source = context.base_output_dir
+                cor_source = translation_profile_root / cor_site
                 cor_out_dir = context.base_output_dir / "codon_correlation"
                 run_codon_correlation(
                     translation_profile_dir=str(cor_source),
