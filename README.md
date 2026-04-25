@@ -2,7 +2,7 @@
 
 Mitochondrial ribosome profiling (mt-Ribo-seq) analysis, end to end.
 
-MitoRiboPy is a Python package + CLI for analysing mt-Ribo-seq data from raw FASTQ all the way through translation-efficiency integration with paired RNA-seq. v0.4.1 makes every per-sample decision (kit, dedup, offsets) independent so mixed-library batches just work.
+MitoRiboPy is a Python package + CLI for analysing mt-Ribo-seq data from raw FASTQ all the way through translation-efficiency integration with paired RNA-seq. Every per-sample decision (kit, dedup, offsets) is independent, so mixed-library batches just work.
 
 The package is built around four subcommands:
 
@@ -41,13 +41,13 @@ The package is built around four subcommands:
 
 ## What MitoRiboPy is for
 
-MitoRiboPy is a focused tool for the 13 mt-mRNAs of human mitochondria (or 8 mt-mRNAs in yeast, plus configurable codon tables for any other mitochondrion). It ships:
+MitoRiboPy is a focused tool for the 13 mt-mRNAs of human mitochondria (or 8 mt-mRNAs in yeast, with configurable codon tables for any other mitochondrion). It ships:
 
 - **Per-sample adapter detection** with auto-fallback to the right kit. Mixed-kit and mixed-UMI batches resolve each sample independently. Pre-trimmed FASTQs (e.g. SRA-deposited data) are auto-detected and routed through cutadapt with no `-a` flag.
 - **Per-sample offset selection** so inter-sample drift in the canonical 12–15 nt 5' P-site offset doesn't bias your downstream codon-usage tables. A combined-across-samples diagnostic is still emitted and an `offset_drift_<align>.svg` plot makes drift visible at a glance.
-- **Both P-site and A-site downstream outputs** by default, side by side under per-site subdirectories. No more ambiguity about which output corresponds to which site.
+- **Both P-site and A-site downstream outputs** by default, side by side under per-site subdirectories. No ambiguity about which output corresponds to which site.
 - **Strict reference-consistency gate** for the optional translation-efficiency (TE / ΔTE) integration with paired RNA-seq: Ribo-seq and RNA-seq must hash to the identical transcript reference or the run aborts.
-- **Strain-aware defaults**: built-in human (`-s h`) and yeast (`-s y`) annotations + codon tables, plus generic `vm` (vertebrate-mito) and `ym` (yeast-mito-codon-code) presets, and `custom` for any other organism.
+- **Strain-aware defaults**: built-in human (`-s h.sapiens`) and yeast (`-s s.cerevisiae`) annotations + codon tables, plus `custom` for any other organism with a published NCBI Genetic Code (mouse, fly, plants, fungi, ...).
 
 What MitoRiboPy is **not**:
 
@@ -66,10 +66,14 @@ What MitoRiboPy is **not**:
       │   align stage  (mitoribopy align)              │
       │                                                │
       │   per-sample adapter detection → cutadapt trim │
+      │     (UMI is extracted into the read QNAME      │
+      │      here; bowtie2 then carries it downstream) │
       │   → bowtie2 contam subtract                    │
       │   → bowtie2 mt-transcriptome align             │
       │   → MAPQ filter (NUMT suppression)             │
-      │   → per-sample dedup (umi-tools | skip)        │
+      │   → per-sample dedup                           │
+      │     (umi_tools collapses on coord + UMI;       │
+      │      skipped when umi_length == 0)             │
       │   → BAM → BED6                                 │
       └────────────────────────────────────────────────┘
                            │
@@ -267,32 +271,13 @@ One FASTA record per mt-mRNA. Headers must match the `sequence_name` column of t
 
 For total-genome FASTAs (rare in mt-Ribo-seq), use `--annotation_file` to map FASTA records onto your own annotation rows.
 
-### Annotation CSV (custom organisms only)
+### Annotation CSV (custom organisms)
 
-Required columns:
+Built-in `h.sapiens` and `s.cerevisiae` ship complete annotation tables and need nothing here. For any other organism, supply a per-transcript CSV via `--annotation_file`. The full schema (required vs optional columns, defaults, and a worked example) lives in [Custom organisms](#custom-organisms).
 
-- `transcript` — logical CDS name used in frame and codon outputs
-- `l_tr` — full transcript length
-- `l_utr5` — 5' UTR length
-- `l_utr3` — 3' UTR length
+### Codon-table JSON (custom organisms)
 
-Optional columns:
-
-- `l_cds` — if omitted, computed as `l_tr − l_utr5 − l_utr3`
-- `sequence_name` — FASTA/BED sequence ID this row maps to
-- `sequence_aliases` — alternate FASTA/BED names separated by semicolons
-- `display_name` — controls plot titles and grouped transcript labels
-
-Templates: [examples/custom_reference/annotation_template.csv](examples/custom_reference/annotation_template.csv).
-
-### Codon-table JSON (custom organisms only)
-
-Two formats are supported:
-
-- One flat 64-codon mapping (`{"AAA": "K", "AAC": "N", ...}`)
-- A dictionary of named 64-codon mappings (`{"my_table": {"AAA": "K", ...}, "another": {...}}`)
-
-Choose with `--codon_table_name` when multiple are present. Templates: [examples/custom_reference/codon_tables_template.json](examples/custom_reference/codon_tables_template.json).
+The 27 NCBI Genetic Codes are bundled. Pick one with `--codon_table_name` (full picker in [Custom organisms](#custom-organisms)). Supply your own `--codon_tables_file` only when your organism's code is not in the NCBI list.
 
 ### Read-count table (optional, for RPM normalization)
 
@@ -373,25 +358,26 @@ mitoribopy rnaseq --de-table de.tsv --gene-id-convention hgnc \
 
 ### Strain (`-s` / `--strain`)
 
-| Value | Organism / codon table | Ships annotation? | Ships `-rpf` default? |
-|---|---|:-:|:-:|
-| `h` | Human mt (`vertebrate_mitochondrial`) | ✓ | ✓ (28–34 nt monosome) |
-| `y` | Yeast mt (`yeast_mitochondrial`) | ✓ | ✓ (37–41 nt monosome) |
-| `vm` | Any vertebrate mt (`vertebrate_mitochondrial`) | ✗ | ✗ — pass `--annotation_file` + `-rpf` |
-| `ym` | Any fungus with yeast-mito code (`yeast_mitochondrial`) | ✗ | ✗ — pass `--annotation_file` + `-rpf` |
-| `custom` | Fully user-specified | ✗ | ✗ — also requires `--codon_tables_file` or `--codon_table_name` |
+The strain preset selects the organism's mitochondrial annotation and codon table. Two organisms ship complete reference data; everything else uses `custom` and supplies its own files (see [Custom organisms](#custom-organisms)).
+
+| Value | Organism | Codon table | Ships annotation? | Ships `-rpf` default? |
+|---|---|---|:-:|:-:|
+| `h.sapiens` (default) | *Homo sapiens* mt | `vertebrate_mitochondrial` (NCBI #2) | ✓ | ✓ |
+| `s.cerevisiae` | *Saccharomyces cerevisiae* mt | `yeast_mitochondrial` (NCBI #3) | ✓ | ✓ |
+| `custom` | Any other organism | user-supplied via `--codon_table_name` (built-in NCBI list) or `--codon_tables_file` | ✗ — pass `--annotation_file` | ✗ — pass `-rpf MIN MAX` |
+
+`h` and `y` are also accepted as short synonyms for `h.sapiens` and `s.cerevisiae`.
 
 ### Footprint class (`--footprint_class`)
 
-Pair `-s` with `--footprint_class` to pick sensible RPF and unfiltered-length defaults:
+Pair `-s` with `--footprint_class` to pick sensible RPF and unfiltered-length defaults. An explicit `-rpf MIN MAX` or `--unfiltered_read_length_range MIN MAX` always wins over the footprint-class default. Built-in defaults exist for `h.sapiens` and `s.cerevisiae`; for `--strain custom` you must also pass `-rpf`.
 
 | Value | RPF window default | `--unfiltered_read_length_range` default | Use for |
 |---|---|---|---|
-| `monosome` (default) | h/vm: 28–34, y/ym: 37–41 | 15–50 | Standard single-ribosome footprints |
-| `disome` | h/vm: 60–90, y/ym: 65–95 | 40–110 | Collided-ribosome studies (eIF5A depletion, stalling) |
-| `custom` | user must pass `-rpf` | unchanged | Any non-standard footprint class |
-
-An explicit `-rpf MIN MAX` or `--unfiltered_read_length_range MIN MAX` always wins over the footprint-class default.
+| `short` | h.sapiens / s.cerevisiae: 16–24 | 10–30 | Truncated RNase products. Sit just below the canonical monosome window; useful for context-dependent pausing and as a QC indicator of digest aggressiveness. |
+| `monosome` (default) | h.sapiens: 28–34, s.cerevisiae: 37–41 | 15–50 | Single-ribosome footprints. The standard mt-Ribo-seq class. |
+| `disome` | h.sapiens: 50–70, s.cerevisiae: 60–90 | 40–100 | Collided-ribosome footprints. eIF5A-depletion, queueing, ribosome-stalling studies. |
+| `custom` | user must pass `-rpf` | unchanged | Any non-standard footprint class. |
 
 ---
 
@@ -443,7 +429,7 @@ Preprocesses FASTQ inputs into BAM + BED6 + per-sample read counts. Pipeline (pe
 | `--adapter-detect-min-rate FRAC` | 0.30 | Minimum fraction of scanned reads with adapter signal for the kit to be considered detected. |
 | `--adapter-detect-min-len N` | 12 | Adapter prefix length used as the search needle (nt). |
 | `--adapter-detect-pretrimmed-threshold FRAC` | 0.05 | When EVERY kit's match rate is at or below this, classify as already-trimmed. |
-| `--no-pretrimmed-inference` | off | Disable the auto-fallback to `pretrimmed`; restore the v0.4.0 hard-fail behaviour. |
+| `--no-pretrimmed-inference` | off | Disable the auto-fallback to `pretrimmed`. With this flag, adapter detection failure with no `--kit-preset` fallback raises an error instead of silently routing to the `pretrimmed` kit. |
 | `--library-strandedness {forward,reverse,unstranded}` | `forward` | `forward` enforces bowtie2 `--norc`; `reverse` enforces `--nofw`; `unstranded` leaves bowtie2 permissive. |
 | `--min-length NT` | 15 | Minimum read length kept after trimming. |
 | `--max-length NT` | 45 | Maximum read length kept after trimming. |
@@ -461,13 +447,13 @@ Preprocesses FASTQ inputs into BAM + BED6 + per-sample read counts. Pipeline (pe
 | `illumina_truseq_umi` | `AGATCGGAAGAGCACACGTCTGAACTCCAGTCA` | 8 nt 5' | NEBNext Ultra II UMI, Bio-Rad SEQuoia Complete UMI, … |
 | `qiaseq_mirna` | `AACTGTAGGCACCATCAAT` | 12 nt 3' | QIAseq miRNA Library Kit |
 
-Legacy vendor names from v0.4.0 (`truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, plus the short-lived `truseq_stranded_total`, `smarter_pico_v3`, `sequoia_express`) are still accepted as aliases — existing YAML configs need no changes.
+Vendor-specific kit names (`truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, `truseq_stranded_total`, `smarter_pico_v3`, `sequoia_express`) are also accepted as synonyms for the adapter-family preset they map to.
 
 ##### Adapter detection
 
 | Mode | Behaviour |
 |---|---|
-| `auto` (default) | Scan each FASTQ; pick the matching preset per sample. Samples whose scan fails fall back to the user's `--kit-preset` / `--adapter` if supplied; otherwise fall through to `pretrimmed` when the data shows no adapter signal at all (the v0.4.1 auto-inference). |
+| `auto` (default) | Scan each FASTQ; pick the matching preset per sample. Samples whose scan fails fall back to the user's `--kit-preset` / `--adapter` if supplied; otherwise fall through to `pretrimmed` when the data shows no adapter signal at all. |
 | `strict` | Scan; HARD-FAIL any sample whose scan disagrees with an explicit `--kit-preset` or yields no match. Use for batch / CI runs where silent surprises are unacceptable. |
 | `off` | Skip the scan entirely; trust `--kit-preset` / `--adapter` for every sample (requires an explicit non-`auto` preset). |
 
@@ -508,22 +494,22 @@ Runs the Ribo-seq analysis pipeline against a directory of BED (or BAM) files. P
 6. Coverage profile plots (per sample, per requested site)
 7. Optional modules: structure-density export, codon correlation
 
-Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with a deprecation warning for v0.2.x compatibility.
+Plain `mitoribopy <flags>` (no subcommand) routes to `mitoribopy rpf` and prints a one-line notice; prefer the explicit subcommand form.
 
 #### Core inputs
 
 | Flag | Default | Description |
 |---|---|---|
 | `-f, --fasta REF_FASTA` | — | Reference FASTA for the transcript/annotation context. **Required**. |
-| `-s, --strain {h,y,vm,ym,custom}` | `y` | Reference preset; see [Strain presets](#strain-presets-and-footprint-classes). |
+| `-s, --strain {h.sapiens,s.cerevisiae,custom}` | `h.sapiens` | Reference preset; see [Strain presets](#strain-presets-and-footprint-classes). |
 | `-d, --directory BED_DIR` | cwd | Directory of `.bed` and/or `.bam` files. BAMs are auto-converted to BED6 via pysam. |
 | `--bam_mapq Q` | 10 | MAPQ threshold for BAM inputs before BAM→BED6 conversion. Set 0 to disable. |
 | `-rpf MIN_LEN MAX_LEN` | strain/class default | Inclusive read-length filter range, e.g. `-rpf 29 34`. |
 | `--footprint_class {monosome,disome,custom}` | `monosome` | Picks `-rpf` and `--unfiltered_read_length_range` defaults. |
-| `--annotation_file ANNOTATION.csv` | — | Annotation CSV override. Required for `vm`, `ym`, `custom`. |
+| `--annotation_file ANNOTATION.csv` | — | Per-transcript annotation CSV. Required for `--strain custom`; the built-in `h.sapiens` and `s.cerevisiae` tables are used otherwise. See [Custom organisms](#custom-organisms) for the schema. |
 | `--codon_tables_file CODON_TABLES.json` | — | Codon-table JSON override. |
 | `--codon_table_name TABLE_NAME` | strain default | Codon table to load (built-in or from `--codon_tables_file`). 27 built-in tables ship; run `--help` for the full list. |
-| `--start_codons CODON [CODON ...]` | strain default | Allowed start codons. Defaults: `y` → `ATG`, `h` → `ATG ATA`, `custom` → `ATG`. |
+| `--start_codons CODON [CODON ...]` | strain default | Allowed start codons. Defaults: `h.sapiens` → `ATG ATA`, `s.cerevisiae` → `ATG`, `custom` → `ATG`. |
 | `--atp8_atp6_baseline {ATP6,ATP8}` | `ATP6` | Baseline name for the bicistronic ATP8/ATP6 transcript. Titles remain ATP8/ATP6. |
 | `--nd4l_nd4_baseline {ND4,ND4L}` | `ND4` | Baseline name for the bicistronic ND4L/ND4 transcript. Titles remain ND4L/ND4. |
 
@@ -538,13 +524,13 @@ Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with
 | `--min_5_offset NT`, `--max_5_offset NT` | from `--min_offset` / `--max_offset` | End-specific 5' selection bounds. **Preferred** over the shared bounds. |
 | `--min_3_offset NT`, `--max_3_offset NT` | from `--min_offset` / `--max_offset` | End-specific 3' selection bounds. **Preferred**. |
 | `--offset_mask_nt NT` | 5 | Mask near-anchor bins from -N..-1 and +1..+N in summaries and plots. |
-| `--offset_pick_reference {p_site,reported_site}` | `p_site` | `p_site`: pick in canonical P-site space, then convert to the reported space. `reported_site`: pick directly in the final `--offset_site` space (no P↔A conversion). The legacy value `selected_site` is accepted as a deprecated alias for `reported_site`. |
+| `--offset_pick_reference {p_site,reported_site}` | `p_site` | `p_site`: pick in canonical P-site space, then convert to the reported space. `reported_site`: pick directly in the final `--offset_site` space (no P↔A conversion). |
 | `--offset_type {5,3}` | `5` | Which read end the offset is measured from. |
 | `--offset_site {p,a}` | `p` | Coordinate space for the SELECTED OFFSETS table (the values in `p_site_offsets_<align>.csv`). Does NOT control which downstream outputs are generated; use `--analysis_sites` for that. |
-| `--analysis_sites {p,a,both}` | `both` | Which downstream sites to generate. `both` writes parallel P-site and A-site codon usage + coverage plots, side by side under per-site subdirs. `p` or `a` restricts to one site (legacy single-directory layout). |
+| `--analysis_sites {p,a,both}` | `both` | Which downstream sites to generate. `both` writes parallel P-site and A-site codon usage + coverage plots, side by side under per-site subdirs. `p` or `a` restricts to one site. |
 | `--codon_overlap_mode {full,any}` | `full` | How a read counts toward the codon-level enrichment table at the anchor codon. `full` (default, right for ribo-seq): the read must cover ALL 3 nt of the anchor codon. Example with anchor codon at positions 101–103 — a 30-nt read at 100–129 counts (read covers 101, 102, 103); a read at 102–131 does NOT count (does not cover 101). `any`: any 1-nt overlap counts; the same 102–131 read above WOULD count. Use `any` only for very short reads relative to a codon (rare for ribo-seq). |
 | `-p, --psite_offset NT` | — | Use one fixed offset for every read length and sample. Bypasses enrichment-based selection. |
-| `--offset_mode {per_sample,combined}` | `per_sample` | `per_sample`: each sample uses its own offsets; drift surfaced in `offset_drift_<align>.svg`. `combined`: pool all samples and apply one table (v0.3.x behaviour). |
+| `--offset_mode {per_sample,combined}` | `per_sample` | `per_sample`: each sample uses its own offsets; drift surfaced in `offset_drift_<align>.svg`. `combined`: pool all samples and apply one offset table to every sample (use this when individual samples have very low coverage and the per-sample selection is noisy). |
 
 #### Outputs and plotting
 
@@ -557,7 +543,7 @@ Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with
 | `--x_breaks NT [NT ...]` | — | Optional custom x-axis tick marks for offset line plots. |
 | `--line_plot_style {combined,separate}` | `combined` | Draw 5'/3' offsets in one panel or two. |
 | `--cap_percentile FRAC` | 0.999 | Upper percentile cap for coverage-style plots. |
-| `-m, --codon_density_window` | off | When set, the codon-level density at each codon centre is summed with its ±1 nt neighbours (a 3-nt sliding window) before being written into the codon coverage / usage tables and plots. Smooths short-window noise around the codon centre; does **not** collapse reading frames despite the historical flag name `--merge_density` (which is kept as a deprecated alias). |
+| `-m, --codon_density_window` | off | When set, the codon-level density at each codon centre is summed with its ±1 nt neighbours (a 3-nt sliding window) before being written into the codon coverage / usage tables and plots. Smooths short-window noise around the codon centre. |
 | `--order_samples NAME [NAME ...]` | — | Optional explicit sample order for plots and aggregated outputs. |
 
 #### Read-count normalization
@@ -570,7 +556,7 @@ Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with
 | `--read_counts_reference_col NAME` | auto | Reference column override; needed for `--rpm_norm_mode mt_mrna` if auto-detection fails. |
 | `--unfiltered_read_length_range MIN MAX` | `[15, 50]` | Range for the unfiltered QC summary and heatmaps. Broaden for disome studies. |
 | `--rpm_norm_mode {total,mt_mrna}` | `total` | RPM denominator: sum all rows or only mt-mRNA rows. |
-| `--mt_mrna_substring_patterns PATTERN [PATTERN ...]` | `mt_genome mt-mrna mt_mrna` | When `--rpm_norm_mode mt_mrna` is selected, the RPM denominator uses only rows from the read-count table whose value in the reference column (set via `--read_counts_reference_col`, or auto-detected) contains ANY of these substrings. Example: in a read-count table with rows for `rrna`, `trna`, `mt_mrna_ND1`, and `mt_mrna_COX1`, the default pattern keeps the latter two and drops the (r/t)RNA rows. The legacy flag name `--mrna_ref_patterns` is kept as a deprecated alias. |
+| `--mt_mrna_substring_patterns PATTERN [PATTERN ...]` | `mt_genome mt-mrna mt_mrna` | When `--rpm_norm_mode mt_mrna` is selected, the RPM denominator uses only rows from the read-count table whose value in the reference column (set via `--read_counts_reference_col`, or auto-detected) contains ANY of these substrings. Example: in a read-count table with rows for `rrna`, `trna`, `mt_mrna_ND1`, and `mt_mrna_COX1`, the default pattern keeps the latter two and drops the (r/t)RNA rows. |
 
 #### Optional modules
 
@@ -594,17 +580,19 @@ Plain `mitoribopy <flags>` (no subcommand) still routes to `mitoribopy rpf` with
   - `site_density_rpm_codon` / `site_density_raw_codon` — same density but binned per CDS codon.
   - `site_density_rpm_frame` / `site_density_raw_frame` — **frame-coloured CDS-only nt plots**. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind-safe palette. Frame-0 dominance (~70–90% of CDS density on frame 0) is the canonical mt-Ribo-seq QC signature; if frames 1 and 2 are visible, the library has spurious offset selection, mis-trimmed reads, or contamination from non-ribosome-protected RNA.
 
-`--use_rna_seq` is **deprecated** in v0.3.0 and **removed** in v0.4.0+ — use the dedicated `mitoribopy rnaseq` subcommand instead.
+For the translation-efficiency integration, use the dedicated `mitoribopy rnaseq` subcommand.
 
-#### Deprecated CLI / YAML aliases (still accepted)
+#### Synonyms
 
-| Old name | Canonical name | Notes |
-|---|---|---|
-| `--merge_density`, YAML `merge_density:` | `--codon_density_window`, YAML `codon_density_window:` | Renamed because the old name implied "frame collapse" but the flag actually applies a ±1 nt smoothing window around the codon centre. |
-| `--mrna_ref_patterns`, YAML `mrna_ref_patterns:` | `--mt_mrna_substring_patterns`, YAML `mt_mrna_substring_patterns:` | Renamed for self-documentation: the value is a list of substrings matched against the read-count table's reference column. |
-| `--offset_pick_reference selected_site` | `--offset_pick_reference reported_site` | Renamed because "selected_site" was indistinguishable from `--offset_site` at a glance; the new name says exactly what it does (pick in the reported coordinate space). |
+The following short / legacy spellings are accepted as synonyms for the canonical names. They emit a single `[mitoribopy] DEPRECATED:` line on first use so users know to migrate, then keep working.
 
-The deprecated names emit a single `[mitoribopy] DEPRECATED:` line to stderr the first time they are encountered, then keep working.
+| Synonym | Canonical |
+|---|---|
+| `-s h` / `--strain h` | `-s h.sapiens` |
+| `-s y` / `--strain y` | `-s s.cerevisiae` |
+| `--merge_density`, YAML `merge_density:` | `--codon_density_window`, YAML `codon_density_window:` |
+| `--mrna_ref_patterns`, YAML `mrna_ref_patterns:` | `--mt_mrna_substring_patterns`, YAML `mt_mrna_substring_patterns:` |
+| `--offset_pick_reference selected_site` | `--offset_pick_reference reported_site` |
 
 ---
 
@@ -628,7 +616,7 @@ Integrates a pre-computed differential-expression table (DESeq2 / Xtail / Anota2
 | Flag | Default | Description |
 |---|---|---|
 | `--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}` | — | **Required, no default**. Mismatched conventions silently produce zero-match runs. Examples: `hgnc` → `MT-ND1`; `bare` → `ND1`; `ensembl` → `ENSG00000198888`; `refseq` → `YP_003024026.1`; `mt_prefixed` → `MT-ND1`. |
-| `--organism {h,y}` | `h` | Organism for the mt-mRNA registry. |
+| `--organism {h.sapiens,s.cerevisiae}` | `h.sapiens` | Organism for the mt-mRNA registry. Short / spelled-out forms (`h`, `y`, `human`, `yeast`) are accepted as synonyms. |
 
 #### Ribo-seq inputs
 
@@ -705,7 +693,7 @@ The orchestrator handles both styles transparently. Booleans emit the bare flag 
 
 ## Output overview
 
-For an `mitoribopy all` run with the v0.4.1 defaults (`--offset_mode per_sample`, `--analysis_sites both`):
+For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--analysis_sites both`):
 
 ```text
 <output>/
@@ -714,7 +702,7 @@ For an `mitoribopy all` run with the v0.4.1 defaults (`--offset_mode per_sample`
   align/
     mitoribopy.log
     read_counts.tsv                    # per-stage counts (input → trimmed → contam → mt → MAPQ → dedup)
-    kit_resolution.tsv                 # per-sample kit + dedup decisions; the spine of v0.4 provenance
+    kit_resolution.tsv                 # per-sample kit + dedup decisions; the provenance spine
     run_settings.json                  # includes per_sample[] block with detected_kit, applied_kit,
                                        # match_rate, dedup_strategy, source per sample
     trimmed/                           # only *.cutadapt.json (per-sample);
@@ -778,7 +766,7 @@ For an `mitoribopy all` run with the v0.4.1 defaults (`--offset_mode per_sample`
     run_settings.json
 ```
 
-The per-site subdirectory (`p/` or `a/`) is always present, even in single-site runs. The legacy v0.3 single-site layout (per-sample `footprint_density/` directly under `rpf/<sample>/`) and the v0.4.0 split top-level `translation_profile_p/` / `translation_profile_a/` and `coverage_profile_plots_p/` / `coverage_profile_plots_a/` directories are both gone — those names were redundant once site is encoded in the directory tree.
+The per-site subdirectory (`p/` or `a/`) is always present, even in single-site runs, so downstream tooling never has to branch on `--analysis_sites`.
 
 ### Key files to look at first
 
@@ -794,50 +782,110 @@ The per-site subdirectory (`p/` or `a/`) is always present, even in single-site 
 
 ## Custom organisms
 
-To run on an organism that isn't human or yeast, supply your own annotation, codon table, and start codons:
+To analyse an organism other than human or yeast, run with `--strain custom` and supply three things: a **reference FASTA** of mt-mRNA transcripts, a **per-transcript annotation CSV**, and a **codon-table choice**. Start codons can be left at the `[ATG]` default or overridden with `--start_codons`.
 
-```bash
-mitoribopy rpf \
-  -s custom \
-  -f your_reference.fa \
-  --directory bed/ \
-  -rpf 28 34 \
-  --annotation_file examples/custom_reference/annotation_template.csv \
-  --codon_tables_file examples/custom_reference/codon_tables_template.json \
-  --codon_table_name custom_example \
-  --start_codons ATG GTG \
-  --output results/
+### Picking a codon table
+
+MitoRiboPy bundles every NCBI Genetic Code as a named table. The names match NCBI's organism-group labels; pick the one for your organism's mitochondrial code (or nuclear code for ciliates / *Candida* / similar).
+
+| `--codon_table_name` | NCBI # | Use for |
+|---|:---:|---|
+| `standard` | 1 | Most plant mitochondria and plastids; many fungal nuclear genomes |
+| `vertebrate_mitochondrial` | 2 | Mouse, rat, zebrafish, Xenopus, chicken — any non-human vertebrate mt |
+| `yeast_mitochondrial` | 3 | *S. cerevisiae* and close relatives (matches `s.cerevisiae` preset) |
+| `mold_mitochondrial` | 4 | *Neurospora*, *Aspergillus*, *Trichoderma*, mycoplasmas |
+| `invertebrate_mitochondrial` | 5 | *Drosophila*, mosquito, *C. elegans* and other invertebrates |
+| `echinoderm_mitochondrial` | 9 | Sea urchin, starfish |
+| `ascidian_mitochondrial` | 13 | Sea squirts (tunicates) |
+| `alternative_flatworm_mitochondrial` | 14 | Flatworms |
+| `trematode_mitochondrial` | 21 | Trematodes |
+
+Run `mitoribopy rpf --help` to see the full list of all 27 bundled tables (NCBI #1–34, with a few historical numbers omitted by NCBI). Sources: [NCBI Taxonomy Genetic Codes](https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi) — the JSON tables under [`src/mitoribopy/data/codon_tables.json`](src/mitoribopy/data/codon_tables.json) are a faithful transcription of those NCBI tables.
+
+If the table you need isn't in the built-in list (e.g. an unusual reassignment in a non-model organism), pass `--codon_tables_file your_tables.json --codon_table_name your_name` to load your own JSON. Each entry maps the 64 codons to single-letter amino-acid codes (use `*` for stop):
+
+```json
+{
+  "your_organism_mitochondrial": {
+    "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
+    "TAA": "*", "TAG": "*", "TGA": "W",
+    "...": "..."
+  }
+}
 ```
 
-Two lighter-weight strain options exist when you only need a different reference and want to keep the codon table:
+### Annotation CSV format
 
-- `-s vm` (vertebrate-mito codon table): supply `--annotation_file` + `-rpf`; the `vertebrate_mitochondrial` codon table is used.
-- `-s ym` (yeast-mito codon table): supply `--annotation_file` + `-rpf`; the `yeast_mitochondrial` codon table is used.
+`--annotation_file` takes a CSV with one row per mt-mRNA transcript. The loader requires four columns and accepts four optional columns; CDS bounds (`start_codon`, `stop_codon`, `l_cds`) are computed from the UTR lengths and do NOT need to be supplied.
 
-Templates and a worked example:
+| Column | Required? | Type | Meaning |
+|---|:---:|---|---|
+| `transcript` | yes | string | Display name used in plots and CSVs (e.g. `ND1`, `COX1`). Must be unique per row. |
+| `l_tr` | yes | int | Total transcript length in nt (`l_utr5 + l_cds + l_utr3`). |
+| `l_utr5` | yes | int | Length of the 5' UTR in nt (0 if none). |
+| `l_utr3` | yes | int | Length of the 3' UTR in nt (0 if none). |
+| `l_cds` | optional | int | Length of the CDS in nt. Computed as `l_tr − l_utr5 − l_utr3` when omitted. |
+| `sequence_name` | optional | string | The exact FASTA header / BED chrom field for this transcript. Defaults to the `transcript` column when blank, but **must match your FASTA header** if those names differ. |
+| `display_name` | optional | string | Human-readable label used in plot titles. Defaults to `transcript` when blank. |
+| `sequence_aliases` | optional | string | Semicolon-separated list of legacy IDs that should also map to this transcript (e.g. `ATP86;ATP8_6` if older BEDs use those names). Leave blank when there are none. |
 
-- [examples/custom_reference/annotation_template.csv](examples/custom_reference/annotation_template.csv)
-- [examples/custom_reference/codon_tables_template.json](examples/custom_reference/codon_tables_template.json)
-- [examples/custom_reference/README.md](examples/custom_reference/README.md)
+Minimal example for a hypothetical 3-transcript mouse mt-mRNA reference:
+
+```csv
+transcript,sequence_name,l_tr,l_utr5,l_utr3
+ND1,mouse_ND1,957,0,0
+COX1,mouse_COX1,1545,0,0
+ATP6,mouse_ATP6,681,0,0
+```
+
+The `sequence_name` field MUST match the FASTA header you pass to `-f` AND the BED `chrom` field produced by `mitoribopy align` (so the bowtie2 indexes have to be built from the same FASTA). [`examples/custom_reference/annotation_template.csv`](examples/custom_reference/annotation_template.csv) is a complete worked example.
+
+### Putting it together: a mouse run
+
+```bash
+# Build the bowtie2 indexes from your mouse mt-mRNA FASTA + an rRNA decoy.
+bowtie2-build mouse-mt-mRNA.fasta indexes/mt
+bowtie2-build mouse_rrna.fa       indexes/rrna
+
+# Run the full pipeline.
+mitoribopy all --config mouse_pipeline.yaml --output mouse_results/
+```
+
+```yaml
+# mouse_pipeline.yaml
+align:
+  kit_preset: auto
+  fastq: input_data/seq
+  contam_index: indexes/rrna
+  mt_index: indexes/mt
+
+rpf:
+  strain: custom
+  fasta: mouse-mt-mRNA.fasta
+  annotation_file: mouse_annotation.csv      # CSV described above
+  codon_table_name: vertebrate_mitochondrial # NCBI #2
+  rpf: [28, 34]                              # mouse mt-monosome window
+  align: stop
+  offset_type: "5"
+  offset_site: p
+```
+
+For other organisms the recipe is identical — only the codon table name and the annotation CSV change.
+
+### Bicistronic transcript pairs
+
+The two overlapping mt-mRNA pairs (`ATP8/ATP6` and `ND4L/ND4`) are kept as paired display names in plot titles. Choose which member's coordinates seed the merged sequence with `--atp8_atp6_baseline ATP8|ATP6` and `--nd4l_nd4_baseline ND4L|ND4` (defaults: `ATP6` and `ND4`). Legacy FASTA / BED identifiers `ATP86` and `ND4L4` are also recognised through the built-in alias map.
 
 ---
 
 ## Built-in references
 
-MitoRiboPy ships packaged reference data for:
+MitoRiboPy ships packaged reference data for two organisms:
 
-- Human mt-translation using the `vertebrate_mitochondrial` codon table
-- Yeast mt-translation using the `yeast_mitochondrial` codon table
+- *Homo sapiens* mt-translation using the `vertebrate_mitochondrial` codon table (`-s h.sapiens`)
+- *Saccharomyces cerevisiae* mt-translation using the `yeast_mitochondrial` codon table (`-s s.cerevisiae`)
 
-Built-in annotation tables are stored as CSV and built-in codon tables as JSON under [src/mitoribopy/data](src/mitoribopy/data). 27 built-in codon tables are available; pass `--codon_table_name` to select one (run `mitoribopy rpf --help` for the full list).
-
-For bicistronic transcript regions:
-
-- Plot titles stay consistent as `ATP8/ATP6` and `ND4L/ND4`.
-- The default sequence baselines are `ATP6` and `ND4`.
-- Switch them with `--atp8_atp6_baseline ATP8|ATP6` and `--nd4l_nd4_baseline ND4L|ND4`.
-
-Legacy FASTA/BED identifiers such as `ATP86` and `ND4L4` are still recognized through built-in aliases.
+Built-in annotation tables are stored as CSV and the bundled NCBI Genetic Codes as JSON under [src/mitoribopy/data](src/mitoribopy/data). 27 codon tables are available out of the box; the picker for non-human, non-yeast organisms lives in [Custom organisms](#custom-organisms).
 
 ---
 
@@ -866,7 +914,7 @@ mitoribopy align \
 
 ```bash
 mitoribopy rpf \
-  -s h \
+  -s h.sapiens \
   -f references/human-mt-mRNA.fasta \
   --directory results/align/bed/ \
   -rpf 29 34 \
@@ -885,38 +933,51 @@ mitoribopy rpf \
   --read_counts_file results/align/read_counts.tsv \
   --rpm_norm_mode mt_mrna \
   --output results/rpf/ \
-  -m
+  --codon_density_window
 ```
 
 ### D. Disome (collided ribosome) study
 
 ```bash
 mitoribopy rpf \
-  -s h \
+  -s h.sapiens \
   -f references/human-mt-mRNA.fasta \
   --directory bed/ \
   --footprint_class disome \
   --output results_disome/
 ```
 
-`--footprint_class disome` widens `-rpf` to 60–90 nt (vertebrate) or 65–95 nt (yeast) and `--unfiltered_read_length_range` to 40–110 nt automatically. You can still override either with `-rpf` / `--unfiltered_read_length_range`.
+`--footprint_class disome` widens `-rpf` to 50–70 nt (h.sapiens) or 60–90 nt (s.cerevisiae) and `--unfiltered_read_length_range` to 40–100 nt automatically. You can still override either with `-rpf` / `--unfiltered_read_length_range`.
 
-### E. Custom organism
+### E. Short truncated RNase products
+
+```bash
+mitoribopy rpf \
+  -s h.sapiens \
+  -f references/human-mt-mRNA.fasta \
+  --directory bed/ \
+  --footprint_class short \
+  --output results_short/
+```
+
+`--footprint_class short` targets the 16–24 nt RNase truncation tail and widens the unfiltered QC window to 10–30 nt so the entire short tail is visible in the read-length heatmap.
+
+### F. Custom organism (mouse mt example)
 
 ```bash
 mitoribopy rpf \
   -s custom \
-  -f my_reference.fa \
+  -f references/mouse-mt-mRNA.fasta \
   --directory bed/ \
   -rpf 28 34 \
-  --annotation_file my_annotation.csv \
-  --codon_tables_file my_codon_tables.json \
-  --codon_table_name my_table \
-  --start_codons ATG GTG \
-  --output results/
+  --annotation_file references/mouse_annotation.csv \
+  --codon_table_name vertebrate_mitochondrial \
+  --output results_mouse/
 ```
 
-### F. RNA-seq integration for translation efficiency
+See [Custom organisms](#custom-organisms) for the annotation CSV schema, the codon-table picker for other organisms, and how to supply your own JSON when the organism's code is not in the built-in NCBI list.
+
+### G. RNA-seq integration for translation efficiency
 
 ```bash
 mitoribopy rnaseq \
@@ -930,15 +991,20 @@ mitoribopy rnaseq \
   --output results/rnaseq/
 ```
 
-### G. Resume a partial run
+### H. Resume a partial run
 
 ```bash
 mitoribopy all --config pipeline_config.yaml --output results/ --resume
 ```
 
-`--resume` skips a stage when its sentinel file already exists (`align/read_counts.tsv`, `rpf/rpf_counts.tsv`, `rnaseq/delta_te.tsv`).
+`--resume` works at two levels:
 
-### H. Pre-trimmed inputs (e.g. SRA-deposited)
+1. **Stage level.** Each stage is skipped when its final sentinel file already exists: `align/read_counts.tsv`, `rpf/rpf_counts.tsv`, `rnaseq/delta_te.tsv`.
+2. **Per-sample inside the align stage.** Every sample that finishes successfully writes a small JSON marker at `<output>/align/.sample_done/<sample>.json` containing its read-count row. On a subsequent `--resume` run (when `read_counts.tsv` is missing because the previous run crashed mid-batch), samples whose marker is present are reloaded from JSON instead of re-run; the markers from completed samples are merged with the freshly-processed ones to produce the aggregated `read_counts.tsv`. This means a 50-sample run that died at sample 30 picks up at sample 31 the next time you pass `--resume`.
+
+The per-sample markers are written atomically (`.tmp` then rename) so a kill mid-write cannot leave a half-flushed file that would silently feed the wrong row into the aggregated table; corrupt or schema-drifted markers are treated as absent and the sample re-runs cleanly.
+
+### I. Pre-trimmed inputs (e.g. SRA-deposited)
 
 The `pretrimmed` preset name describes the **input state** ("the FASTQ has already been adapter-clipped"), not an action this pipeline takes. SRA-deposited FASTQs typically arrive in this state — the adapter and (when present) the UMI are already stripped before upload.
 
@@ -949,11 +1015,11 @@ align:
   kit_preset: pretrimmed
 ```
 
-To force the v0.4.0 hard-fail behaviour back: pass `--no-pretrimmed-inference` (or set `allow_pretrimmed_inference: false` in YAML).
+To opt out of the auto-inference and force adapter detection failure to raise instead, pass `--no-pretrimmed-inference` (or set `allow_pretrimmed_inference: false` in YAML).
 
 > **Wording note:** `pretrimmed` describes the input. The per-sample read-count column `post_trim` describes the output stage (read count **after** the cutadapt step has run, regardless of whether anything was actually clipped).
 
-### I. Per-sample UMI / kit overrides (mixed-UMI batches)
+### J. Per-sample UMI / kit overrides (mixed-UMI batches)
 
 When samples in the same batch have different UMI lengths or positions (e.g. one library preps with the NEBNext UMI 5' kit, another with QIAseq miRNA 3' UMI, a third already-trimmed from SRA), put a per-sample list under `align.samples:`:
 
