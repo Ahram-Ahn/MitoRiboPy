@@ -58,55 +58,17 @@ What MitoRiboPy is **not**:
 
 ## Pipeline overview
 
-```
-                        FASTQ (one or more samples; mixed kits OK)
-                           │
-                           ▼
-      ┌────────────────────────────────────────────────┐
-      │   align stage  (mitoribopy align)              │
-      │                                                │
-      │   per-sample adapter detection → cutadapt trim │
-      │     (UMI is extracted into the read QNAME      │
-      │      here; bowtie2 then carries it downstream) │
-      │   → bowtie2 contam subtract                    │
-      │   → bowtie2 mt-transcriptome align             │
-      │   → MAPQ filter (NUMT suppression)             │
-      │   → per-sample dedup                           │
-      │     (umi_tools collapses on coord + UMI;       │
-      │      skipped when umi_length == 0)             │
-      │   → BAM → BED6                                 │
-      └────────────────────────────────────────────────┘
-                           │
-              BED6 + read_counts.tsv + kit_resolution.tsv
-                           │
-                           ▼
-      ┌────────────────────────────────────────────────┐
-      │   rpf stage  (mitoribopy rpf)                  │
-      │                                                │
-      │   BED filter on RPF length window              │
-      │   → offset enrichment (per sample + combined)  │
-      │   → offset selection (per sample + combined)   │
-      │   → translation profile (P + A site)           │
-      │   → codon usage  (per sample, per site)        │
-      │   → coverage plots (per sample, per site)      │
-      │   → optional: structure density, codon         │
-      │     correlation                                │
-      └────────────────────────────────────────────────┘
-                           │
-        rpf_counts.tsv + run_settings.json (with reference_checksum)
-                           │
-                           ▼
-      ┌────────────────────────────────────────────────┐
-      │   rnaseq stage  (mitoribopy rnaseq) — optional │
-      │                                                │
-      │   DE table (DESeq2 / Xtail / Anota2Seq)        │
-      │   + rpf_counts.tsv                             │
-      │   → SHA256 reference-consistency gate          │
-      │   → te.tsv (per sample × gene)                 │
-      │   → delta_te.tsv (per gene)                    │
-      │   → mrna_vs_rpf scatter, ΔTE volcano           │
-      └────────────────────────────────────────────────┘
-```
+![Pipeline overview](docs/diagrams/01_pipeline_overview.png)
+
+UMI handling: the UMI is extracted into the read QNAME during the cutadapt trim step (5' single-pass or 3' two-pass), so it travels through bowtie2 alignment unchanged and is available for `umi_tools dedup` after the MAPQ filter — the only stage that needs alignment coordinates AND the UMI together.
+
+### Detailed stage diagrams
+
+- [docs/diagrams/02_align_stage.png](docs/diagrams/02_align_stage.png) — internals of `mitoribopy align`: per-sample resolution → cutadapt + UMI → contam subtract → bowtie2 → MAPQ → dedup → BED6.
+- [docs/diagrams/03_rpf_stage.png](docs/diagrams/03_rpf_stage.png) — internals of `mitoribopy rpf`: filter BED → offset enrichment + selection → translation_profile + coverage_profile_plots + optional modules.
+- [docs/diagrams/04_rnaseq_stage.png](docs/diagrams/04_rnaseq_stage.png) — internals of the optional `mitoribopy rnaseq` stage: DE table + rpf_counts → SHA256 reference gate → TE → ΔTE → scatter + volcano.
+
+Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no Node / mermaid-cli required).
 
 ---
 
@@ -174,8 +136,13 @@ conda activate mitoribopy
 The shortest path from raw FASTQ to translation-profile + coverage outputs is one YAML file plus one command.
 
 ```bash
-# 1. Drop a working YAML template next to your data and fill in the paths.
+# 1. Start from one of two templates next to your data and fill in the paths:
+#    -- The repo root has an EXHAUSTIVE template that lists every available
+#       flag with its default value and a 1-line comment:
+cp pipeline_config.example.yaml pipeline_config.yaml
+#    -- OR get the curated MINIMAL template from the CLI:
 mitoribopy all --print-config-template > pipeline_config.yaml
+
 $EDITOR pipeline_config.yaml
 
 # 2. Optional: dry-run prints the per-stage argv so you can review.
@@ -185,7 +152,7 @@ mitoribopy all --config pipeline_config.yaml --output results/ --dry-run
 mitoribopy all --config pipeline_config.yaml --output results/
 ```
 
-A working `pipeline_config.yaml` for a typical human mt-Ribo-seq run looks like this (annotated):
+A minimal `pipeline_config.yaml` for a typical human mt-Ribo-seq run looks like this (annotated):
 
 ```yaml
 align:
@@ -206,8 +173,9 @@ align:
   dedup_strategy: auto            # umi-tools per sample if UMI, else skip
 
 rpf:
-  strain: h                       # human mt-mRNA reference + codon table
+  strain: h.sapiens               # human mt-mRNA reference + codon table
   fasta: input_data/human-mt-mRNA.fasta
+  footprint_class: monosome       # short | monosome | disome | custom
   rpf: [29, 34]                   # filtered RPF length range
   align: stop                     # anchor offsets at the stop codon
   offset_type: "5"                # offsets reported from the read 5' end
@@ -221,7 +189,7 @@ rpf:
   max_3_offset: 22
   offset_mask_nt: 5
   plot_format: svg
-  merge_density: true
+  codon_density_window: true
 ```
 
 After the run, you'll have:
