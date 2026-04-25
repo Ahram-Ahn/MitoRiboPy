@@ -301,7 +301,7 @@ def run_cutadapt(
             fastq_in=fastq_in,
             fastq_out=intermediate,
             resolved=replace(resolved, umi_length=0),  # skip UMI handling in pass 1
-            min_length=min_length,
+            min_length=min_length + resolved.umi_length,  # final insert must still meet min
             max_length=max_length + resolved.umi_length,  # keep +UMI length for pass 2
             quality=quality,
             threads=threads,

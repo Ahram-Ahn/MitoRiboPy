@@ -237,6 +237,8 @@ def test_run_cutadapt_two_pass_3p_umi_issues_two_commands(tmp_path) -> None:
     # Pass 1: trims adapter, no UMI handling (UMI handled in pass 2).
     assert "-a" in pass1_cmd
     assert pass1_cmd[pass1_cmd.index("-a") + 1] == "AACTGTAGGCACCATCAAT"
+    assert pass1_cmd[pass1_cmd.index("--minimum-length") + 1] == "27"
+    assert pass1_cmd[pass1_cmd.index("--maximum-length") + 1] == "57"
     # Pass 1 should NOT have cut_prefix / cut_suffix rename yet.
     assert not any(t.startswith("--rename=") for t in pass1_cmd)
 
