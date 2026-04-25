@@ -40,7 +40,7 @@ def run_translation_profile_analysis(
 
     log_info(
         "PROFILE",
-        f"Starting translation-profile analysis (merge_density={args.merge_density}).",
+        f"Starting translation-profile analysis (codon_density_window={args.codon_density_window}).",
     )
     os.makedirs(output_dir, exist_ok=True)
 
@@ -238,9 +238,6 @@ def run_translation_profile_analysis(
         frame_dir = os.path.join(sample_out, "translating_frame")
         os.makedirs(frame_dir, exist_ok=True)
 
-        debug_dir = os.path.join(sample_out, "debug_csv")
-        os.makedirs(debug_dir, exist_ok=True)
-
         coverage_usage_per_sample[sample_name] = {}
         frame_usage_map[sample_name] = {}
 
@@ -357,29 +354,6 @@ def run_translation_profile_analysis(
                         if 0 <= px < len(read_cov_map[t_][site_]):
                             read_cov_map[t_][site_][px] += cnt_
 
-        # Save read_cov_map to CSV for debugging
-        debug_rows = []
-        for t_ in iter_with_progress(
-            sorted(read_cov_map),
-            component="PROFILE",
-            noun="transcript",
-            labeler=str,
-        ):
-            seq_len = len(read_cov_map[t_]["seq"])
-            A_cov = read_cov_map[t_]["A_site"]
-            P_cov = read_cov_map[t_]["P_site"]
-            E_cov = read_cov_map[t_]["E_site"]
-            for i in range(seq_len):
-                debug_rows.append({
-                    "Transcript": t_,
-                    "Position": i + 1,
-                    "A_site": A_cov[i],
-                    "P_site": P_cov[i],
-                    "E_site": E_cov[i]
-                })
-        debug_df = pd.DataFrame(debug_rows)
-        debug_df.to_csv(os.path.join(debug_dir, f"read_cov_map_{sample_name}.csv"), index=False)
-
         # -----------
         # Frame usage + primary-site coverage usage
         # -----------
@@ -460,7 +434,7 @@ def run_translation_profile_analysis(
                 aa_, cat_ = classify_codon(codon_seq)
 
                 cov_here = primary_depth[middle_pos]
-                if args.merge_density:
+                if args.codon_density_window:
                     if (middle_pos - 1) >= 0:
                         cov_here += primary_depth[middle_pos - 1]
                     if (middle_pos + 1) < seq_len:
@@ -471,20 +445,6 @@ def run_translation_profile_analysis(
                     0,
                 )
                 coverage_usage_per_sample[sample_name][transcript_name][(codon_seq, aa_, cat_)] += cov_here
-
-        # Debug: coverage_usage_per_sample -> flatten and save
-        debug_cov_rows = []
-        for t_ in coverage_usage_per_sample[sample_name]:
-            for (codon, aa_, cat_), c_val in coverage_usage_per_sample[sample_name][t_].items():
-                debug_cov_rows.append({
-                    "Transcript": t_,
-                    "Codon": codon,
-                    "AA": aa_,
-                    "Category": cat_,
-                    "Coverage": c_val
-                })
-        debug_cov_df = pd.DataFrame(debug_cov_rows)
-        debug_cov_df.to_csv(os.path.join(debug_dir, f"coverage_usage_per_sample_{sample_name}.csv"), index=False)
 
         # -------------------------------------
         # Frame Usage Summaries & Plots
@@ -602,7 +562,7 @@ def run_translation_profile_analysis(
                 df_rows,
                 os.path.join(codon_usage_dir, f"codon_usage_{t}_plot.png"),
                 f"{transcript_label_map.get(t, t)} - {primary_site_label} Codon Usage "
-                f"(Frame0{', Merged' if args.merge_density else ''}) - {sample_name}",
+                f"(Frame0{', Smoothed +/-1 nt' if args.codon_density_window else ''}) - {sample_name}",
                 codon_label_order,
             )
 
@@ -640,7 +600,7 @@ def run_translation_profile_analysis(
             ov_df,
             os.path.join(codon_usage_dir, "codon_usage_total_plot.png"),
             f"Overall {primary_site_label} Codon Usage "
-            f"(Frame0{', Merged' if args.merge_density else ''}) - {sample_name}",
+            f"(Frame0{', Smoothed +/-1 nt' if args.codon_density_window else ''}) - {sample_name}",
             codon_label_order,
         )
 
@@ -670,27 +630,13 @@ def run_translation_profile_analysis(
                 codon_seq = seq_str[mid - 1: mid + 2]
                 aa_, cat_ = classify_codon(codon_seq)
                 cov_here = a_depth[mid]
-                if args.merge_density:
+                if args.codon_density_window:
                     if (mid - 1) >= 0:
                         cov_here += a_depth[mid - 1]
                     if (mid + 1) < seq_len:
                         cov_here += a_depth[mid + 1]
                 coverage_usage_a_site[t].setdefault((codon_seq, aa_, cat_), 0)
                 coverage_usage_a_site[t][(codon_seq, aa_, cat_)] += cov_here
-
-        # Save the A-site coverage usage for debugging/analysis.
-        debug_a_rows = []
-        for t in coverage_usage_a_site:
-            for (codon, aa_, cat_), c_val in coverage_usage_a_site[t].items():
-                debug_a_rows.append({
-                    "Transcript": t,
-                    "Codon": codon,
-                    "AA": aa_,
-                    "Category": cat_,
-                    "Coverage": c_val
-                })
-        dbg_a_df = pd.DataFrame(debug_a_rows)
-        dbg_a_df.to_csv(os.path.join(debug_dir, f"coverage_usage_a_site_{sample_name}.csv"), index=False)
 
         a_site_ov_cov = {}
         a_site_ov_freq = {}
@@ -709,7 +655,7 @@ def run_translation_profile_analysis(
                 a_site_df_rows,
                 os.path.join(codon_usage_dir, f"a_site_codon_usage_{t}_plot.png"),
                 f"{transcript_label_map.get(t, t)} - A-site Codon Usage "
-                f"(Frame0{', Merged' if args.merge_density else ''}) - {sample_name}",
+                f"(Frame0{', Smoothed +/-1 nt' if args.codon_density_window else ''}) - {sample_name}",
                 codon_label_order,
             )
 
@@ -743,11 +689,11 @@ def run_translation_profile_analysis(
         plot_codon_usage_dataframe(
             a_site_df,
             os.path.join(codon_usage_dir, "a_site_codon_usage_total_plot.png"),
-            f"Overall A-site Codon Usage (Frame0{', Merged' if args.merge_density else ''}) - {sample_name}",
+            f"Overall A-site Codon Usage (Frame0{', Smoothed +/-1 nt' if args.codon_density_window else ''}) - {sample_name}",
             codon_label_order,
         )
 
     log_info(
         "PROFILE",
-        f"Translation-profile analysis complete (merge_density={args.merge_density}).",
+        f"Translation-profile analysis complete (codon_density_window={args.codon_density_window}).",
     )
