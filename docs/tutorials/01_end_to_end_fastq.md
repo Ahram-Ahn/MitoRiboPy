@@ -1,15 +1,17 @@
 # Tutorial 01 — End-to-end mt-Ribo-seq from FASTQ to codon usage
 
-This tutorial walks through a full mt-Ribo-seq analysis with **MitoRiboPy v0.4.1**, starting from raw FASTQ and ending with per-sample translation-profile and codon-usage outputs.
+This tutorial walks through a full mt-Ribo-seq analysis with **MitoRiboPy**, starting from raw FASTQ and ending with per-sample translation-profile and codon-usage outputs.
 
-Every command below is a shell command (lines starting with `$`). The outputs are sketched so you know what to expect at each stage. The tutorial uses a human library mix as the running example; adjust `--strain`, the `-rpf` window, and the FASTA path to match your own data.
+![Pipeline overview](../diagrams/01_pipeline_overview.png)
 
-> **Prerequisites.** Install MitoRiboPy (see the repo [README](../../README.md)) and the external tools it shells out to. The quickest way is the bioconda environment shipped under `docs/environment/environment.yml`:
+Every command below is a shell command (lines starting with `$`). Outputs are sketched so you know what to expect at each stage. The tutorial uses a human library mix as the running example; adjust `--strain`, the `-rpf` window, and the FASTA path to match your own data.
+
+> **Prerequisites.** Install MitoRiboPy with `pip install mitoribopy` or from the bioconda environment shipped under `docs/environment/environment.yml`:
 >
 > ```bash
 > $ conda env create -f docs/environment/environment.yml
 > $ conda activate mitoribopy
-> $ mitoribopy --version   # expect "MitoRiboPy 0.4.1"
+> $ mitoribopy --version
 > ```
 >
 > `cutadapt`, `bowtie2`, `bowtie2-build`, and `umi_tools` (when at least one sample has UMIs) must be on `$PATH`. `samtools`, `fastqc`, and `picard` are optional.
@@ -33,7 +35,7 @@ Create a workspace with the following shape:
   pipeline_config.yaml
 ```
 
-FASTA headers in `human_mt_transcriptome.fa` must match the `sequence_name` column of the annotation CSV. MitoRiboPy ships annotation CSVs for human and yeast under `src/mitoribopy/data/`.
+FASTA headers in `human_mt_transcriptome.fa` must match the `sequence_name` column of the annotation CSV. MitoRiboPy ships annotation CSVs for `h.sapiens` and `s.cerevisiae` under `src/mitoribopy/data/`.
 
 Mixed batches are fine — you can have raw FASTQs, pre-trimmed FASTQs (e.g. SRA-deposited), UMI samples, and non-UMI samples all in the same `fastqs/` directory. Each sample is resolved independently.
 
@@ -75,9 +77,10 @@ align:
   dedup_strategy: auto            # umi-tools per sample if UMI, else skip
 
 rpf:
-  strain: h
+  strain: h.sapiens               # h.sapiens | s.cerevisiae | custom
   fasta: references/human_mt_transcriptome.fa
-  rpf: [29, 34]
+  footprint_class: monosome       # short | monosome | disome | custom
+  rpf: [29, 34]                   # h.sapiens monosome window
   align: stop
   offset_type: "5"
   offset_site: p                  # selection coordinate space (P-site)
@@ -90,9 +93,9 @@ rpf:
   max_3_offset: 22
   offset_mask_nt: 5
   plot_format: svg
-  merge_density: true
+  codon_density_window: true      # smooth codon-density with +/-1 nt window
 
-# Optional rnaseq section — see Tutorial 02.
+# Optional rnaseq section -- see Tutorial 02.
 # rnaseq:
 #   de_table: de.tsv
 #   gene_id_convention: hgnc
@@ -101,7 +104,13 @@ rpf:
 
 > Every key under a section maps to the corresponding subcommand's CLI flag with hyphens turned to underscores (so `kit_preset` → `--kit-preset`, `library_strandedness` → `--library-strandedness`). Booleans emit the bare flag (`true`) or are omitted entirely (`false`); `null` values are dropped.
 
-You can also generate a fresh, fully-commented template:
+You can also start from the exhaustive copy-and-edit template at the repo root:
+
+```bash
+$ cp pipeline_config.example.yaml pipeline_config.yaml
+```
+
+or get the curated minimal template from the CLI:
 
 ```bash
 $ mitoribopy all --print-config-template > pipeline_config.yaml
@@ -115,7 +124,7 @@ $ mitoribopy all --print-config-template > pipeline_config.yaml
 $ mitoribopy all --config pipeline_config.yaml --output results/ --dry-run
 [all] dry-run: planned actions
   1. align: --kit-preset auto --library-strandedness forward --fastq-dir fastqs/ ...
-  2. rpf: --strain h --fasta references/human_mt_transcriptome.fa -rpf 29 34 ...
+  2. rpf:   --strain h.sapiens --fasta references/human_mt_transcriptome.fa -rpf 29 34 ...
   3. write manifest to results/run_manifest.json
 ```
 
@@ -135,17 +144,30 @@ On completion, inspect:
 results/
   align/
     mitoribopy.log
-    read_counts.tsv             # per-stage counts (input → trimmed → contam → mt → MAPQ → dedup)
-    kit_resolution.tsv          # per-sample kit + dedup decisions; the v0.4 provenance spine
+    read_counts.tsv             # per-stage counts (input -> trimmed -> contam -> mt -> MAPQ -> dedup)
+    kit_resolution.tsv          # per-sample kit + dedup decisions
     run_settings.json           # includes per_sample[] block
-    trimmed/                    # *.trimmed.fq.gz, *.cutadapt.json
-    contam_filtered/            # *.nocontam.fq.gz
-    aligned/                    # *.bam, *.mapq.bam
-    deduped/                    # *.dedup.bam
-    bed/                        # *.bed (strand-aware BED6)
+    sample_overrides.tsv        # only when align.samples: was set in YAML
+    .sample_done/               # per-sample resume markers; --resume skips finished samples
+      ctrl_1.json
+      kd_1.json ...
+    trimmed/                    # *.cutadapt.json (per-sample)
+                                # NOTE: *.trimmed.fq.gz is deleted as soon as
+                                # contam-filter consumes it; pass
+                                # --keep-intermediates to retain it.
+    contam_filtered/            # empty unless --keep-intermediates
+    aligned/                    # *.mapq.bam (kept)
+                                # NOTE: pre-MAPQ *.bam is deleted unless
+                                # --keep-intermediates.
+    deduped/                    # *.dedup.bam ONLY when at least one sample uses
+                                # umi-tools / mark-duplicates. For dedup=skip
+                                # samples the orchestrator wires mapq.bam
+                                # straight into BED conversion -- no duplicate
+                                # dedup.bam is written.
+    bed/                        # *.bed (strand-aware BED6) -- input to rpf
   rpf/
     mitoribopy.log
-    rpf_counts.tsv              # per-sample per-gene RPF counts → feeds rnaseq
+    rpf_counts.tsv              # per-sample per-gene RPF counts -> feeds rnaseq
     run_settings.json           # includes reference_checksum (SHA256 of --fasta)
     plots_and_csv/
       offset_stop.csv           # COMBINED enrichment summary (diagnostic)
@@ -157,19 +179,29 @@ results/
         ctrl_2/
         kd_1/
         kd_2/
-    translation_profile_p/      # P-site outputs (analysis_sites=both)
-      ctrl_1/
-        footprint_density/      # *_footprint_density.csv (P/A/E columns)
-        translating_frame/      # frame_usage_total.csv, frame_usage_by_transcript.csv
-        codon_usage/            # codon_usage_<gene>.csv, codon_usage_total.csv, ...
-        debug_csv/
-      ...
-    translation_profile_a/      # A-site outputs (analysis_sites=both); same shape
-      ...
-    coverage_profile_plots_p/   # per-site coverage plots
-      read_coverage_rpm/, p_site_coverage_rpm/, *_codon/, *_frame/
-    coverage_profile_plots_a/
-      ...
+    translation_profile/        # one site subdir per requested site
+      p/<sample>/               # P-site outputs
+        footprint_density/      # *_footprint_density.csv (cols: Position,
+                                #   Nucleotide, A_site, P_site)
+        translating_frame/      # frame_usage_total.csv,
+                                # frame_usage_by_transcript.csv
+        codon_usage/            # codon_usage_<gene>.csv,
+                                # codon_usage_total.csv,
+                                # a_site_codon_usage_<gene>.csv, ...
+      a/<sample>/               # A-site outputs (same shape)
+    coverage_profile_plots/
+      read_coverage_rpm/        # SITE-INDEPENDENT (written ONCE)
+      read_coverage_raw/
+      read_coverage_rpm_codon/
+      read_coverage_raw_codon/
+      p/                        # P-site density (analysis_sites in {p, both})
+        site_density_rpm/
+        site_density_raw/
+        site_density_rpm_codon/
+        site_density_raw_codon/
+        site_density_rpm_frame/   # frame-coloured CDS-only nt plots; frame-0
+        site_density_raw_frame/   # dominance is the canonical mt-Ribo-seq QC
+      a/                        # A-site density (same shape)
   run_manifest.json             # composed provenance
 ```
 
@@ -183,12 +215,12 @@ The shortest path through the outputs:
    Open `results/align/kit_resolution.tsv`:
 
    ```text
-   sample    fastq           applied_kit         adapter                                umi_length  dedup_strategy  detected_kit       match_rate  source
-   ctrl_1    fastqs/ctrl_1.fq.gz   illumina_truseq    AGATCGGAAGAGCACACGTCTGAACTCCAGTCA      0           skip            illumina_truseq    0.9912      detected
-   kd_1      fastqs/kd_1.fq.gz     pretrimmed         (none)                                 0           skip            (none)             0.0001      inferred_pretrimmed
+   sample    fastq                applied_kit         adapter                                umi_length  dedup_strategy  detected_kit       match_rate  source
+   ctrl_1    fastqs/ctrl_1.fq.gz  illumina_truseq     AGATCGGAAGAGCACACGTCTGAACTCCAGTCA      0           skip            illumina_truseq    0.9912      detected
+   kd_1      fastqs/kd_1.fq.gz    pretrimmed          (none)                                 0           skip            (none)             0.0001      inferred_pretrimmed
    ```
 
-   `source=detected` means the scanner identified the kit. `source=inferred_pretrimmed` means no adapter signal was found at all — typical for SRA-deposited inputs. `source=user_fallback` means detection failed and the user-supplied `--kit-preset` was used.
+   `source=detected` means the scanner identified the kit. `source=inferred_pretrimmed` means no adapter signal was found at all — typical for SRA-deposited inputs. `source=user_fallback` means detection failed and the user-supplied `--kit-preset` was used. `source=per_sample_override:*` means an `align.samples:` YAML override pinned the kit explicitly for this sample.
 
 2. **Did each pipeline stage make biological sense?**
    Open `results/align/read_counts.tsv`. The invariants must hold:
@@ -204,11 +236,14 @@ The shortest path through the outputs:
 4. **Does the canonical 12–15 nt P-site peak show up?**
    Open `results/rpf/plots_and_csv/offset_stop.svg` (heatmap + line plot). A sharp peak at the canonical 12–15 nt 5' offset confirms library quality. Diffuse / flat enrichment usually means the wrong strand, the wrong RPF window, or low coverage.
 
-5. **What's the codon-usage profile?**
+5. **Does the CDS show frame-0 dominance?**
+   Open `results/rpf/coverage_profile_plots/p/site_density_rpm_frame/<gene>_p-site_density_(rpm,_cds_frame_coloring).svg`. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start). A healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region.
+
+6. **What's the codon-usage profile?**
    For each sample, the totals are at:
 
-   - `results/rpf/translation_profile_p/<sample>/codon_usage/codon_usage_total.csv` — overall P-site codon occupancy.
-   - `results/rpf/translation_profile_a/<sample>/codon_usage/codon_usage_total.csv` — overall A-site codon occupancy.
+   - `results/rpf/translation_profile/p/<sample>/codon_usage/codon_usage_total.csv` — overall P-site codon occupancy.
+   - `results/rpf/translation_profile/a/<sample>/codon_usage/codon_usage_total.csv` — overall A-site codon occupancy.
 
    Compare the two side by side to inspect both sites independently.
 
@@ -222,7 +257,12 @@ If `align` finished but `rpf` bailed on a config typo, fix the config and re-run
 $ mitoribopy all --config pipeline_config.yaml --output results/ --resume
 ```
 
-`--resume` skips a stage when its sentinel output file already exists (`align/read_counts.tsv`, `rpf/rpf_counts.tsv`, `rnaseq/delta_te.tsv`). Individual stages can also be force-skipped via `--skip-align`, `--skip-rpf`, `--skip-rnaseq`.
+`--resume` works at two levels:
+
+1. **Stage level** — each stage is skipped when its final sentinel exists: `align/read_counts.tsv`, `rpf/rpf_counts.tsv`, `rnaseq/delta_te.tsv`.
+2. **Per-sample inside align** — every sample that finishes successfully writes `<output>/align/.sample_done/<sample>.json` containing its read-count row. On a subsequent `--resume` (when `read_counts.tsv` is missing because the previous run crashed mid-batch), samples whose marker is present are reloaded from JSON instead of re-run; the markers from completed samples are merged with freshly-processed ones to produce the aggregated `read_counts.tsv`. A 50-sample run that died at sample 30 picks up at sample 31.
+
+Individual stages can also be force-skipped via `--skip-align`, `--skip-rpf`, `--skip-rnaseq`.
 
 ---
 
@@ -232,7 +272,7 @@ When you only want to tweak rpf parameters (offset windows, RPF range, plot form
 
 ```bash
 $ mitoribopy rpf \
-    -s h \
+    -s h.sapiens \
     -f references/human_mt_transcriptome.fa \
     --directory results/align/bed/ \
     -rpf 29 34 \
@@ -262,4 +302,4 @@ Human mt-ND5 and mt-ND6 are transcribed from opposite strands and their 3' ends 
 
 - For the optional translation-efficiency integration with paired RNA-seq, continue to [Tutorial 02 — RNA-seq integration](02_rnaseq_integration.md).
 - For the full per-flag reference, see [docs/reference/cli.md](../reference/cli.md).
-- For changes per release, see [docs/release-notes/](../release-notes/).
+- For non-human / non-yeast organisms, see the [Custom organisms](../../README.md#custom-organisms) section of the README.

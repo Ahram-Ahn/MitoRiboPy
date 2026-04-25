@@ -1,10 +1,10 @@
-# MitoRiboPy v0.3.0 Docker image.
+# MitoRiboPy Docker image.
 #
 # Build:
-#   docker build -t mitoribopy:0.3.0 -f docs/environment/Dockerfile .
+#   docker build -t mitoribopy:latest -f docs/environment/Dockerfile .
 #
 # Run:
-#   docker run --rm -v $PWD:/work -w /work mitoribopy:0.3.0 \
+#   docker run --rm -v $PWD:/work -w /work mitoribopy:latest \
 #     mitoribopy align --help
 #
 # The image is based on the miniconda3 image so we can pull the
