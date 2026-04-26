@@ -7,7 +7,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-04-25
+## [0.4.2] - 2026-04-25
 
 ### Added
 - **Per-sample UMI / kit overrides** via `align.samples:` YAML list (or
@@ -96,6 +96,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   guaranteed to meet the user-requested minimum length floor. Without
   this fix, a 12 nt UMI with the default `--min-length 15` could
   produce 3 nt inserts.
+- **`mitoribopy align --config`** silently ignored every value in the
+  loaded YAML / JSON / TOML file. The flag was registered on the
+  parser (so it appeared in `--help`) but the values were never
+  merged into the argparse namespace. Now applies the loaded values
+  as parser defaults BEFORE the real parse, so explicit CLI flags
+  still win on conflict (matches the documented contract and matches
+  how `mitoribopy rpf --config` already worked). Adds
+  `align_config.example.yaml` and `rpf_config.example.yaml` at the
+  repo root as exhaustive flat-shape templates for the standalone
+  subcommands.
 
 ## [0.4.1] - 2026-04-24
 
