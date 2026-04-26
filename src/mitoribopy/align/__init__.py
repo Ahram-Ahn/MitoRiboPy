@@ -13,7 +13,7 @@ Modules:
 * :mod:`mitoribopy.align.trim`           cutadapt wrapper with kit presets
 * :mod:`mitoribopy.align.contam`         bowtie2 contaminant subtraction
 * :mod:`mitoribopy.align.align`          bowtie2 mt-transcriptome alignment
-* :mod:`mitoribopy.align.dedup`          umi_tools / skip / mark-duplicates
+* :mod:`mitoribopy.align.dedup`          umi_tools / skip
 * :mod:`mitoribopy.align.bam_utils`      pysam-based MAPQ filter + BAM -> BED6
 * :mod:`mitoribopy.align.read_counts`    per-sample provenance table
 """
@@ -54,10 +54,8 @@ from .contam import (
     subtract_contaminants,
 )
 from .dedup import (
-    CONFIRM_MARK_DUPLICATES_FLAG,
     resolve_dedup_strategy,
     run_dedup,
-    run_mark_duplicates,
     run_umi_tools_dedup,
     skip_dedup,
 )
@@ -90,7 +88,6 @@ __all__ = [
     "check_tool",
     "ensure_tools_available",
     "get_tool_version",
-    "CONFIRM_MARK_DUPLICATES_FLAG",
     "DetectionResult",
     "align_mt",
     "assemble_sample_counts",
@@ -107,7 +104,6 @@ __all__ = [
     "resolve_kit_settings",
     "run_cutadapt",
     "run_dedup",
-    "run_mark_duplicates",
     "run_umi_tools_dedup",
     "skip_dedup",
     "subtract_contaminants",

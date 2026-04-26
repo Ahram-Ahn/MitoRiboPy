@@ -25,6 +25,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "downstream_dir": "footprint_density",
     "min_offset": 11,
     "max_offset": 20,
+    "rpf_min_count_frac": 0.20,
     "min_5_offset": None,
     "max_5_offset": None,
     "min_3_offset": None,

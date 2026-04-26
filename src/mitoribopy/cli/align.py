@@ -6,7 +6,7 @@ End-to-end orchestrator for Phase 3. For every input FASTQ:
 2. bowtie2 contaminant subtraction (user-supplied index; fails loudly if missing)
 3. bowtie2 mt-transcriptome alignment (Path A; end-to-end --very-sensitive -L 18)
 4. MAPQ filter (pysam; default 10 to suppress NUMT cross-talk)
-5. deduplication per Approach D (umi_tools / skip / mark-duplicates)
+5. deduplication (umi_tools / skip)
 6. BAM -> BED6 (strand-aware)
 
 Writes ``read_counts.tsv`` and ``run_settings.json`` at the run root for
@@ -350,13 +350,13 @@ def build_parser() -> argparse.ArgumentParser:
     dedup = parser.add_argument_group("Deduplication")
     dedup.add_argument(
         "--dedup-strategy",
-        choices=["auto", "umi-tools", "skip", "mark-duplicates"],
+        choices=["auto", "umi-tools", "skip"],
         default="auto",
         help=(
             "'auto' (default) -> umi-tools when UMIs are present, else "
-            "skip. 'mark-duplicates' is coordinate-only and destroys "
-            "codon-occupancy signal on mt-Ribo-seq; gated behind the "
-            f"{dedup_step.CONFIRM_MARK_DUPLICATES_FLAG} confirmation flag."
+            "skip. The legacy 'mark-duplicates' option was removed in "
+            "v0.4.5: coordinate-only dedup destroys codon-occupancy "
+            "signal on low-complexity mt-Ribo-seq libraries."
         ),
     )
     dedup.add_argument(
@@ -367,17 +367,6 @@ def build_parser() -> argparse.ArgumentParser:
             "umi_tools --method. 'unique' (default) collapses only on "
             "exact coord+UMI match; other methods may over-collapse in "
             "low-complexity mt regions."
-        ),
-    )
-    dedup.add_argument(
-        dedup_step.CONFIRM_MARK_DUPLICATES_FLAG,
-        dest="confirm_mark_duplicates",
-        action="store_true",
-        default=False,
-        help=(
-            "Required confirmation to opt into --dedup-strategy "
-            "mark-duplicates. Only pass this if you have an independent "
-            "reason (carrier nuclear RNA, >22 PCR cycles, very low input)."
         ),
     )
 
@@ -439,7 +428,7 @@ def _planned_actions(
     dedup_strategies = sorted({res.dedup_strategy for res in resolutions}) or ["skip"]
     actions: list[str] = [
         "validate external tools on PATH (cutadapt, bowtie2; plus "
-        f"umi_tools / picard as needed for dedup={'/'.join(dedup_strategies)})",
+        f"umi_tools as needed for dedup={'/'.join(dedup_strategies)})",
         f"resolve per-sample kit + dedup for {len(resolutions)} sample(s):",
     ]
     actions.extend("  " + line for line in resolution_summary_lines(resolutions))
@@ -520,7 +509,6 @@ def _write_run_settings(
         "seed": args.seed,
         "dedup_strategy": _legacy_global_dedup(resolutions),
         "umi_dedup_method": args.umi_dedup_method,
-        "confirm_mark_duplicates": args.confirm_mark_duplicates,
         "contam_index": args.contam_index,
         "mt_index": args.mt_index,
         "threads": getattr(args, "threads", None),
@@ -648,7 +636,6 @@ def _process_one_sample(
         dedup = dedup_step.run_dedup(
             strategy=resolved_dedup,
             umi_length=resolved_kit.umi_length,
-            confirm_mark_duplicates=args.confirm_mark_duplicates,
             bam_in=mapq_bam,
             bam_out=dedup_bam,
             log_path=dedup_log,
@@ -788,7 +775,6 @@ def _resolve_per_sample(
         umi_length=args.umi_length,
         umi_position=args.umi_position,
         dedup_strategy=args.dedup_strategy,
-        confirm_mark_duplicates=args.confirm_mark_duplicates,
         adapter_detection_mode=args.adapter_detection,
         allow_pretrimmed_inference=getattr(
             args, "allow_pretrimmed_inference", True
@@ -898,7 +884,6 @@ def run(argv: Iterable[str]) -> int:
                     dedup_label = dedup_step.resolve_dedup_strategy(
                         args.dedup_strategy,
                         umi_length=placeholder_kit.umi_length,
-                        confirm_mark_duplicates=args.confirm_mark_duplicates,
                     )
                     source_label = "dry_run_explicit"
                 planned.append(
@@ -945,7 +930,6 @@ def run(argv: Iterable[str]) -> int:
                 dedup_label = dedup_step.resolve_dedup_strategy(
                     args.dedup_strategy,
                     umi_length=placeholder_kit.umi_length,
-                    confirm_mark_duplicates=args.confirm_mark_duplicates,
                 )
             except (KeyError, ValueError) as exc:
                 print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
@@ -993,8 +977,8 @@ def run(argv: Iterable[str]) -> int:
         return 2
 
     # Tool check uses the union of every sample's resolved dedup
-    # strategy so we only require umi_tools / picard when at least one
-    # sample needs them.
+    # strategy so we only require umi_tools when at least one sample
+    # actually needs it.
     required = ["cutadapt", "bowtie2", "bowtie2-build"]
     required.extend(sorted(required_dedup_tools(resolutions)))
     optional: list[str] = ["fastqc"]

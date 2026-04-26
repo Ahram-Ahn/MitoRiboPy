@@ -158,7 +158,6 @@ def test_per_sample_override_beats_global_kit(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
         sample_overrides=overrides,
@@ -210,7 +209,6 @@ def test_mixed_umi_and_no_umi_batch_resolves_correctly(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
         sample_overrides=overrides,
@@ -242,7 +240,6 @@ def test_unknown_sample_in_overrides_raises(tmp_path) -> None:
             umi_length=None,
             umi_position=None,
             dedup_strategy="auto",
-            confirm_mark_duplicates=False,
             adapter_detection_mode="off",
             sample_overrides=overrides,
         )

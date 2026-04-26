@@ -12,7 +12,7 @@ This file records the regression test MitoRiboPy must pass before tagging a rele
 
 2. **Specificity.** The polyproline signal is `MT-CO1`-specific; other mt-mRNAs do not show a matching proline-codon occupancy increase.
 
-3. **Signal preservation under safe dedup defaults.** Running with `--dedup-strategy auto` (the default; resolves to `umi-tools` for UMI samples and `skip` for non-UMI samples) preserves the polyproline signal. Running the same library with `--dedup-strategy mark-duplicates` (gated behind the long confirmation flag) collapses the polyproline signal to near-baseline. This is the empirical proof of the warning that coordinate-only dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries.
+3. **Signal preservation under safe dedup defaults.** Running with `--dedup-strategy auto` (the default; resolves to `umi-tools` for UMI samples and `skip` for non-UMI samples) preserves the polyproline signal. Running the same library with picard `mark-duplicates` (the v0.4.4 gated option) collapsed the polyproline signal to near-baseline. This empirical evidence motivated the v0.4.5 removal of `mark-duplicates` from the CLI; the regression remains here as the proof that coordinate-only dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries. To reproduce the failure mode on v0.4.5+, you would have to call picard `MarkDuplicates` manually outside the pipeline.
 
 4. **Per-sample resolution stability** (v0.4+). When the TACO1-KO and control libraries use different kits (e.g. one TruSeq and one NEBNext UMI), per-sample kit detection (`--kit-preset auto`, default) and per-sample dedup resolution still preserve the per-sample polyproline signal — the criterion above must hold for both samples regardless of kit chemistry.
 
@@ -25,18 +25,13 @@ This file records the regression test MitoRiboPy must pass before tagging a rele
 ## Command sequence
 
 ```bash
-# 1. End-to-end for control and TACO1-KO samples together (safe defaults).
+# End-to-end for control and TACO1-KO samples together (safe defaults).
 $ mitoribopy all \
     --config validation/taco1_ko_pipeline.yaml \
     --output validation/taco1_ko_results
-
-# 2. Alternate run with mark-duplicates to demonstrate signal loss.
-$ mitoribopy all \
-    --config validation/taco1_ko_mark_duplicates.yaml \
-    --output validation/taco1_ko_mark_duplicates_results
 ```
 
-The second config differs from the first only in `align.dedup_strategy: mark-duplicates` plus `align.confirm_mark_duplicates: true` — every other parameter is held constant so any signal difference is attributable to the dedup step.
+The historical second arm of this regression — running with picard `mark-duplicates` to demonstrate signal loss — is no longer reproducible through the CLI as of v0.4.5 (the option was removed). To reproduce the negative-control failure mode on v0.4.5+, run picard `MarkDuplicates` manually on the `aligned/<sample>.mapq.bam` and feed the resulting BAM into `mitoribopy rpf`.
 
 ---
 
@@ -53,4 +48,4 @@ The second config differs from the first only in `align.dedup_strategy: mark-dup
 
 **Pending dataset delivery.** The validation cannot execute in the MitoRiboPy development sandbox because the tutorial-scale FASTQs and the TACO1-KO dataset are not part of the repository. This document encodes the exact acceptance criteria so the test is reproducible once the data is in place on the maintainer's workstation.
 
-When the run completes, append the observed proline-codon occupancy ratios (KO vs control; safe-dedup vs mark-duplicates) to this file and link any resulting figures from `docs/validation/figures/`. A release candidate should not be tagged until the primary and specificity criteria pass.
+When the run completes, append the observed proline-codon occupancy ratios (KO vs control) to this file and link any resulting figures from `docs/validation/figures/`. A release candidate should not be tagged until the primary and specificity criteria pass.

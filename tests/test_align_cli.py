@@ -41,7 +41,10 @@ def test_build_parser_help_mentions_new_flags() -> None:
     assert "--contam-index" in help_text
     assert "--mt-index" in help_text
     assert "--dedup-strategy" in help_text
-    assert "--i-understand-mark-duplicates-destroys-mt-ribo-seq-signal" in help_text
+    # The legacy --i-understand-mark-duplicates-destroys-mt-ribo-seq-signal
+    # flag was removed in v0.4.5 along with the mark-duplicates strategy.
+    assert "i-understand-mark-duplicates" not in help_text
+    assert "mark-duplicates" not in help_text or "removed in v0.4.5" in help_text
 
 
 def test_align_subcommand_help_via_cli(capsys) -> None:
@@ -136,24 +139,26 @@ def test_dry_run_fails_fast_on_custom_kit_without_adapter(capsys, tmp_path) -> N
     assert "--adapter" in capsys.readouterr().err
 
 
-def test_dry_run_fails_fast_on_mark_duplicates_without_confirm_flag(
-    capsys, tmp_path
-) -> None:
-    exit_code = cli.main(
-        [
-            "align",
-            "--dry-run",
-            "--kit-preset",
-            "illumina_smallrna",
-            "--dedup-strategy",
-            "mark-duplicates",
-            "--fastq-dir",
-            str(tmp_path),
-        ]
-    )
-    assert exit_code == 2
+def test_mark_duplicates_strategy_is_rejected_by_argparse(capsys, tmp_path) -> None:
+    """The picard mark-duplicates dedup strategy was removed in v0.4.5;
+    argparse should reject it as an invalid choice."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(
+            [
+                "align",
+                "--dry-run",
+                "--kit-preset",
+                "illumina_smallrna",
+                "--dedup-strategy",
+                "mark-duplicates",
+                "--fastq-dir",
+                str(tmp_path),
+            ]
+        )
+    assert exc.value.code == 2
     err = capsys.readouterr().err
-    assert "i-understand" in err
+    assert "invalid choice" in err
+    assert "mark-duplicates" in err
 
 
 # ---------- non-dry-run validation ------------------------------------------

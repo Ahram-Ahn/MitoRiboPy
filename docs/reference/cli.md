@@ -70,9 +70,8 @@ Top-level flags: `--version, -V`, `--help, -h`.
 
 ### Deduplication
 
-- `--dedup-strategy {auto,umi-tools,skip,mark-duplicates}` (default `auto`, per sample). When the resolved strategy is `skip`, the orchestrator wires `aligned/<sample>.mapq.bam` straight into BED conversion — no duplicate `deduped/<sample>.dedup.bam` is written.
+- `--dedup-strategy {auto,umi-tools,skip}` (default `auto`, per sample). When the resolved strategy is `skip`, the orchestrator wires `aligned/<sample>.mapq.bam` straight into BED conversion — no duplicate `deduped/<sample>.dedup.bam` is written. The legacy `mark-duplicates` (picard) option was removed in v0.4.5 because coordinate-only dedup destroys codon-occupancy signal on mt-Ribo-seq libraries.
 - `--umi-dedup-method {unique,percentile,cluster,adjacency,directional}` (default `unique`).
-- `--i-understand-mark-duplicates-destroys-mt-ribo-seq-signal` — required confirmation for `--dedup-strategy mark-duplicates`.
 
 ### Intermediate files + resume
 

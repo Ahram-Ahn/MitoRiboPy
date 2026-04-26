@@ -371,7 +371,7 @@ align:
   quality: 20
   mapq: 10
   seed: 42
-  dedup_strategy: auto            # auto | umi-tools | skip | mark-duplicates
+  dedup_strategy: auto            # auto | umi-tools | skip
 
   # Per-sample overrides (mixed-UMI batches). Use this when each FASTQ
   # has a different UMI length / position / kit. The 'name' field must

@@ -100,10 +100,11 @@ ALIGN_OPTS=(
   --seed 42                        # bowtie2 --seed (deterministic output)
 
   # --- Deduplication -----------------------------------------------------
-  --dedup-strategy auto            # auto | umi-tools | skip | mark-duplicates
+  --dedup-strategy auto            # auto | umi-tools | skip
+                                   # The legacy 'mark-duplicates' option was removed
+                                   # in v0.4.5 because coordinate-only dedup destroys
+                                   # codon-occupancy signal on mt-Ribo-seq.
   --umi-dedup-method unique        # unique | percentile | cluster | adjacency | directional
-  # --i-understand-mark-duplicates-destroys-mt-ribo-seq-signal
-                                   # required to opt into mark-duplicates
 
   # --- Intermediate files / resume --------------------------------------
   # --keep-intermediates           # default off; keep trimmed.fq.gz / nocontam.fq.gz / pre-MAPQ .bam
@@ -155,6 +156,8 @@ RPF_OPTS=(
   --range 20                       # plot offsets from -range to +range
   --min_offset 11                  # shared min absolute offset (legacy fallback)
   --max_offset 20                  # shared max absolute offset (legacy fallback)
+  --rpf_min_count_frac 0.20        # auto-prune read-length bins below 20% of the
+                                   # most-enriched length's count (set 0 to disable).
   --min_5_offset 10                # end-specific 5' min (preferred)
   --max_5_offset 22                # end-specific 5' max
   --min_3_offset 10                # end-specific 3' min

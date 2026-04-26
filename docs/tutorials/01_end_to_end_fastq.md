@@ -14,7 +14,7 @@ Every command below is a shell command (lines starting with `$`). Outputs are sk
 > $ mitoribopy --version
 > ```
 >
-> `cutadapt`, `bowtie2`, `bowtie2-build`, and `umi_tools` (when at least one sample has UMIs) must be on `$PATH`. `samtools`, `fastqc`, and `picard` are optional.
+> `cutadapt`, `bowtie2`, `bowtie2-build`, and `umi_tools` (when at least one sample has UMIs) must be on `$PATH`. `samtools` and `fastqc` are optional.
 
 ---
 
@@ -160,10 +160,9 @@ results/
                                 # NOTE: pre-MAPQ *.bam is deleted unless
                                 # --keep-intermediates.
     deduped/                    # *.dedup.bam ONLY when at least one sample uses
-                                # umi-tools / mark-duplicates. For dedup=skip
-                                # samples the orchestrator wires mapq.bam
-                                # straight into BED conversion -- no duplicate
-                                # dedup.bam is written.
+                                # umi-tools. For dedup=skip samples the orchestrator
+                                # wires mapq.bam straight into BED conversion --
+                                # no duplicate dedup.bam is written.
     bed/                        # *.bed (strand-aware BED6) -- input to rpf
   rpf/
     mitoribopy.log

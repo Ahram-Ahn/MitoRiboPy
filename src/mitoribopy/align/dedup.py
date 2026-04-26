@@ -1,28 +1,26 @@
-"""Deduplication step for the ``mitoribopy align`` pipeline (Phase 3.5).
+"""Deduplication step for the ``mitoribopy align`` pipeline.
 
-Implements the Approach-D strategy decided in Phase 3.5:
+Two strategies are supported. The legacy ``mark-duplicates`` (picard
+MarkDuplicates) option was removed in v0.4.5 because coordinate-only
+deduplication is biologically wrong for ribo-seq: ribosomes translating
+the same codon naturally produce reads at the same transcript
+coordinate, and there is no way to distinguish those genuine biological
+duplicates from PCR artefacts without UMI information. The TACO1-KO
+regression in ``docs/validation/taco1_ko_regression.md`` is the
+empirical evidence that motivated removal — coordinate-only dedup
+flattens the polyproline stall signal to baseline.
 
-* ``umi-tools``       UMI-aware collapse; the only correct choice when
-                      UMIs are present. Uses ``--method=unique`` by
-                      default so reads are collapsed only when both the
-                      coordinate AND the exact UMI match - directional
-                      clustering over-collapses in the low-complexity
-                      mt-mRNA regime.
+* ``umi-tools``  UMI-aware collapse; the only correct choice when UMIs
+                 are present. Uses ``--method=unique`` by default so
+                 reads collapse only on exact coordinate AND UMI
+                 match — directional clustering over-collapses in the
+                 low-complexity mt-mRNA regime.
 
-* ``skip``            no deduplication. The required default for
-                      UMI-less mt-Ribo-seq libraries. Coordinate-only
-                      dedup destroys codon-occupancy signal because
-                      ribosomes translating the same codon naturally
-                      produce reads at the same transcript coordinate.
+* ``skip``       no deduplication. The required default for UMI-less
+                 mt-Ribo-seq libraries.
 
-* ``mark-duplicates`` picard MarkDuplicates. Dangerous on mt-Ribo-seq
-                      data. Gated behind the intentionally long
-                      confirmation flag
-                      ``--i-understand-mark-duplicates-destroys-mt-ribo-seq-signal``
-                      so nobody uses it by accident.
-
-* ``auto``            resolves to ``umi-tools`` if ``umi_length > 0``
-                      else ``skip``. This is the default.
+* ``auto``       resolves to ``umi-tools`` if ``umi_length > 0`` else
+                 ``skip``. Default.
 """
 
 from __future__ import annotations
@@ -38,21 +36,6 @@ from .bam_utils import count_mapped_reads as _count_mapped_reads
 from .tool_check import ToolNotFoundError
 
 
-CONFIRM_MARK_DUPLICATES_FLAG = "--i-understand-mark-duplicates-destroys-mt-ribo-seq-signal"
-
-_MARK_DUPLICATES_DANGER_MESSAGE = (
-    "mark-duplicates uses coordinate-only deduplication. mt-Ribo-seq "
-    "libraries are low-complexity: ribosomes translating the same codon "
-    "produce reads at the same transcript coordinate. Coordinate-only "
-    "dedup cannot distinguish genuine ribosomes from PCR duplicates and "
-    "will flatten codon-occupancy signal (polyproline stalls, TACO1-KO "
-    "phenotype). Only use when you have an independent reason to believe "
-    "PCR duplication dominates your library (carrier nuclear RNA, >22 "
-    "PCR cycles, very low input). Confirm by passing "
-    f"{CONFIRM_MARK_DUPLICATES_FLAG} on the command line."
-)
-
-
 # ---------------------------------------------------------------------------
 # Strategy resolution
 # ---------------------------------------------------------------------------
@@ -61,19 +44,16 @@ _MARK_DUPLICATES_DANGER_MESSAGE = (
 def resolve_dedup_strategy(
     strategy: DedupStrategy,
     umi_length: int,
-    confirm_mark_duplicates: bool = False,
 ) -> DedupStrategy:
     """Resolve ``auto`` and validate explicit strategies against the config.
 
     Parameters
     ----------
     strategy:
-        One of ``auto``, ``umi-tools``, ``skip``, ``mark-duplicates``.
+        One of ``auto``, ``umi-tools``, ``skip``.
     umi_length:
         The ResolvedKit umi_length. Drives the ``auto`` branch and
         validates that ``umi-tools`` has UMIs to work with.
-    confirm_mark_duplicates:
-        True when the user passed the long confirmation flag.
 
     Returns
     -------
@@ -83,8 +63,7 @@ def resolve_dedup_strategy(
     Raises
     ------
     ValueError
-        on incompatible combinations (umi-tools without UMIs; mark-
-        duplicates without confirmation).
+        when ``umi-tools`` is selected without UMIs.
     """
     if strategy == "auto":
         return "umi-tools" if umi_length > 0 else "skip"
@@ -101,11 +80,6 @@ def resolve_dedup_strategy(
 
     if strategy == "skip":
         return "skip"
-
-    if strategy == "mark-duplicates":
-        if not confirm_mark_duplicates:
-            raise ValueError(_MARK_DUPLICATES_DANGER_MESSAGE)
-        return "mark-duplicates"
 
     raise ValueError(  # pragma: no cover - literal guarded
         f"Unknown --dedup-strategy: {strategy!r}"
@@ -171,69 +145,6 @@ def run_umi_tools_dedup(
     output_reads = counter(bam_out)
     return DedupResult(
         strategy="umi-tools",
-        input_reads=input_reads,
-        output_reads=output_reads,
-        bam_path=bam_out,
-    )
-
-
-def run_mark_duplicates(
-    *,
-    bam_in: Path,
-    bam_out: Path,
-    log_path: Path,
-    runner=subprocess.run,
-    counter=_count_mapped_reads,
-    indexer=pysam.index,
-) -> DedupResult:
-    """Run picard MarkDuplicates with REMOVE_DUPLICATES=true.
-
-    Pre-gated by :func:`resolve_dedup_strategy` requiring the
-    confirmation flag. Still emits a prominent warning banner at the
-    start of the picard log so any reader of the log sees the risk.
-    """
-    if shutil.which("picard") is None:
-        raise ToolNotFoundError(
-            "'picard' is required for --dedup-strategy mark-duplicates "
-            "but was not found on PATH. Install with:\n"
-            "  conda install -c bioconda picard"
-        )
-    bam_in = Path(bam_in)
-    bam_out = Path(bam_out)
-    log_path = Path(log_path)
-    bam_out.parent.mkdir(parents=True, exist_ok=True)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with log_path.open("w", encoding="utf-8") as logfile:
-        logfile.write(
-            "# WARNING: MarkDuplicates uses coordinate-only deduplication.\n"
-            "# This destroys codon-occupancy signal on mt-Ribo-seq data.\n"
-            "# User confirmed with "
-            f"{CONFIRM_MARK_DUPLICATES_FLAG}.\n\n"
-        )
-
-    cmd = [
-        "picard",
-        "MarkDuplicates",
-        f"I={bam_in}",
-        f"O={bam_out}",
-        f"M={log_path.with_suffix('.metrics.txt')}",
-        "REMOVE_DUPLICATES=true",
-    ]
-    completed = runner(cmd, check=False, capture_output=True, text=True)
-    if completed.returncode != 0:
-        stderr = (getattr(completed, "stderr", "") or "").strip()
-        raise RuntimeError(
-            "picard MarkDuplicates failed with exit code "
-            f"{completed.returncode}: {stderr or '<no stderr captured>'}"
-        )
-
-    indexer(str(bam_out))
-
-    input_reads = counter(bam_in)
-    output_reads = counter(bam_out)
-    return DedupResult(
-        strategy="mark-duplicates",
         input_reads=input_reads,
         output_reads=output_reads,
         bam_path=bam_out,
@@ -327,7 +238,6 @@ def run_dedup(
     *,
     strategy: DedupStrategy,
     umi_length: int,
-    confirm_mark_duplicates: bool,
     bam_in: Path,
     bam_out: Path,
     log_path: Path | None = None,
@@ -338,9 +248,7 @@ def run_dedup(
     indexer=pysam.index,
 ) -> DedupResult:
     """Resolve the strategy and dispatch to the right implementation."""
-    resolved = resolve_dedup_strategy(
-        strategy, umi_length, confirm_mark_duplicates
-    )
+    resolved = resolve_dedup_strategy(strategy, umi_length)
 
     if resolved == "skip":
         return skip_dedup(
@@ -353,23 +261,13 @@ def run_dedup(
     if log_path is None:
         log_path = Path(bam_out).with_suffix(".dedup.log")
 
-    if resolved == "umi-tools":
-        return run_umi_tools_dedup(
-            bam_in=bam_in,
-            bam_out=bam_out,
-            log_path=log_path,
-            method=umi_tools_method,
-            umi_separator=umi_separator,
-            runner=runner,
-            counter=counter,
-            indexer=indexer,
-        )
-
-    # resolved == "mark-duplicates"
-    return run_mark_duplicates(
+    # resolved == "umi-tools"
+    return run_umi_tools_dedup(
         bam_in=bam_in,
         bam_out=bam_out,
         log_path=log_path,
+        method=umi_tools_method,
+        umi_separator=umi_separator,
         runner=runner,
         counter=counter,
         indexer=indexer,

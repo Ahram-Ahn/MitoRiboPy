@@ -201,6 +201,43 @@ def _order_sample_dirs(sample_dirs: list[str], requested_order: list[str] | None
     return ordered_dirs
 
 
+def _apply_rpf_count_filter(
+    context: PipelineContext, emit_status: StatusWriter
+) -> None:
+    """Drop read-length bins whose total count is below FRAC x the dominant length.
+
+    Pure data-driven prune: keep the read lengths that carry the bulk of
+    the signal, drop the noisy long tail. The user controls FRAC via
+    ``--rpf_min_count_frac`` (default 0.20). Setting FRAC <= 0 disables.
+    Filters on the COMBINED-across-samples count so the surviving
+    read-length set is consistent between samples (per-sample offset
+    selection still varies within that shared set).
+    """
+    frac = float(getattr(context.args, "rpf_min_count_frac", 0.0) or 0.0)
+    if frac <= 0:
+        return  # disabled
+    df = context.filtered_bed_df
+    if df is None or df.empty or "read_length" not in df.columns:
+        return
+    counts = df["read_length"].value_counts()
+    if counts.empty:
+        return
+    max_count = int(counts.max())
+    threshold = max_count * frac
+    kept = sorted(int(rl) for rl, c in counts.items() if c >= threshold)
+    if not kept:
+        return  # belt-and-braces; should never trigger because the max bin clears its own threshold
+    dropped = sorted(set(int(x) for x in context.rpf_range) - set(kept))
+    if not dropped:
+        return  # nothing pruned; current range is already tight
+    emit_status(
+        f"[BED] read-length auto-filter: kept {kept} (>={frac:.0%} of "
+        f"max={max_count:,} reads); dropped {dropped}."
+    )
+    context.rpf_range = kept
+    context.filtered_bed_df = df[df["read_length"].isin(kept)].copy()
+
+
 def filter_bed_inputs(context: PipelineContext, emit_status: StatusWriter) -> bool:
     """Filter BED/BAM inputs and resolve the sample order for downstream steps."""
     filtered_bed_df, sample_dirs = process_bed_files(
@@ -222,11 +259,17 @@ def filter_bed_inputs(context: PipelineContext, emit_status: StatusWriter) -> bo
 
     context.sample_dirs = _order_sample_dirs(sample_dirs, context.args.order_samples, emit_status)
 
+    # Auto-prune read-length bins whose total count is far below the
+    # dominant length. This lets users pass a wide --rpf range (e.g.
+    # 27 36 for human) and rely on the data to decide which lengths
+    # carry real signal. Quiet when nothing is pruned.
+    _apply_rpf_count_filter(context, emit_status)
+
     # Emit the per-sample per-gene RPF count table consumed by
     # 'mitoribopy rnaseq'. This is the provenance spine that ties rpf
     # outputs to the downstream TE / delta-TE step.
     write_rpf_counts_table(
-        filtered_bed_df=filtered_bed_df,
+        filtered_bed_df=context.filtered_bed_df,
         output_path=context.base_output_dir / "rpf_counts.tsv",
     )
 

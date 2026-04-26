@@ -64,7 +64,6 @@ def test_auto_detection_picks_per_sample_kit_independently(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
     )
@@ -90,7 +89,6 @@ def test_auto_falls_back_to_user_kit_when_detection_fails(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
     )
@@ -112,7 +110,6 @@ def test_auto_hard_fails_when_no_detection_and_no_fallback(tmp_path) -> None:
             umi_length=None,
             umi_position=None,
             dedup_strategy="auto",
-            confirm_mark_duplicates=False,
             adapter_detection_mode="auto",
             detector=detector,
         )
@@ -136,7 +133,6 @@ def test_strict_hard_fails_on_disagreement(tmp_path) -> None:
             umi_length=None,
             umi_position=None,
             dedup_strategy="auto",
-            confirm_mark_duplicates=False,
             adapter_detection_mode="strict",
             detector=detector,
         )
@@ -157,7 +153,6 @@ def test_strict_uses_detected_when_user_left_auto(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="strict",
         detector=detector,
     )
@@ -180,7 +175,6 @@ def test_off_mode_requires_explicit_preset(tmp_path) -> None:
             umi_length=None,
             umi_position=None,
             dedup_strategy="auto",
-            confirm_mark_duplicates=False,
             adapter_detection_mode="off",
         )
     assert "--adapter-detection off requires" in str(exc.value)
@@ -200,7 +194,6 @@ def test_off_mode_uses_explicit_preset_without_scanning(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="off",
         detector=explode,
     )
@@ -232,7 +225,6 @@ def test_resolver_aggregates_per_sample_errors(tmp_path) -> None:
             umi_length=None,
             umi_position=None,
             dedup_strategy="auto",
-            confirm_mark_duplicates=False,
             adapter_detection_mode="auto",
             detector=detector,
         )
@@ -265,7 +257,6 @@ def test_required_dedup_tools_unions_per_sample_strategies(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
     )
@@ -283,7 +274,6 @@ def test_write_kit_resolution_tsv_writes_header_and_one_row_per_sample(tmp_path)
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
     )
@@ -313,7 +303,6 @@ def test_auto_infers_pretrimmed_when_no_kit_matches_and_no_fallback(tmp_path) ->
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
     )
@@ -339,7 +328,6 @@ def test_auto_pretrimmed_inference_can_be_disabled(tmp_path) -> None:
             umi_length=None,
             umi_position=None,
             dedup_strategy="auto",
-            confirm_mark_duplicates=False,
             adapter_detection_mode="auto",
             allow_pretrimmed_inference=False,
             detector=detector,
@@ -362,7 +350,6 @@ def test_explicit_pretrimmed_kit_preset_resolves_with_no_adapter(tmp_path) -> No
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
     )
@@ -394,7 +381,6 @@ def test_mixed_batch_pretrimmed_and_raw_samples(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
     )
@@ -425,7 +411,6 @@ def test_legacy_kit_aliases_resolve_to_canonical_presets(tmp_path) -> None:
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="off",  # no scan; trust the alias
     )
     assert resolutions[0].kit.kit == "illumina_smallrna"
@@ -444,7 +429,6 @@ def test_resolution_summary_lines_includes_detected_when_overridden(tmp_path) ->
         umi_length=None,
         umi_position=None,
         dedup_strategy="auto",
-        confirm_mark_duplicates=False,
         adapter_detection_mode="auto",
         detector=detector,
     )

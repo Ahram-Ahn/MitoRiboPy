@@ -120,7 +120,6 @@ def _resolve_one(
     umi_length: int | None,
     umi_position: str | None,
     dedup_strategy: DedupStrategy,
-    confirm_mark_duplicates: bool,
     adapter_detection_mode: str,
     allow_pretrimmed_inference: bool = True,
     detector=adapter_detect.detect_adapter,
@@ -171,7 +170,6 @@ def _resolve_one(
         dedup = resolve_dedup_strategy(
             dedup_strategy,
             umi_length=kit.umi_length,
-            confirm_mark_duplicates=confirm_mark_duplicates,
         )
         return SampleResolution(
             sample=sample,
@@ -209,7 +207,6 @@ def _resolve_one(
         dedup = resolve_dedup_strategy(
             dedup_strategy,
             umi_length=kit.umi_length,
-            confirm_mark_duplicates=confirm_mark_duplicates,
         )
         return SampleResolution(
             sample=sample,
@@ -279,7 +276,6 @@ def _resolve_one(
     dedup = resolve_dedup_strategy(
         dedup_strategy,
         umi_length=kit.umi_length,
-        confirm_mark_duplicates=confirm_mark_duplicates,
     )
 
     return SampleResolution(
@@ -302,7 +298,6 @@ def resolve_sample_resolutions(
     umi_length: int | None,
     umi_position: str | None,
     dedup_strategy: DedupStrategy,
-    confirm_mark_duplicates: bool,
     adapter_detection_mode: str,
     allow_pretrimmed_inference: bool = True,
     detector=adapter_detect.detect_adapter,
@@ -359,7 +354,6 @@ def resolve_sample_resolutions(
                     umi_length=umi_length,
                     umi_position=umi_position,
                     dedup_strategy=dedup_strategy,
-                    confirm_mark_duplicates=confirm_mark_duplicates,
                     adapter_detection_mode=adapter_detection_mode,
                     allow_pretrimmed_inference=allow_pretrimmed_inference,
                     detector=detector,
@@ -528,8 +522,6 @@ def required_dedup_tools(resolutions: list[SampleResolution]) -> set[str]:
     for resolution in resolutions:
         if resolution.dedup_strategy == "umi-tools":
             tools.add("umi_tools")
-        elif resolution.dedup_strategy == "mark-duplicates":
-            tools.add("picard")
     return tools
 
 

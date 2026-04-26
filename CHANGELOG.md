@@ -7,6 +7,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-04-25
+
+### Added
+- **`--rpf_min_count_frac FRAC`** auto-filter for offset selection. The
+  default `0.20` (on by default) keeps only read lengths whose total
+  count across all samples is >= 20% of the most-enriched length's
+  count. Pair with a wide `--rpf` range (e.g. `--rpf 27 36` for human)
+  to let the data decide which lengths carry real signal. Set to `0`
+  to disable. The kept and dropped lengths are reported once via
+  `[BED] read-length auto-filter:`.
+
+### Changed
+- **Compact `[COVERAGE]` log.** The per-transcript line inside
+  `run_coverage_profile_plots` is replaced by one summary line per
+  requested site plus one for read coverage (~4 `[COVERAGE]` lines
+  total instead of one per transcript per site).
+
+### Removed
+- **`--dedup-strategy mark-duplicates` and the confirmation flag.**
+  The picard `MarkDuplicates` option (coordinate-only dedup) is
+  removed. It destroys codon-occupancy signal on low-complexity
+  mt-Ribo-seq libraries, and the v0.4.4 confirmation gate did not
+  protect users who copy-pasted the flag from an internet recipe.
+  `--dedup-strategy` choices are now `{auto, umi-tools, skip}` and
+  the long `--i-understand-mark-duplicates-destroys-mt-ribo-seq-signal`
+  flag no longer exists. The `picard` external-tool dependency is
+  also removed from the install instructions and the startup tool-
+  check. See `docs/validation/taco1_ko_regression.md` for the
+  empirical evidence that motivated the removal.
+
 ## [0.4.4] - 2026-04-25
 
 ### Added

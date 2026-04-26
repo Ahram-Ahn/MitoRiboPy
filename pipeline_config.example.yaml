@@ -83,13 +83,15 @@ align:
   seed: 42                                 # bowtie2 --seed (deterministic output)
 
   # --- Deduplication --------------------------------------------------------
-  dedup_strategy: auto                     # auto | umi-tools | skip | mark-duplicates
+  dedup_strategy: auto                     # auto | umi-tools | skip
                                            # auto -> umi-tools when UMIs present, skip otherwise.
                                            # When the resolved strategy is `skip`, the orchestrator
                                            # wires aligned/<sample>.mapq.bam straight into BED
                                            # conversion -- no duplicate dedup.bam is written.
+                                           # The legacy `mark-duplicates` (picard) option was
+                                           # removed in v0.4.5 because coordinate-only dedup
+                                           # destroys codon-occupancy signal on mt-Ribo-seq.
   umi_dedup_method: unique                 # unique | percentile | cluster | adjacency | directional
-  # i_understand_mark_duplicates_destroys_mt_ribo_seq_signal: false  # required to opt into mark-duplicates
 
   # --- Intermediate files + resume -----------------------------------------
   keep_intermediates: false                # default false -> trimmed.fq.gz, nocontam.fq.gz,
@@ -143,6 +145,11 @@ rpf:
   range: 20                                # plot offsets from -range to +range
   min_offset: 11                           # shared min absolute offset (legacy fallback)
   max_offset: 20                           # shared max absolute offset (legacy fallback)
+  rpf_min_count_frac: 0.20                 # auto-prune read-length bins below 20% of the
+                                           # most-enriched length's count (set 0 to disable).
+                                           # Pair with a wide rpf range (e.g. [27, 36] for
+                                           # human) to let the data decide which lengths
+                                           # actually carry signal.
   min_5_offset: null                       # end-specific 5' min (preferred over shared)
   max_5_offset: null                       # end-specific 5' max
   min_3_offset: null                       # end-specific 3' min

@@ -119,7 +119,6 @@ MitoRiboPy shells out to a small set of standard bioinformatics tools. All of th
 | `cutadapt` | `align` | always (length + quality filter even for pre-trimmed data) |
 | `bowtie2` + `bowtie2-build` | `align` | always |
 | `umi_tools` | `align` | at least one sample's resolved kit has UMIs |
-| `picard` | `align` | only when `--dedup-strategy mark-duplicates` is opted into |
 | `pysam` (Python lib) | `align`, `rpf` | always (installed automatically via `pip`) |
 | `samtools` | optional | recommended for inspecting outputs; not required |
 
@@ -200,7 +199,7 @@ results/
   align/    bed/, kit_resolution.tsv, read_counts.tsv, run_settings.json
             (intermediate trimmed/contam_filtered/aligned files are deleted as
              soon as they are consumed; pass --keep-intermediates to retain
-             them; deduped/ is only created for UMI / mark-duplicates samples)
+             them; deduped/ is only created for UMI samples)
   rpf/      offset_diagnostics/{csv,plots}/, translation_profile/<sample>/...,
             coverage_profile_plots/{read_coverage_*, {p_site,a_site}_density_*},
             codon_correlation/{p_site,a_site}/, igv_tracks/<sample>/, rpf_counts.tsv
@@ -449,9 +448,8 @@ The per-sample resolution table (sample, detected_kit, applied_kit, match_rate, 
 
 | Flag | Default | Description |
 |---|---|---|
-| `--dedup-strategy {auto,umi-tools,skip,mark-duplicates}` | `auto` | Per-sample resolved. `auto` → `umi-tools` for UMI samples, `skip` otherwise. When the resolved strategy is `skip`, the orchestrator does **not** write a duplicate `deduped/<sample>.dedup.bam` — the upstream `aligned/<sample>.mapq.bam` is fed straight into BED conversion. `mark-duplicates` is coordinate-only and destroys codon-occupancy signal on mt-Ribo-seq; gated behind the long confirmation flag. |
+| `--dedup-strategy {auto,umi-tools,skip}` | `auto` | Per-sample resolved. `auto` → `umi-tools` for UMI samples, `skip` otherwise. When the resolved strategy is `skip`, the orchestrator does **not** write a duplicate `deduped/<sample>.dedup.bam` — the upstream `aligned/<sample>.mapq.bam` is fed straight into BED conversion. The legacy `mark-duplicates` (picard) option was removed in v0.4.5 because coordinate-only dedup destroys codon-occupancy signal on mt-Ribo-seq libraries (see [docs/validation/taco1_ko_regression.md](docs/validation/taco1_ko_regression.md) for the empirical evidence). |
 | `--umi-dedup-method {unique,percentile,cluster,adjacency,directional}` | `unique` | umi_tools `--method`. `unique` collapses only on exact coord+UMI match; other methods may over-collapse in low-complexity mt regions. |
-| `--i-understand-mark-duplicates-destroys-mt-ribo-seq-signal` | — | Required confirmation to opt into `--dedup-strategy mark-duplicates`. |
 
 #### Intermediate files
 
@@ -695,10 +693,10 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
     aligned/                           # *.mapq.bam (kept; pre-mapq *.bam is
                                        # deleted unless --keep-intermediates)
     deduped/                           # only created when at least one sample
-                                       # uses umi-tools / mark-duplicates;
-                                       # for dedup=skip the orchestrator wires
-                                       # mapq.bam straight into BED conversion
-                                       # so no duplicate dedup.bam is written
+                                       # uses umi-tools; for dedup=skip the
+                                       # orchestrator wires mapq.bam straight
+                                       # into BED conversion so no duplicate
+                                       # dedup.bam is written
     bed/                               # *.bed -- strand-aware BED6 inputs to rpf
   rpf/
     mitoribopy.log

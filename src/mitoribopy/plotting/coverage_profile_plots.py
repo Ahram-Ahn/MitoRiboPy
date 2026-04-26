@@ -695,8 +695,13 @@ def run_coverage_profile_plots(
     site_labels = {"p": "P-site", "a": "A-site"}
     site_colors = {"p": "forestgreen", "a": "darkorange"}
 
+    # Per-site / read-coverage transcript counters; one summary line per
+    # site is emitted after the loop instead of one verbose line per
+    # transcript per site.
+    n_density: dict[str, int] = {site: 0 for site in sites_to_emit}
+    n_read = 0
+
     for tr in transcripts:
-        density_paths: list[str] = []
         for site in sites_to_emit:
             label = site_labels[site]
             color = site_colors[site]
@@ -754,9 +759,11 @@ def run_coverage_profile_plots(
                 dirs["raw_frame"],
                 f"{label} Density (Raw Counts, CDS Frame Coloring)",
             )
-            for path in (out_rpm, out_raw, out_rpm_codon, out_raw_codon, out_rpm_frame, out_raw_frame):
-                if path is not None:
-                    density_paths.append(path.name)
+            if any(
+                p is not None
+                for p in (out_rpm, out_raw, out_rpm_codon, out_raw_codon, out_rpm_frame, out_raw_frame)
+            ):
+                n_density[site] += 1
 
         out_r_rpm = out_r_raw = out_r_rpm_codon = out_r_raw_codon = None
         if write_read_coverage_rpm:
@@ -792,16 +799,27 @@ def run_coverage_profile_plots(
                 rotation=0,
             )
 
+        if any(p is not None for p in (out_r_rpm, out_r_raw, out_r_rpm_codon, out_r_raw_codon)):
+            n_read += 1
+
+    # Compact summary: one line per site + one for read-coverage,
+    # instead of one long line per transcript per site.
+    for site in sites_to_emit:
         log_info(
             "COVERAGE",
-            f"{tr} -> "
-            + (
-                f"read_cov:({out_r_rpm.name if out_r_rpm else 'n/a'},"
-                f"{out_r_raw.name if out_r_raw else 'n/a'},"
-                f"{out_r_rpm_codon.name if out_r_rpm_codon else 'n/a'},"
-                f"{out_r_raw_codon.name if out_r_raw_codon else 'n/a'})"
-            )
-            + f" | density:({','.join(density_paths) if density_paths else 'n/a'})",
+            f"{site_labels[site]} density: {n_density[site]} transcript(s) "
+            "plotted (rpm + raw + codon-binned + frame-coloured).",
+        )
+    enabled_modes = []
+    if write_read_coverage_rpm:
+        enabled_modes.append("rpm")
+    if write_read_coverage_raw:
+        enabled_modes.append("raw")
+    if enabled_modes:
+        log_info(
+            "COVERAGE",
+            f"read coverage: {n_read} transcript(s) plotted "
+            f"({' + '.join(enabled_modes)} + codon-binned).",
         )
 
     log_info("COVERAGE", "All coverage-profile plots generated.")

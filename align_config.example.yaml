@@ -61,14 +61,16 @@ mapq: 10                               # MAPQ threshold (NUMT suppression)
 seed: 42                               # bowtie2 --seed (deterministic output)
 
 # --- Deduplication -----------------------------------------------------
-dedup_strategy: auto                   # auto | umi-tools | skip | mark-duplicates
+dedup_strategy: auto                   # auto | umi-tools | skip
                                        # auto -> umi-tools when UMIs present, skip otherwise.
                                        # When the resolved strategy is `skip`, the
                                        # pipeline wires aligned/<sample>.mapq.bam
                                        # straight into BED conversion -- no duplicate
-                                       # dedup.bam is written.
+                                       # dedup.bam is written. The legacy
+                                       # `mark-duplicates` (picard) option was removed
+                                       # in v0.4.5 because coordinate-only dedup
+                                       # destroys codon-occupancy signal on mt-Ribo-seq.
 umi_dedup_method: unique               # unique | percentile | cluster | adjacency | directional
-# confirm_mark_duplicates: false       # required to opt into mark-duplicates
 
 # --- Intermediate files / resume --------------------------------------
 keep_intermediates: false              # default false -> trimmed.fq.gz, nocontam.fq.gz,

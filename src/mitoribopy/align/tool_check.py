@@ -3,8 +3,8 @@
 Every ``mitoribopy align`` invocation calls :func:`ensure_tools_available`
 before touching user data. If any required tool is missing, we raise
 :class:`ToolNotFoundError` with an actionable bioconda install command.
-Optional tools (``fastqc``, ``picard``, ``umi_tools`` in no-UMI runs) are
-reported but do not block a run.
+Optional tools (``fastqc``, ``umi_tools`` in no-UMI runs) are reported
+but do not block a run.
 
 Phase 3.1 of the v0.3.0 refactor mandates **fail-loud** behavior here:
 never silently skip, never replace a missing tool with a default no-op,
@@ -45,7 +45,6 @@ _VERSION_CMDS: dict[str, list[str]] = {
     "umi_tools": ["umi_tools", "--version"],
     "bedtools": ["bedtools", "--version"],
     "fastqc": ["fastqc", "--version"],
-    "picard": ["picard", "MarkDuplicates", "--version"],
 }
 
 
@@ -137,8 +136,8 @@ def ensure_tools_available(
         :class:`ToolNotFoundError` with the complete missing-list so the
         user sees every problem at once rather than one per retry.
     optional:
-        Tools that are nice-to-have (``fastqc``, ``picard``). Missing
-        entries are returned as ``None`` in the result dict; no raise.
+        Tools that are nice-to-have (``fastqc``). Missing entries are
+        returned as ``None`` in the result dict; no raise.
 
     Returns
     -------

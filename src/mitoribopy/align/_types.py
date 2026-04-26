@@ -31,7 +31,7 @@ Strandedness = Literal["forward", "reverse", "unstranded"]
                is pre-oriented.
 """
 
-DedupStrategy = Literal["auto", "umi-tools", "skip", "mark-duplicates"]
+DedupStrategy = Literal["auto", "umi-tools", "skip"]
 """Deduplication strategy.
 
 ``auto``            resolves to ``umi-tools`` when ``--umi-length > 0`` else
@@ -39,9 +39,11 @@ DedupStrategy = Literal["auto", "umi-tools", "skip", "mark-duplicates"]
 ``umi-tools``       UMI-aware collapse (only correct choice when UMIs exist).
 ``skip``            no deduplication; required default for UMI-less,
                     low-complexity mt-Ribo-seq libraries.
-``mark-duplicates`` picard MarkDuplicates. Destroys codon-occupancy signal
-                    on mt-Ribo-seq; only enabled when the user also passes
-                    the long confirmation flag.
+
+The legacy ``mark-duplicates`` (picard) option was removed in v0.4.5
+because coordinate-only deduplication flattens codon-occupancy signal
+on mt-Ribo-seq libraries. See docs/validation/taco1_ko_regression.md
+for the empirical evidence.
 """
 
 UmiPosition = Literal["5p", "3p"]

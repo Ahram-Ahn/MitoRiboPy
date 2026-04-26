@@ -280,6 +280,21 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
             "the 5'/3' end-specific bounds are not provided."
         ),
     )
+    offset_group.add_argument(
+        "--rpf_min_count_frac",
+        type=float,
+        default=defaults["rpf_min_count_frac"],
+        metavar="FRAC",
+        help=(
+            "Drop read-length bins from the RPF window whose total count\n"
+            "across all samples is below FRAC x the most-enriched length.\n"
+            "FRAC=0 disables the filter. Default 0.20 keeps only read\n"
+            "lengths with >=20%% of the dominant-length count, so noisy\n"
+            "low-count bins do not pollute offset selection. Pair with a\n"
+            "wide --rpf range (e.g. 27 36 for human) to let the data\n"
+            "decide which lengths actually carry signal."
+        ),
+    )
     min_5_action = offset_group.add_argument(
         "--min_5_offset",
         type=int,
