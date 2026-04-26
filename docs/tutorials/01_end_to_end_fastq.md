@@ -104,10 +104,10 @@ rpf:
 
 > Every key under a section maps to the corresponding subcommand's CLI flag with hyphens turned to underscores (so `kit_preset` → `--kit-preset`, `library_strandedness` → `--library-strandedness`). Booleans emit the bare flag (`true`) or are omitted entirely (`false`); `null` values are dropped.
 
-You can also start from the exhaustive copy-and-edit template at the repo root:
+You can also start from the exhaustive copy-and-edit template under `examples/templates/`:
 
 ```bash
-$ cp pipeline_config.example.yaml pipeline_config.yaml
+$ cp examples/templates/pipeline_config.example.yaml pipeline_config.yaml
 ```
 
 or get the curated minimal template from the CLI:

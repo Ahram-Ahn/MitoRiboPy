@@ -1,4 +1,5 @@
-# MitoRiboPy -- exhaustive pipeline_config example.
+# MitoRiboPy -- exhaustive pipeline_config example (end-to-end `mitoribopy all`).
+# Compatible with: MitoRiboPy 0.4.5+
 #
 # Every flag from `mitoribopy align --help`, `mitoribopy rpf --help`,
 # and `mitoribopy rnaseq --help` is listed here with its default value

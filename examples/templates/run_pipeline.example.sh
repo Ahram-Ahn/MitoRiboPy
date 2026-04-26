@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# MitoRiboPy -- exhaustive shell-script template.
+# MitoRiboPy -- exhaustive shell-script template (end-to-end).
+# Compatible with: MitoRiboPy 0.4.5+
 #
 # Calls each subcommand (align -> rpf -> optional rnaseq) directly with
 # every available flag spelled out, so you can see and edit exactly

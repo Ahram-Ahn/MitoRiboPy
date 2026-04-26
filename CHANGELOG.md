@@ -24,6 +24,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   requested site plus one for read coverage (~4 `[COVERAGE]` lines
   total instead of one per transcript per site).
 
+### Changed (cont'd)
+- **Templates moved to `examples/templates/`.** The shell-script
+  templates (`run_align.example.sh`, `run_rpf.example.sh`,
+  `run_pipeline.example.sh`) and the YAML templates
+  (`align_config.example.yaml`, `rpf_config.example.yaml`,
+  `pipeline_config.example.yaml`) now sit side-by-side under
+  `examples/templates/` instead of being split between the repo root
+  and `examples/run_scripts/`. Each file carries a
+  `Compatible with: MitoRiboPy 0.4.5+` header line. README and the
+  `01_end_to_end_fastq.md` tutorial point at the new path.
+
 ### Removed
 - **`--dedup-strategy mark-duplicates` and the confirmation flag.**
   The picard `MarkDuplicates` option (coordinate-only dedup) is

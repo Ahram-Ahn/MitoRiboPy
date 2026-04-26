@@ -137,9 +137,9 @@ The shortest path from raw FASTQ to translation-profile + coverage outputs is on
 
 ```bash
 # 1. Start from one of two templates next to your data and fill in the paths:
-#    -- The repo root has an EXHAUSTIVE template that lists every available
-#       flag with its default value and a 1-line comment:
-cp pipeline_config.example.yaml pipeline_config.yaml
+#    -- examples/templates/ ships an EXHAUSTIVE template that lists every
+#       available flag with its default value and a 1-line comment:
+cp examples/templates/pipeline_config.example.yaml pipeline_config.yaml
 #    -- OR get the curated MINIMAL template from the CLI:
 mitoribopy all --print-config-template > pipeline_config.yaml
 
@@ -151,6 +151,8 @@ mitoribopy all --config pipeline_config.yaml --output results/ --dry-run
 # 3. Run.
 mitoribopy all --config pipeline_config.yaml --output results/
 ```
+
+The matching shell-script templates are at [examples/templates/run_align.example.sh](examples/templates/run_align.example.sh), [examples/templates/run_rpf.example.sh](examples/templates/run_rpf.example.sh), and [examples/templates/run_pipeline.example.sh](examples/templates/run_pipeline.example.sh) — pick those if you prefer per-stage commands you can split across cluster jobs.
 
 A minimal `pipeline_config.yaml` for a typical human mt-Ribo-seq run looks like this (annotated):
 

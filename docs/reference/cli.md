@@ -172,7 +172,7 @@ Top-level flags: `--version, -V`, `--help, -h`.
 - `--skip-align`, `--skip-rpf`, `--skip-rnaseq`.
 - `--manifest PATH` (default `run_manifest.json`).
 - `--show-stage-help {align,rpf,rnaseq}` — print the full per-stage help and exit.
-- `--print-config-template` — print a curated commented YAML template covering every stage and exit. The exhaustive copy-and-edit starter lives at the repo root as [`pipeline_config.example.yaml`](../../pipeline_config.example.yaml).
+- `--print-config-template` — print a curated commented YAML template covering every stage and exit. The exhaustive copy-and-edit starter lives at [`examples/templates/pipeline_config.example.yaml`](../../examples/templates/pipeline_config.example.yaml).
 
 ### Auto-wiring
 
