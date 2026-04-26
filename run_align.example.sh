@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# MitoRiboPy align -- exhaustive shell-script template (align stage only).
+#
+# Runs only the align stage:
+#
+#   FASTQ -> cutadapt trim (+ UMI extraction into QNAME)
+#         -> bowtie2 contam subtract
+#         -> bowtie2 mt-transcriptome align
+#         -> MAPQ filter
+#         -> umi-tools dedup (or skip)
+#         -> BAM -> BED6
+#
+# Output: <OUTPUT_DIR>/{bed/, kit_resolution.tsv, read_counts.tsv,
+# run_settings.json, .sample_done/, ...}. The BED and read_counts.tsv
+# are the inputs to `mitoribopy rpf` (see run_rpf.example.sh).
+#
+# Quick start:
+#   1. Edit the variables in the "Edit me" block below.
+#   2. chmod +x run_align.example.sh
+#   3. ./run_align.example.sh
+#
+# Default values match `mitoribopy align --help` defaults; delete any
+# line you do not need to override. Lines starting with `#` are
+# commented-out optional flags; uncomment to enable.
+set -euo pipefail
+
+# ============================================================================
+# Edit me
+# ============================================================================
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Inputs (REQUIRED)
+FASTQ_DIR="${PROJECT_ROOT}/input_data/seq"
+CONTAM_INDEX="${PROJECT_ROOT}/input_data/indexes/rrna_contam"
+MT_INDEX="${PROJECT_ROOT}/input_data/indexes/mt_tx"
+
+# Output directory.
+OUTPUT_DIR="${PROJECT_ROOT}/results/align"
+
+# Compute knobs.
+THREADS=8
+LOG_LEVEL=INFO            # DEBUG | INFO | WARNING | ERROR
+
+
+# ============================================================================
+# align  --  FASTQ -> BED6 + read_counts.tsv
+# ============================================================================
+ALIGN_OPTS=(
+  # --- Inputs / outputs --------------------------------------------------
+  --fastq-dir "${FASTQ_DIR}"
+  --contam-index "${CONTAM_INDEX}"
+  --mt-index "${MT_INDEX}"
+  --output "${OUTPUT_DIR}"
+  # Add per-FASTQ paths as needed:
+  # --fastq /path/to/extra_sample.fq.gz
+  # --fastq /path/to/another.fq.gz
+
+  # --- Library prep / kit ------------------------------------------------
+  --kit-preset auto                # auto | illumina_smallrna | illumina_truseq |
+                                   # illumina_truseq_umi | qiaseq_mirna |
+                                   # pretrimmed | custom
+  # --adapter AGATCGGAAGAGCACACGTCTGAACTCCAGTCA   # required when kit_preset=custom
+  # --umi-length 8                 # global UMI override
+  # --umi-position 5p              # 5p | 3p
+  # --sample-overrides "${PROJECT_ROOT}/per_sample_overrides.tsv"
+                                   # for mixed-UMI batches; columns: sample,
+                                   # kit_preset, adapter, umi_length,
+                                   # umi_position, dedup_strategy
+
+  # --- Adapter detection -------------------------------------------------
+  --adapter-detection auto         # auto | off | strict
+  --adapter-detect-reads 5000      # head-of-FASTQ scan size
+  --adapter-detect-min-rate 0.30   # min match rate to call a kit detected
+  --adapter-detect-min-len 12      # adapter prefix length used as the scan needle
+  --adapter-detect-pretrimmed-threshold 0.05
+                                   # all-kits below this -> classify as pretrimmed
+  # --no-pretrimmed-inference      # disable the pretrimmed auto-fallback
+
+  # --- Trim / align ------------------------------------------------------
+  --library-strandedness forward   # forward | reverse | unstranded
+  --min-length 15                  # cutadapt --minimum-length
+  --max-length 45                  # cutadapt --maximum-length
+  --quality 20                     # cutadapt 3' quality trim threshold
+  --mapq 10                        # MAPQ threshold (NUMT suppression)
+  --seed 42                        # bowtie2 --seed (deterministic output)
+
+  # --- Deduplication -----------------------------------------------------
+  --dedup-strategy auto            # auto | umi-tools | skip | mark-duplicates
+  --umi-dedup-method unique        # unique | percentile | cluster | adjacency | directional
+  # --i-understand-mark-duplicates-destroys-mt-ribo-seq-signal
+                                   # required to opt into mark-duplicates
+
+  # --- Intermediate files / resume --------------------------------------
+  # --keep-intermediates           # default off; keep trimmed.fq.gz / nocontam.fq.gz / pre-MAPQ .bam
+  # --resume                       # skip samples whose .sample_done/<sample>.json marker exists
+
+  # --- Shared --------------------------------------------------------------
+  --threads "${THREADS}"
+  --log-level "${LOG_LEVEL}"
+)
+
+mitoribopy align "${ALIGN_OPTS[@]}"
+
+
+# ============================================================================
+# Done
+# ============================================================================
+echo
+echo "MitoRiboPy align finished."
+echo "Inspect outputs under: ${OUTPUT_DIR}/"
+echo
+echo "Key files to look at first:"
+echo "  ${OUTPUT_DIR}/kit_resolution.tsv      # per-sample kit + dedup decisions"
+echo "  ${OUTPUT_DIR}/read_counts.tsv         # per-stage drop-off invariants:"
+echo "                                        #   rrna_aligned + post_rrna_filter == post_trim"
+echo "                                        #   mt_aligned   + unaligned_to_mt == post_rrna_filter"
+echo "  ${OUTPUT_DIR}/bed/<sample>.bed        # strand-aware BED6 -- input to mitoribopy rpf"
+echo "  ${OUTPUT_DIR}/run_settings.json       # full per-sample resolution + tool versions"

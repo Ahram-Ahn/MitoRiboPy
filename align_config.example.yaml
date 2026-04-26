@@ -1,0 +1,82 @@
+# MitoRiboPy align -- exhaustive config example for `mitoribopy align --config`.
+#
+# This is a FLAT YAML (no `align:` wrapper). Pass it to the standalone
+# align subcommand:
+#
+#   mitoribopy align --config align_config.example.yaml \
+#                    --fastq-dir input_data/seq \
+#                    --contam-index input_data/indexes/rrna_contam \
+#                    --mt-index input_data/indexes/mt_tx \
+#                    --output results/align
+#
+# CLI flags ALWAYS win over values read from this file, so anything
+# you pass on the command line takes precedence.
+#
+# Every flag from `mitoribopy align --help` is listed here with its
+# default value and a one-line comment. Delete any line you do not
+# need to override -- the CLI will fall back to the documented default.
+#
+# Note: for the end-to-end orchestrator (`mitoribopy all --config ...`)
+# you want pipeline_config.example.yaml instead, which uses the
+# three-section align: / rpf: / rnaseq: shape.
+
+# --- Inputs / outputs --------------------------------------------------
+# These are usually passed on the command line because they vary per
+# run; uncomment if you want them pinned in the config.
+# fastq_dir: input_data/seq            # directory of FASTQ files
+# fastq:                               # OR a list of explicit paths
+#   - input_data/seq/sampleA.fq.gz
+#   - input_data/seq/sampleB.fq.gz
+# contam_index: input_data/indexes/rrna_contam   # bowtie2 prefix
+# mt_index: input_data/indexes/mt_tx              # bowtie2 prefix
+# output: results/align                           # output directory
+
+# --- Library prep / kit ------------------------------------------------
+kit_preset: auto                       # auto | illumina_smallrna | illumina_truseq |
+                                       # illumina_truseq_umi | qiaseq_mirna |
+                                       # pretrimmed | custom
+# adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA   # required when kit_preset=custom
+# umi_length: 8                        # global UMI override
+# umi_position: 5p                     # 5p | 3p
+# sample_overrides: per_sample_overrides.tsv
+                                       # for mixed-UMI batches; columns: sample,
+                                       # kit_preset, adapter, umi_length,
+                                       # umi_position, dedup_strategy
+
+# --- Adapter detection -------------------------------------------------
+adapter_detection: auto                # auto | off | strict
+adapter_detect_reads: 5000             # head-of-FASTQ scan size
+adapter_detect_min_rate: 0.30          # min match rate to call a kit detected
+adapter_detect_min_len: 12             # adapter prefix length used as the scan needle
+adapter_detect_pretrimmed_threshold: 0.05
+                                       # all-kits below this -> classify as pretrimmed
+allow_pretrimmed_inference: true       # set false to disable the pretrimmed auto-fallback
+
+# --- Trim / align ------------------------------------------------------
+library_strandedness: forward          # forward | reverse | unstranded
+min_length: 15                         # cutadapt --minimum-length
+max_length: 45                         # cutadapt --maximum-length
+quality: 20                            # cutadapt 3' quality trim threshold
+mapq: 10                               # MAPQ threshold (NUMT suppression)
+seed: 42                               # bowtie2 --seed (deterministic output)
+
+# --- Deduplication -----------------------------------------------------
+dedup_strategy: auto                   # auto | umi-tools | skip | mark-duplicates
+                                       # auto -> umi-tools when UMIs present, skip otherwise.
+                                       # When the resolved strategy is `skip`, the
+                                       # pipeline wires aligned/<sample>.mapq.bam
+                                       # straight into BED conversion -- no duplicate
+                                       # dedup.bam is written.
+umi_dedup_method: unique               # unique | percentile | cluster | adjacency | directional
+# confirm_mark_duplicates: false       # required to opt into mark-duplicates
+
+# --- Intermediate files / resume --------------------------------------
+keep_intermediates: false              # default false -> trimmed.fq.gz, nocontam.fq.gz,
+                                       # pre-MAPQ .bam are deleted as soon as the next
+                                       # step consumes them; set true for debugging.
+resume: false                          # set true to skip samples whose
+                                       # .sample_done/<sample>.json marker exists
+
+# --- Shared (logging / threads) ---------------------------------------
+log_level: INFO                        # DEBUG | INFO | WARNING | ERROR
+# threads: 8                           # forwarded to bowtie2 + cutadapt + BLAS env vars

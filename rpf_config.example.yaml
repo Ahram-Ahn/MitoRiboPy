@@ -1,0 +1,108 @@
+# MitoRiboPy rpf -- exhaustive config example for `mitoribopy rpf --config`.
+#
+# This is a FLAT YAML (no `rpf:` wrapper). Pass it to the standalone
+# rpf subcommand:
+#
+#   mitoribopy rpf --config rpf_config.example.yaml \
+#                  --fasta input_data/human-mt-mRNA.fasta \
+#                  --directory results/align/bed \
+#                  --output results/rpf
+#
+# CLI flags ALWAYS win over values read from this file, so anything
+# you pass on the command line takes precedence.
+#
+# Every flag from `mitoribopy rpf --help` is listed here with its
+# default value and a one-line comment. Delete any line you do not
+# need to override -- the CLI will fall back to the documented default.
+#
+# Note: for the end-to-end orchestrator (`mitoribopy all --config ...`)
+# you want pipeline_config.example.yaml instead, which uses the
+# three-section align: / rpf: / rnaseq: shape.
+
+# --- Core inputs / outputs ---------------------------------------------
+# These are usually passed on the command line because they vary per
+# run; uncomment if you want them pinned in the config.
+# fasta: input_data/human-mt-mRNA.fasta       # mt-transcriptome FASTA (REQUIRED)
+# directory: results/align/bed                # BED (or BAM) input directory
+# output: results/rpf                         # output directory
+bam_mapq: 10                           # MAPQ threshold for BAM inputs (BAM->BED6)
+
+# --- Organism / strain -------------------------------------------------
+strain: h.sapiens                      # h.sapiens | s.cerevisiae | custom
+                                       # Synonyms `h` and `y` are accepted.
+                                       # `custom` requires annotation_file plus
+                                       # codon_table_name (built-in NCBI list)
+                                       # or codon_tables_file (your own JSON).
+annotation_file: null                  # CSV; REQUIRED for strain=custom
+codon_tables_file: null                # custom JSON (only when your code is not
+                                       # in the bundled NCBI Genetic Codes list)
+codon_table_name: null                 # NCBI Genetic Code name (e.g.
+                                       # vertebrate_mitochondrial,
+                                       # mold_mitochondrial,
+                                       # invertebrate_mitochondrial). Run
+                                       # `mitoribopy rpf --help` for the full
+                                       # list of 27 bundled tables.
+start_codons: null                     # override strain default (e.g. [ATG, ATA])
+atp8_atp6_baseline: ATP6               # ATP6 | ATP8 -- baseline for the bicistronic pair
+nd4l_nd4_baseline: ND4                 # ND4  | ND4L
+
+# --- RPF length window -------------------------------------------------
+footprint_class: monosome              # short | monosome | disome | custom
+                                       # short:    h.sapiens / s.cerevisiae 16-24 nt
+                                       # monosome: h.sapiens 28-34, s.cerevisiae 37-41
+                                       # disome:   h.sapiens 50-70, s.cerevisiae 60-90
+rpf: [29, 34]                          # explicit [min, max] (overrides footprint_class)
+unfiltered_read_length_range: [15, 50] # range used in the unfiltered-length QC heatmap
+
+# --- Offset enrichment / selection -------------------------------------
+align: start                           # start | stop -- which anchor codon to align to
+range: 20                              # plot offsets from -range to +range
+min_offset: 11                         # shared min absolute offset (legacy fallback)
+max_offset: 20                         # shared max absolute offset (legacy fallback)
+min_5_offset: null                     # end-specific 5' min (preferred)
+max_5_offset: null                     # end-specific 5' max
+min_3_offset: null                     # end-specific 3' min
+max_3_offset: null                     # end-specific 3' max
+offset_mask_nt: 5                      # mask -N..-1 and +1..+N near the anchor codon
+offset_pick_reference: p_site          # p_site | reported_site
+                                       # p_site:        pick in canonical P-site space then convert
+                                       # reported_site: pick directly in offset_site space
+offset_type: "5"                       # 5 | 3 -- which read end the offset is measured from
+offset_site: p                         # p | a -- coordinate space of the SELECTED OFFSETS table
+analysis_sites: both                   # p | a | both -- which downstream sites to generate
+codon_overlap_mode: full               # full | any -- full: read must span all 3 nt of
+                                       # the anchor codon; any: any 1+ nt overlap counts
+psite_offset: null                     # fixed offset for every read length (bypass enrichment)
+offset_mode: per_sample                # per_sample | combined
+
+# --- Outputs / plotting ------------------------------------------------
+downstream_dir: footprint_density      # per-sample subdir for frame and codon analyses
+plot_dir: plots_and_csv                # subdir for offset CSVs and plots
+plot_format: png                       # png | pdf | svg
+x_breaks: null                         # custom x-axis tick marks for offset line plots
+line_plot_style: combined              # combined | separate -- 5'/3' panels
+cap_percentile: 0.999                  # upper percentile cap for coverage-style plots
+codon_density_window: false            # sum coverage at codon centre +/- 1 nt for codon
+                                       # density tables / plots (smooths short-window noise)
+order_samples: null                    # explicit sample order for plots
+
+# --- Read-count normalization -----------------------------------------
+read_counts_file: read_counts_summary.txt   # often results/align/read_counts.tsv
+read_counts_sample_col: null           # column override (null -> auto-detect)
+read_counts_reads_col: null
+read_counts_reference_col: null        # used when rpm_norm_mode=mt_mrna
+rpm_norm_mode: total                   # total | mt_mrna
+mt_mrna_substring_patterns:            # used when rpm_norm_mode=mt_mrna
+  - mt_genome
+  - mt-mrna
+  - mt_mrna
+
+# --- Optional modules -------------------------------------------------
+structure_density: false               # export log2 + scaled density values
+structure_density_norm_perc: 0.99      # upper percentile used to cap structure density
+
+cor_plot: false                        # publication-quality codon-correlation scatter
+base_sample: null                      # reference sample (REQUIRED when cor_plot=true)
+cor_mask_method: percentile            # percentile | fixed | none
+cor_mask_percentile: 0.99              # used when cor_mask_method=percentile
+cor_mask_threshold: null               # used when cor_mask_method=fixed
