@@ -30,6 +30,7 @@ from ..plotting import (
     run_coverage_profile_plots,
     run_structure_density_export,
 )
+from ..plotting.igv_export import run_igv_export
 from .context import PipelineContext
 
 StatusWriter = Callable[[str], None]
@@ -61,6 +62,12 @@ def build_pipeline_context(args: argparse.Namespace) -> PipelineContext:
 
     plot_output_dir = base_output_dir / args.plot_dir
     plot_output_dir.mkdir(parents=True, exist_ok=True)
+    # Separate CSV and plot outputs under <plot_output_dir>/{csv,plots}/
+    # so the user does not have to wade through interleaved file types.
+    csv_dir = plot_output_dir / "csv"
+    plot_subdir = plot_output_dir / "plots"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    plot_subdir.mkdir(parents=True, exist_ok=True)
 
     # Only h and y ship a built-in annotation. vm / ym / custom require
     # the user to pass --annotation_file (the parser enforces this).
@@ -85,6 +92,8 @@ def build_pipeline_context(args: argparse.Namespace) -> PipelineContext:
         args=args,
         base_output_dir=base_output_dir,
         plot_output_dir=plot_output_dir,
+        csv_dir=csv_dir,
+        plot_subdir=plot_subdir,
         annotation_df=annotation_df,
         resolved_codon_table=resolved_codon_table,
         resolved_start_codons=resolved_start_codons,
@@ -140,7 +149,7 @@ def run_unfiltered_read_length_qc(
     """Generate unfiltered read-length summary tables and heatmaps."""
     min_len, max_len = context.unfiltered_read_length_range
     unfiltered_summary_csv = (
-        context.plot_output_dir
+        context.csv_dir
         / f"unfiltered_read_length_summary_{min_len}_{max_len}.csv"
     )
     compute_unfiltered_read_length_summary(
@@ -150,7 +159,7 @@ def run_unfiltered_read_length_qc(
         read_length_range=context.unfiltered_read_length_range,
     )
 
-    heatmap_base = context.plot_output_dir / f"unfiltered_heatmap_{min_len}_{max_len}"
+    heatmap_base = context.plot_subdir / f"unfiltered_heatmap_{min_len}_{max_len}"
     plot_unfiltered_read_length_heatmap(
         summary_csv_path=str(unfiltered_summary_csv),
         output_png_base=str(heatmap_base),
@@ -201,6 +210,8 @@ def filter_bed_inputs(context: PipelineContext, emit_status: StatusWriter) -> bo
         annotation_df=context.annotation_df,
         rpf_range=context.rpf_range,
         bam_mapq=int(getattr(context.args, "bam_mapq", 0) or 0),
+        plot_dir=str(context.plot_subdir),
+        csv_dir=str(context.csv_dir),
     )
     context.filtered_bed_df = filtered_bed_df
 
@@ -318,7 +329,7 @@ def compute_offset_enrichment_step(context: PipelineContext, emit_status: Status
             f"{context.args.range} to {effective_offset_limit} nt to cover the selectable offsets."
         )
 
-    offset_csv_path = context.plot_output_dir / f"offset_{context.args.align}.csv"
+    offset_csv_path = context.csv_dir / f"offset_{context.args.align}.csv"
     summary_df, offsets_df = create_csv_for_offset_enrichment(
         bed_df=context.filtered_bed_df,
         annotation_df=context.annotation_df,
@@ -350,7 +361,7 @@ def compute_offset_enrichment_step(context: PipelineContext, emit_status: Status
     # Persist per-sample enrichment tables so the user can compare them
     # against the combined diagnostic.
     if context.per_sample_offset_summaries:
-        per_sample_dir = context.plot_output_dir / "per_sample"
+        per_sample_dir = context.csv_dir / "per_sample_offset"
         per_sample_dir.mkdir(parents=True, exist_ok=True)
         for sample_name, per_summary in context.per_sample_offset_summaries.items():
             sample_subdir = per_sample_dir / sample_name
@@ -469,7 +480,7 @@ def select_offsets_and_plot(context: PipelineContext, emit_status: StatusWriter)
     ``context.selected_offsets_by_sample``. Downstream modules honor
     ``--offset_mode`` when choosing which set of offsets to apply.
     """
-    combined_offset_file = context.plot_output_dir / f"p_site_offsets_{context.args.align}.csv"
+    combined_offset_file = context.csv_dir / f"p_site_offsets_{context.args.align}.csv"
     context.selected_offsets_df = determine_p_site_offsets(
         offsets_df=context.offset_details_df,
         align_to=context.args.align,
@@ -492,7 +503,7 @@ def select_offsets_and_plot(context: PipelineContext, emit_status: StatusWriter)
     manual_offset = getattr(context.args, "psite_offset", None)
     if offset_mode == "per_sample" and manual_offset is None and context.offset_details_df is not None:
         per_sample_selections: dict[str, pd.DataFrame] = {}
-        sample_dir = context.plot_output_dir / "per_sample"
+        sample_dir = context.csv_dir / "per_sample_offset"
         sample_dir.mkdir(parents=True, exist_ok=True)
         if "sample_name" in context.offset_details_df.columns:
             for sample_name, sub in context.offset_details_df.groupby(
@@ -529,7 +540,7 @@ def select_offsets_and_plot(context: PipelineContext, emit_status: StatusWriter)
     plot_offset_enrichment(
         summary_df=context.offset_summary_df,
         align_to=context.args.align,
-        plot_dir=str(context.plot_output_dir),
+        plot_dir=str(context.plot_subdir),
         plot_format=context.args.plot_format,
         x_breaks=context.args.x_breaks,
         line_plot_style=context.args.line_plot_style,
@@ -545,9 +556,12 @@ def select_offsets_and_plot(context: PipelineContext, emit_status: StatusWriter)
     )
 
     # Per-sample offset drift plot — makes cross-sample offset variance
-    # visible before the user reads any downstream output.
+    # visible before the user reads any downstream output. The PNG/SVG
+    # goes under plots/ but ``_plot_offset_drift`` also writes a sister
+    # CSV next to it; we redirect that to csv_dir afterwards so the two
+    # file types stay separated.
     if context.selected_offsets_by_sample:
-        drift_plot = context.plot_output_dir / f"offset_drift_{context.args.align}.{context.args.plot_format}"
+        drift_plot = context.plot_subdir / f"offset_drift_{context.args.align}.{context.args.plot_format}"
         _plot_offset_drift(
             selected_offsets_by_sample=context.selected_offsets_by_sample,
             combined=context.selected_offsets_df,
@@ -555,6 +569,10 @@ def select_offsets_and_plot(context: PipelineContext, emit_status: StatusWriter)
             output_path=drift_plot,
             plot_format=context.args.plot_format,
         )
+        sister_csv = drift_plot.with_suffix(".csv")
+        if sister_csv.exists():
+            target_csv = context.csv_dir / sister_csv.name
+            sister_csv.replace(target_csv)
 
     if context.selected_offsets_df is None and not context.selected_offsets_by_sample:
         _emit_step_ok(
@@ -576,14 +594,50 @@ def select_offsets_and_plot(context: PipelineContext, emit_status: StatusWriter)
     )
 
 
+def _write_per_sample_offset_audit(context: PipelineContext) -> None:
+    """Snapshot the offset row each sample will use to disk.
+
+    Pure diagnostic so a reviewer can confirm from the filesystem that
+    per-sample offset selection was honoured downstream. No effect on
+    behaviour. The CSVs land at
+    ``<plot_dir>/csv/per_sample_offset/<sample>/offset_applied.csv``.
+    """
+    if context.selected_offsets_df is None and not context.selected_offsets_by_sample:
+        return
+    audit_root = context.csv_dir / "per_sample_offset"
+    audit_root.mkdir(parents=True, exist_ok=True)
+    for sample_dir in context.sample_dirs:
+        sample_name = Path(sample_dir).name
+        applied = (
+            context.selected_offsets_by_sample.get(sample_name)
+            if context.selected_offsets_by_sample
+            else None
+        )
+        if applied is None:
+            applied = context.selected_offsets_df
+        if applied is None:
+            continue
+        target = audit_root / sample_name / "offset_applied.csv"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        applied.to_csv(target, index=False)
+
+
 def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) -> None:
     """Run downstream analyses that consume the selected offsets."""
     ran_modules: list[str] = []
     skipped_modules: list[str] = []
 
+    requested_sites: list[str] = []
+    translation_profile_root = context.base_output_dir / "translation_profile"
+    coverage_root = context.base_output_dir / "coverage_profile_plots"
+
     if context.selected_offsets_df is None:
         skipped_modules.extend(
-            ["translation-profile analysis", "coverage-profile plots", "structure-density export"]
+            [
+                "translation-profile analysis",
+                "coverage-profile plots",
+                "structure-density export",
+            ]
         )
     else:
         analysis_sites = getattr(context.args, "analysis_sites", "both")
@@ -592,69 +646,65 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
         else:
             requested_sites = [analysis_sites]
 
-        # Unified per-site layout (v0.4.x):
-        #   <output>/translation_profile/<sample>/{p,a}/{footprint_density,...}/
-        #   <output>/coverage_profile_plots/{p,a}/<transcript-keyed plot dirs>/
-        # The site subdir is always present, even in single-site runs,
-        # so downstream tooling never has to branch on
-        # `--analysis_sites`. The legacy `translation_profile_p/` /
-        # `translation_profile_a/` and `coverage_profile_plots_p/` /
-        # `coverage_profile_plots_a/` layout is gone — those names were
-        # redundant once site is encoded in the directory tree.
-        translation_profile_root = context.base_output_dir / "translation_profile"
-        coverage_root = context.base_output_dir / "coverage_profile_plots"
-        for index, site in enumerate(requested_sites):
-            site_label = "P-site" if site == "p" else "A-site"
-            profile_out = translation_profile_root / site
-            coverage_out = coverage_root / site
-            profile_out.mkdir(parents=True, exist_ok=True)
-            coverage_out.mkdir(parents=True, exist_ok=True)
+        # Flat layout (v0.4.x):
+        #   <output>/translation_profile/<sample>/{codon_usage,footprint_density,translating_frame}/
+        #   <output>/coverage_profile_plots/{p_site,a_site}_density_*/, read_coverage_*/
+        # Filenames carry the site prefix (``p_site_*`` / ``a_site_*``)
+        # so a single per-sample folder can host both sites without
+        # ambiguity.
+        translation_profile_root.mkdir(parents=True, exist_ok=True)
+        coverage_root.mkdir(parents=True, exist_ok=True)
 
-            run_translation_profile_analysis(
-                sample_dirs=context.sample_dirs,
-                selected_offsets_df=context.selected_offsets_df,
-                offset_type=context.args.offset_type,
-                fasta_file=context.args.fasta,
-                output_dir=str(profile_out),
-                args=context.args,
-                annotation_df=context.annotation_df,
-                filtered_bed_df=context.filtered_bed_df,
-                resolved_codon_table=context.resolved_codon_table,
-                resolved_start_codons=context.resolved_start_codons,
-                selected_offsets_by_sample=context.selected_offsets_by_sample or None,
-                site_override=site,
-            )
-            # Read-coverage plots are site-independent; render them once
-            # (under coverage_root) on the first iteration only. Site
-            # density plots go under coverage_root/<site>.
-            run_coverage_profile_plots(
-                sample_dirs=context.sample_dirs,
-                selected_offsets_df=context.selected_offsets_df,
-                offset_type=context.args.offset_type,
-                fasta_file=context.args.fasta,
-                output_dir=str(coverage_out),
-                read_coverage_dir=str(coverage_root),
-                write_read_coverage=(index == 0),
-                args=context.args,
-                annotation_df=context.annotation_df,
-                filtered_bed_df=context.filtered_bed_df,
-                total_mrna_map=context.total_counts_map,
-                selected_offsets_by_sample=context.selected_offsets_by_sample or None,
-                site_override=site,
-            )
-            ran_modules.append(f"translation-profile analysis ({site_label})")
-            ran_modules.append(f"coverage-profile plots ({site_label})")
+        # Audit the offset row applied to each sample for reviewers.
+        _write_per_sample_offset_audit(context)
+
+        run_translation_profile_analysis(
+            sample_dirs=context.sample_dirs,
+            selected_offsets_df=context.selected_offsets_df,
+            offset_type=context.args.offset_type,
+            fasta_file=context.args.fasta,
+            output_dir=str(translation_profile_root),
+            args=context.args,
+            annotation_df=context.annotation_df,
+            filtered_bed_df=context.filtered_bed_df,
+            resolved_codon_table=context.resolved_codon_table,
+            resolved_start_codons=context.resolved_start_codons,
+            selected_offsets_by_sample=context.selected_offsets_by_sample or None,
+            requested_sites=requested_sites,
+        )
+        run_coverage_profile_plots(
+            sample_dirs=context.sample_dirs,
+            selected_offsets_df=context.selected_offsets_df,
+            offset_type=context.args.offset_type,
+            fasta_file=context.args.fasta,
+            output_dir=str(coverage_root),
+            read_coverage_dir=str(coverage_root),
+            write_read_coverage_raw=getattr(context.args, "read_coverage_raw", True),
+            write_read_coverage_rpm=getattr(context.args, "read_coverage_rpm", True),
+            args=context.args,
+            annotation_df=context.annotation_df,
+            filtered_bed_df=context.filtered_bed_df,
+            total_mrna_map=context.total_counts_map,
+            selected_offsets_by_sample=context.selected_offsets_by_sample or None,
+            requested_sites=requested_sites,
+        )
+        ran_modules.append(
+            "translation-profile analysis ("
+            + ", ".join("P-site" if s == "p" else "A-site" for s in requested_sites)
+            + ")"
+        )
+        ran_modules.append(
+            "coverage-profile plots ("
+            + ", ".join("P-site" if s == "p" else "A-site" for s in requested_sites)
+            + ")"
+        )
 
         if context.args.structure_density:
             structure_density_dir = context.base_output_dir / "structure_density"
-            # Pick the structure-density site to match the user's
-            # analysis_sites preference. When both sites were generated,
-            # default to P-site (matches v0.3.x behaviour).
             structure_site = "p" if "p" in requested_sites else "a"
             site_column = "P_site" if structure_site == "p" else "A_site"
-            tp_source = translation_profile_root / structure_site
             run_structure_density_export(
-                translation_profile_dir=str(tp_source),
+                translation_profile_dir=str(translation_profile_root),
                 structure_density_norm_perc=context.args.structure_density_norm_perc,
                 output_dir=str(structure_density_dir),
                 site_column=site_column,
@@ -663,25 +713,52 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
         else:
             skipped_modules.append("structure-density export")
 
-    if context.args.cor_plot and context.args.base_sample:
-        if context.selected_offsets_df is None:
+        if getattr(context.args, "igv_export", False):
+            igv_dir = context.base_output_dir / "igv_tracks"
+            run_igv_export(
+                translation_profile_dir=str(translation_profile_root),
+                output_dir=str(igv_dir),
+                sites=requested_sites,
+            )
+            ran_modules.append("IGV BedGraph export")
+        else:
+            skipped_modules.append("IGV BedGraph export")
+
+    # Codon correlation: per-site, with explicit logging of every skip
+    # path. Three of four skip branches were silent in v0.3.x — that is
+    # the bug behind 'cor_plot: true did nothing'. Each branch now
+    # emit_status's its reason so the user can diagnose from the log.
+    if not context.args.cor_plot:
+        emit_status("[PIPELINE] cor_plot is false; skipping codon correlation.")
+        skipped_modules.append("codon correlation")
+    elif not context.args.base_sample:
+        emit_status(
+            "[PIPELINE] cor_plot is true but no --base_sample was set; "
+            "skipping codon correlation."
+        )
+        skipped_modules.append("codon correlation")
+    elif context.selected_offsets_df is None:
+        emit_status(
+            "[PIPELINE] cor_plot requested but no offsets were selected; "
+            "skipping codon correlation."
+        )
+        skipped_modules.append("codon correlation")
+    else:
+        sample_names = [Path(sample_dir).name for sample_dir in context.sample_dirs]
+        if context.args.base_sample not in sample_names:
+            emit_status(
+                f"[PIPELINE] base_sample '{context.args.base_sample}' is not in "
+                f"the sample list {sample_names}. Skipping codon correlation."
+            )
             skipped_modules.append("codon correlation")
         else:
-            sample_names = [Path(sample_dir).name for sample_dir in context.sample_dirs]
-            if context.args.base_sample not in sample_names:
-                emit_status(
-                    f"[PIPELINE] base_sample '{context.args.base_sample}' not present. Skipping codon correlation."
-                )
-                skipped_modules.append("codon correlation")
-            else:
-                # Codon correlation reads from a translation_profile dir.
-                # When both sites were generated, default to the P-site
-                # subdir (matches v0.3.x).
-                cor_site = "p" if "p" in requested_sites else "a"
-                cor_source = translation_profile_root / cor_site
-                cor_out_dir = context.base_output_dir / "codon_correlation"
+            cor_root = context.base_output_dir / "codon_correlation"
+            ran_sites: list[str] = []
+            for site in requested_sites:
+                site_dir = "p_site" if site == "p" else "a_site"
+                cor_out_dir = cor_root / site_dir
                 run_codon_correlation(
-                    translation_profile_dir=str(cor_source),
+                    translation_profile_dir=str(translation_profile_root),
                     samples=sample_names,
                     base_sample=context.args.base_sample,
                     column="CoverageDivFreq",
@@ -693,10 +770,19 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
                         if context.args.cor_mask_method == "fixed"
                         else None
                     ),
+                    site=site,
                 )
-                ran_modules.append("codon correlation")
-    else:
-        skipped_modules.append("codon correlation")
+                ran_sites.append("P-site" if site == "p" else "A-site")
+            if ran_sites:
+                ran_modules.append(
+                    "codon correlation (" + ", ".join(ran_sites) + ")"
+                )
+            else:
+                emit_status(
+                    "[PIPELINE] cor_plot requested but no analysis sites were "
+                    "generated upstream; skipping codon correlation."
+                )
+                skipped_modules.append("codon correlation")
 
     if context.args.use_rna_seq:
         rna_out_dir = context.base_output_dir / context.args.rna_out_dir

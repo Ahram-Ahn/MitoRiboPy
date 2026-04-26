@@ -322,8 +322,11 @@ def test_translation_profile_analysis_writes_transcript_level_asite_stop_codon_u
         args=args,
         annotation_df=annotation_df,
         filtered_bed_df=filtered_bed_df,
+        requested_sites=["p", "a"],
     )
 
+    # v0.4.x flat layout: filenames consistently prefixed with the
+    # site, regardless of which sites were requested.
     a_site_tx_csv = output_dir / "S1" / "codon_usage" / "a_site_codon_usage_TX1.csv"
     a_site_total_csv = output_dir / "S1" / "codon_usage" / "a_site_codon_usage_total.csv"
 
@@ -356,32 +359,33 @@ def test_end_to_end_cli_smoke_generates_codon_usage_outputs(tmp_path: Path) -> N
     for step_number in range(1, 8):
         assert f"[PIPELINE] Step {step_number}/7" in result.stdout
 
-    offsets_csv = output_dir / "plots_and_csv" / "p_site_offsets_stop.csv"
-    # Default analysis_sites=both → translation_profile/<sample>/{p,a}/
-    # and coverage_profile_plots/{p,a}/site_density_*/. Read coverage
-    # plots are site-independent and live at coverage_profile_plots/
-    # (not nested under p/ or a/) so the orchestrator does not write
-    # them twice.
+    # v0.4.x flat layout: offset CSVs land under
+    # offset_diagnostics/csv/, plots under offset_diagnostics/plots/,
+    # and translation_profile/coverage_profile_plots no longer use
+    # p/ or a/ subfolders.
+    offsets_csv = output_dir / "offset_diagnostics" / "csv" / "p_site_offsets_stop.csv"
     footprint_csv = (
-        output_dir / "translation_profile" / "p" / "S1" / "footprint_density" / "ND1_footprint_density.csv"
+        output_dir / "translation_profile" / "S1" / "footprint_density" / "ND1_footprint_density.csv"
     )
     codon_usage_csv = (
-        output_dir / "translation_profile" / "p" / "S1" / "codon_usage" / "codon_usage_total.csv"
+        output_dir / "translation_profile" / "S1" / "codon_usage" / "p_site_codon_usage_total.csv"
     )
     coverage_root = output_dir / "coverage_profile_plots"
-    filtered_bed_dir = output_dir / "plots_and_csv" / "filtered_bed"
+    filtered_bed_dir = output_dir / "offset_diagnostics" / "filtered_bed"
     log_file = output_dir / "mitoribopy.log"
 
     assert offsets_csv.exists()
     assert footprint_csv.exists()
     assert codon_usage_csv.exists()
-    # Site-independent read coverage at the top of coverage_profile_plots/.
+    # Read coverage outputs (default ON for both raw and rpm).
     assert (coverage_root / "read_coverage_rpm").exists()
-    # Site-specific density plots under p/ and a/.
-    assert (coverage_root / "p" / "site_density_rpm").exists()
-    assert (coverage_root / "a" / "site_density_rpm").exists()
-    # A-site translation_profile outputs are also written.
-    assert (output_dir / "translation_profile" / "a" / "S1" / "codon_usage" / "codon_usage_total.csv").exists()
+    # Site-prefixed density plots, no p/ or a/ subdirs.
+    assert (coverage_root / "p_site_density_rpm").exists()
+    assert (coverage_root / "a_site_density_rpm").exists()
+    # A-site translation_profile output sits in the same flat sample dir.
+    assert (
+        output_dir / "translation_profile" / "S1" / "codon_usage" / "a_site_codon_usage_total.csv"
+    ).exists()
     assert not filtered_bed_dir.exists()
     assert list(coverage_root.rglob("*.svg")), "Expected at least one coverage-profile SVG output"
     # E_site column dropped from the CSV (v0.4.x cleanup); A_site comes

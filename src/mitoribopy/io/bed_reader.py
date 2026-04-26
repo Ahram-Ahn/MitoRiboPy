@@ -17,6 +17,8 @@ def process_bed_files(
     rpf_range: range | list[int],
     *,
     bam_mapq: int = 0,
+    plot_dir: str | None = None,
+    csv_dir: str | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Filter BED / BAM inputs by read length and return in-memory per-sample data.
 
@@ -38,6 +40,11 @@ def process_bed_files(
 
     from ..plotting.visualization import plot_read_length_distribution
     from .bam_reader import prepare_bam_inputs
+
+    plot_target = plot_dir if plot_dir is not None else output_dir
+    csv_target = csv_dir if csv_dir is not None else output_dir
+    Path(plot_target).mkdir(parents=True, exist_ok=True)
+    Path(csv_target).mkdir(parents=True, exist_ok=True)
 
     converted_bed_paths = prepare_bam_inputs(
         input_dir=Path(input_dir),
@@ -128,7 +135,7 @@ def process_bed_files(
         # plot can show the RPF window against the overall shape, not just
         # within the window itself.
         unfiltered_counts = bed_df["read_length"].value_counts().sort_index()
-        plot_path = os.path.join(output_dir, f"{sample_name}_read_length_distribution.svg")
+        plot_path = os.path.join(plot_target, f"{sample_name}_read_length_distribution.svg")
         plot_read_length_distribution(
             unfiltered_counts, sample_name, plot_path, rpf_range=rpf_range
         )
@@ -145,7 +152,7 @@ def process_bed_files(
 
     if all_filtered_bed:
         concatenated_bed = pd.concat(all_filtered_bed, ignore_index=True)
-        summary_csv_path = os.path.join(output_dir, "read_length_summary.csv")
+        summary_csv_path = os.path.join(csv_target, "read_length_summary.csv")
 
         summary_rows: list[dict[str, int | str]] = []
         for entry in read_length_summary:

@@ -169,39 +169,49 @@ results/
     mitoribopy.log
     rpf_counts.tsv              # per-sample per-gene RPF counts -> feeds rnaseq
     run_settings.json           # includes reference_checksum (SHA256 of --fasta)
-    plots_and_csv/
-      offset_stop.csv           # COMBINED enrichment summary (diagnostic)
-      p_site_offsets_stop.csv   # COMBINED selected offsets (diagnostic)
-      offset_drift_stop.svg     # per-sample drift comparison; READ THIS FIRST
-      offset_*.svg              # heatmaps + line plots
-      per_sample/
-        ctrl_1/                 # per-sample enrichment + selected offsets
-        ctrl_2/
-        kd_1/
-        kd_2/
-    translation_profile/        # one site subdir per requested site
-      p/<sample>/               # P-site outputs
-        footprint_density/      # *_footprint_density.csv (cols: Position,
+    offset_diagnostics/         # renamed from plots_and_csv/ in v0.4.4
+      csv/
+        offset_stop.csv         # COMBINED enrichment summary
+        p_site_offsets_stop.csv # COMBINED selected offsets
+        per_sample_offset/      # renamed from per_sample/
+          ctrl_1/
+            offset_stop.csv
+            p_site_offsets_stop.csv
+            offset_applied.csv  # exact offsets row applied to ctrl_1 downstream
+          ctrl_2/ ...
+      plots/
+        offset_drift_stop.svg   # per-sample drift comparison; READ THIS FIRST
+        offset_*.svg            # heatmaps + line plots
+    translation_profile/        # FLAT (v0.4.4): site is filename prefix
+      <sample>/
+        footprint_density/      # <gene>_footprint_density.csv (cols: Position,
                                 #   Nucleotide, A_site, P_site)
-        translating_frame/      # frame_usage_total.csv,
-                                # frame_usage_by_transcript.csv
-        codon_usage/            # codon_usage_<gene>.csv,
-                                # codon_usage_total.csv,
-                                # a_site_codon_usage_<gene>.csv, ...
-      a/<sample>/               # A-site outputs (same shape)
-    coverage_profile_plots/
-      read_coverage_rpm/        # SITE-INDEPENDENT (written ONCE)
-      read_coverage_raw/
+                                # + <gene>_p_site_depth.png and/or
+                                #   <gene>_a_site_depth.png
+        translating_frame/      # p_site_frame_usage_total.csv,
+                                # a_site_frame_usage_total.csv,
+                                # *_by_transcript.csv + matching plots
+        codon_usage/            # p_site_codon_usage_<gene>.csv,
+                                # p_site_codon_usage_total.csv,
+                                # a_site_codon_usage_<gene>.csv,
+                                # a_site_codon_usage_total.csv + plots
+    coverage_profile_plots/     # FLAT (v0.4.4): site is filename prefix
+      read_coverage_rpm/        # gated by --read_coverage_rpm
+      read_coverage_raw/        # gated by --read_coverage_raw
       read_coverage_rpm_codon/
       read_coverage_raw_codon/
-      p/                        # P-site density (analysis_sites in {p, both})
-        site_density_rpm/
-        site_density_raw/
-        site_density_rpm_codon/
-        site_density_raw_codon/
-        site_density_rpm_frame/   # frame-coloured CDS-only nt plots; frame-0
-        site_density_raw_frame/   # dominance is the canonical mt-Ribo-seq QC
-      a/                        # A-site density (same shape)
+      p_site_density_rpm/
+      p_site_density_raw/
+      p_site_density_rpm_codon/
+      p_site_density_raw_codon/
+      p_site_density_rpm_frame/ # frame-coloured CDS-only nt plots; frame-0
+      p_site_density_raw_frame/ # dominance is the canonical mt-Ribo-seq QC
+      a_site_density_*/         # A-site mirror folders (analysis_sites in {a,both})
+    codon_correlation/          # if --cor_plot
+      p_site/<base>_vs_<sample>_*.{csv,svg,png}
+      a_site/<base>_vs_<sample>_*.{csv,svg,png}
+    igv_tracks/                 # if --igv_export
+      <sample>/<sample>_{p_site,a_site}.bedgraph
   run_manifest.json             # composed provenance
 ```
 
@@ -231,21 +241,27 @@ The shortest path through the outputs:
    If they don't, the alignment step has a bug or the inputs were mis-formatted.
 
 3. **Are the per-sample offsets consistent?**
-   Open `results/rpf/plots_and_csv/offset_drift_stop.svg`. Each sample has its own per-read-length 5' and 3' offset bar; the combined diagnostic is overlaid as a dashed line. Outliers are visible by eye in seconds. If a single sample drifts by more than ~2 nt at most read lengths, inspect its enrichment heatmap under `plots_and_csv/per_sample/<sample>/` — usually low coverage is the cause, not a real biological signal.
+   Open `results/rpf/offset_diagnostics/plots/offset_drift_stop.svg`. Each sample has its own per-read-length 5' and 3' offset bar; the combined diagnostic is overlaid as a dashed line. Outliers are visible by eye in seconds. If a single sample drifts by more than ~2 nt at most read lengths, inspect its enrichment heatmap under `offset_diagnostics/csv/per_sample_offset/<sample>/` — usually low coverage is the cause, not a real biological signal. The `offset_applied.csv` in that same folder confirms which offset row downstream actually used for the sample.
 
 4. **Does the canonical 12–15 nt P-site peak show up?**
-   Open `results/rpf/plots_and_csv/offset_stop.svg` (heatmap + line plot). A sharp peak at the canonical 12–15 nt 5' offset confirms library quality. Diffuse / flat enrichment usually means the wrong strand, the wrong RPF window, or low coverage.
+   Open `results/rpf/offset_diagnostics/plots/offset_stop.svg` (heatmap + line plot). A sharp peak at the canonical 12–15 nt 5' offset confirms library quality. Diffuse / flat enrichment usually means the wrong strand, the wrong RPF window, or low coverage.
 
 5. **Does the CDS show frame-0 dominance?**
-   Open `results/rpf/coverage_profile_plots/p/site_density_rpm_frame/<gene>_p-site_density_(rpm,_cds_frame_coloring).svg`. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start). A healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region.
+   Open `results/rpf/coverage_profile_plots/p_site_density_rpm_frame/<gene>_p-site_density_(rpm,_cds_frame_coloring).svg`. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start). A healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region.
 
 6. **What's the codon-usage profile?**
-   For each sample, the totals are at:
+   For each sample, the totals are in the same flat folder:
 
-   - `results/rpf/translation_profile/p/<sample>/codon_usage/codon_usage_total.csv` — overall P-site codon occupancy.
-   - `results/rpf/translation_profile/a/<sample>/codon_usage/codon_usage_total.csv` — overall A-site codon occupancy.
+   - `results/rpf/translation_profile/<sample>/codon_usage/p_site_codon_usage_total.csv` — overall P-site codon occupancy.
+   - `results/rpf/translation_profile/<sample>/codon_usage/a_site_codon_usage_total.csv` — overall A-site codon occupancy.
 
    Compare the two side by side to inspect both sites independently.
+
+7. **Want a publication-ready codon scatter?**
+   Set `cor_plot: true` and `base_sample: <reference_sample>` in your YAML (or pass `--cor_plot --base_sample <ref>`). With `analysis_sites: both`, you get parallel outputs at `results/rpf/codon_correlation/p_site/` and `.../a_site/`.
+
+8. **Want to view footprint density in IGV?**
+   Set `igv_export: true` (or pass `--igv_export`). BedGraph tracks land at `results/rpf/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph` — drop them into IGV alongside your reference FASTA.
 
 ---
 

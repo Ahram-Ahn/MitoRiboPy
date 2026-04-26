@@ -32,7 +32,13 @@ class PipelineContext:
 
     args: argparse.Namespace
     base_output_dir: Path
+    # ``plot_output_dir`` is the parent of ``csv_dir`` and ``plot_subdir``;
+    # it is kept for backward-compatible callers that just need the
+    # offset-diagnostics root. New code writes CSVs to ``csv_dir`` and
+    # plots to ``plot_subdir`` so the two file types stay separated.
     plot_output_dir: Path
+    csv_dir: Path
+    plot_subdir: Path
     annotation_df: pd.DataFrame
     resolved_codon_table: dict[str, str]
     resolved_start_codons: list[str]

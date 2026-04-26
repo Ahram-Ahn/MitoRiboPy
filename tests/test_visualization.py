@@ -98,10 +98,10 @@ def test_run_coverage_profile_plots_writes_codon_binned_outputs(tmp_path) -> Non
         args=args,
         annotation_df=annotation_df,
         filtered_bed_df=filtered_bed_df,
+        requested_sites=["p"],
     )
 
-    # Read-coverage (site-independent) sits at the top of output_dir
-    # since this single-call test does not pass `read_coverage_dir`.
+    # Read-coverage outputs sit at the top of output_dir.
     assert (tmp_path / "coverage" / "read_coverage_rpm" / "ND1_read_coverage_(rpm).svg").is_file()
     assert (
         tmp_path
@@ -109,18 +109,18 @@ def test_run_coverage_profile_plots_writes_codon_binned_outputs(tmp_path) -> Non
         / "read_coverage_rpm_codon"
         / "ND1_read_coverage_(rpm,_codon-binned_cds).svg"
     ).is_file()
-    # Frame-coloured P-site plots, renamed from p_site_coverage_*_frame
-    # to site_density_*_frame in v0.4.x; the parent dir names the site.
+    # Frame-coloured P-site plots: v0.4.x flat layout uses
+    # ``p_site_density_*_frame/`` siblings of read_coverage_*.
     assert (
         tmp_path
         / "coverage"
-        / "site_density_rpm_frame"
+        / "p_site_density_rpm_frame"
         / "ND1_p-site_density_(rpm,_cds_frame_coloring).svg"
     ).is_file()
     assert (
         tmp_path
         / "coverage"
-        / "site_density_raw_frame"
+        / "p_site_density_raw_frame"
         / "ND1_p-site_density_(raw_counts,_cds_frame_coloring).svg"
     ).is_file()
 

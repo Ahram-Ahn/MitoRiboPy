@@ -7,6 +7,69 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-04-25
+
+### Added
+- **Per-site codon correlation.** `--cor_plot` with `--analysis_sites both`
+  now produces parallel outputs under `codon_correlation/p_site/` AND
+  `codon_correlation/a_site/`. The function reads the matching site's
+  `codon_usage_total.csv` from the new flat translation-profile layout
+  and the existing P-site stop-codon override is preserved.
+- **Granular read-coverage toggles.** New `--read_coverage_raw` /
+  `--no-read_coverage_raw` and `--read_coverage_rpm` /
+  `--no-read_coverage_rpm` flags (default both on) control the
+  `coverage_profile_plots/read_coverage_*` folders independently.
+- **IGV-compatible BedGraph export.** New `--igv_export` flag writes
+  per-sample BedGraph tracks at
+  `igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph`. P-site
+  tracks default to forest green, A-site to dark orange via the
+  BedGraph `track color=` header. No new dependency.
+- **FASTQ subsampler.** `python -m mitoribopy.tools.subsample_fastq`
+  reservoir-samples 4-line FASTQ records (Algorithm R, deterministic
+  with `--seed`); gzip auto-detected via the `.gz` suffix on either end.
+  Sibling of the existing BED subsampler.
+- **Per-sample offset audit.** New
+  `offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv`
+  records the exact offsets row each sample applied downstream, so a
+  reviewer can confirm `--offset_mode per_sample` was honoured by the
+  translation-profile and coverage-profile steps.
+
+### Changed
+- **Flat output layout — `p/` / `a/` subfolders dropped.**
+  - `translation_profile/<sample>/codon_usage/` now holds
+    `p_site_codon_usage_*.csv` and `a_site_codon_usage_*.csv` side by
+    side. The legacy `translation_profile/{p,a}/<sample>/...` nesting
+    is gone.
+  - `coverage_profile_plots/p_site_density_*` and `a_site_density_*`
+    are siblings of `read_coverage_*`, replacing the legacy
+    `coverage_profile_plots/{p,a}/site_density_*` nesting.
+  - The footprint-density CSV (already site-agnostic, columns
+    `Position, Nucleotide, A_site, P_site`) is written once per
+    transcript instead of once per site.
+- **Default `plot_dir` renamed** from `plots_and_csv` to
+  `offset_diagnostics`. CSVs are now under
+  `offset_diagnostics/csv/`, plots under `offset_diagnostics/plots/`.
+  `per_sample/` is renamed to `per_sample_offset/` and lives under
+  `offset_diagnostics/csv/`. The `--plot_dir` flag still accepts a
+  custom name.
+- **`run_translation_profile_analysis()` signature**: prefer the new
+  `requested_sites=["p", "a"]` keyword over `site_override=`. The
+  legacy keyword is honoured for one cycle.
+- **`run_coverage_profile_plots()` signature**: prefer the granular
+  `write_read_coverage_raw=` / `write_read_coverage_rpm=` flags over
+  the coarse `write_read_coverage=`. Legacy keyword still works.
+- **Example run scripts** (`run_align.example.sh`,
+  `run_rpf.example.sh`, `run_pipeline.example.sh`) moved from the repo
+  root to `examples/run_scripts/`. Example YAML files stay at the repo
+  root.
+
+### Fixed
+- **`cor_plot: true` silent skip bug.** Three of the four skip branches
+  in `run_downstream_modules` previously appended `"codon correlation"`
+  to `skipped_modules` without emitting a log line, so users with
+  `cor_plot: true` and a valid `base_sample` could see no output and no
+  error. Every skip path now logs an explicit `[PIPELINE]` reason.
+
 ## [0.4.2] - 2026-04-25
 
 ### Added

@@ -145,36 +145,65 @@ def run_codon_correlation(
     mask_method: str = "percentile",
     mask_percentile: float = 0.99,
     mask_threshold: float | None = None,
+    site: str = "p",
 ) -> None:
+    """Run codon correlation analysis comparing the base sample to every
+    other sample for the requested site.
+
+    ``site`` selects which codon-usage table to read:
+      * ``"p"``: read ``p_site_codon_usage_total.csv``; for stop-codon
+        rows (``AA=="*"``), substitute the A-site value because the
+        P-site CSV applies stop-codon masking.
+      * ``"a"``: read ``a_site_codon_usage_total.csv`` directly (no
+        stop-codon override; A-site usage never masks the stop).
+
+    Two versions (``all`` and ``masked``) are produced based on
+    thresholds. CSV + SVG + PNG outputs are saved for each.
     """
-    Run codon correlation analysis comparing the base sample to every other sample.
-    For each pair, for stop codons (AA=="*"), the value from the A-site analysis is used.
-    Two versions ("all" and "masked") are produced based on thresholds.
-    CSV files and SVG plots are saved for each version.
-    """
-    log_info("COR", f"Starting correlation vs base='{base_sample}', column='{column}'.")
+    site = str(site).lower()
+    if site not in {"p", "a"}:
+        site = "p"
+    site_label = "P-site" if site == "p" else "A-site"
+    log_info(
+        "COR",
+        f"Starting {site_label} correlation vs base='{base_sample}', column='{column}'.",
+    )
     if output_dir is None:
         output_dir = os.path.join(translation_profile_dir, "codon_correlation")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Helper function: override stop codon value with A-site value
-    def override_stop_values(p_csv: str, a_csv: str) -> pd.DataFrame:
-        df = pd.read_csv(p_csv)
-        if os.path.isfile(a_csv):
+    primary_basename = (
+        "p_site_codon_usage_total.csv" if site == "p" else "a_site_codon_usage_total.csv"
+    )
+    a_site_basename = "a_site_codon_usage_total.csv"
+
+    def override_stop_values(primary_csv: str, a_csv: str) -> pd.DataFrame:
+        """Replace stop-codon rows with A-site values when masking the P-site.
+
+        For ``site=="a"`` no override is needed (A-site usage already
+        contains the stop-codon row unmasked); we still pass through
+        :func:`pd.read_csv` for a consistent return type.
+        """
+        df = pd.read_csv(primary_csv)
+        if site == "p" and os.path.isfile(a_csv):
             a_df = pd.read_csv(a_csv)
-            # For rows with AA=="*", update value
             for idx, row in df.iterrows():
                 if row["AA"] == "*":
-                    match = a_df[(a_df["Codon"] == row["Codon"]) &
-                                 (a_df["AA"] == row["AA"]) &
-                                 (a_df["Category"] == row["Category"])]
+                    match = a_df[
+                        (a_df["Codon"] == row["Codon"])
+                        & (a_df["AA"] == row["AA"])
+                        & (a_df["Category"] == row["Category"])
+                    ]
                     if not match.empty:
                         df.at[idx, column] = match.iloc[0]["CoverageDivFreq"]
         return df
 
-    # Read base sample p-site CSV and override stop codons
-    base_p_csv = os.path.join(translation_profile_dir, base_sample, "codon_usage", "codon_usage_total.csv")
-    base_a_csv = os.path.join(translation_profile_dir, base_sample, "codon_usage", "a_site_codon_usage_total.csv")
+    base_p_csv = os.path.join(
+        translation_profile_dir, base_sample, "codon_usage", primary_basename
+    )
+    base_a_csv = os.path.join(
+        translation_profile_dir, base_sample, "codon_usage", a_site_basename
+    )
     if not os.path.isfile(base_p_csv):
         log_warning("COR", f"Base sample CSV not found => {base_p_csv}")
         return
@@ -195,8 +224,12 @@ def run_codon_correlation(
     ):
         if sample_name == base_sample:
             continue
-        sample_p_csv = os.path.join(translation_profile_dir, sample_name, "codon_usage", "codon_usage_total.csv")
-        sample_a_csv = os.path.join(translation_profile_dir, sample_name, "codon_usage", "a_site_codon_usage_total.csv")
+        sample_p_csv = os.path.join(
+            translation_profile_dir, sample_name, "codon_usage", primary_basename
+        )
+        sample_a_csv = os.path.join(
+            translation_profile_dir, sample_name, "codon_usage", a_site_basename
+        )
         if not os.path.isfile(sample_p_csv):
             log_warning("COR", f"Missing codon-usage file => {sample_p_csv}; skipping.")
             continue

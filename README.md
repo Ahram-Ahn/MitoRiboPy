@@ -33,9 +33,10 @@ The package is built around four subcommands:
 10. [Custom organisms](#custom-organisms)
 11. [Built-in references](#built-in-references)
 12. [Examples](#examples)
-13. [Logs and provenance](#logs-and-provenance)
-14. [Development](#development)
-15. [License](#license)
+13. [Tools](#tools)
+14. [Logs and provenance](#logs-and-provenance)
+15. [Development](#development)
+16. [License](#license)
 
 ---
 
@@ -200,9 +201,9 @@ results/
             (intermediate trimmed/contam_filtered/aligned files are deleted as
              soon as they are consumed; pass --keep-intermediates to retain
              them; deduped/ is only created for UMI / mark-duplicates samples)
-  rpf/      plots_and_csv/, translation_profile/{p,a}/<sample>/...,
-            coverage_profile_plots/{read_coverage_*, {p,a}/site_density_*},
-            rpf_counts.tsv
+  rpf/      offset_diagnostics/{csv,plots}/, translation_profile/<sample>/...,
+            coverage_profile_plots/{read_coverage_*, {p_site,a_site}_density_*},
+            codon_correlation/{p_site,a_site}/, igv_tracks/<sample>/, rpf_counts.tsv
   run_manifest.json
 ```
 
@@ -508,7 +509,7 @@ Plain `mitoribopy <flags>` (no subcommand) routes to `mitoribopy rpf` and prints
 | `--analysis_sites {p,a,both}` | `both` | Which downstream sites to generate. `both` writes parallel P-site and A-site codon usage + coverage plots, side by side under per-site subdirs. `p` or `a` restricts to one site. |
 | `--codon_overlap_mode {full,any}` | `full` | How a read counts toward the codon-level enrichment table at the anchor codon. `full` (default, right for ribo-seq): the read must cover ALL 3 nt of the anchor codon. Example with anchor codon at positions 101–103 — a 30-nt read at 100–129 counts (read covers 101, 102, 103); a read at 102–131 does NOT count (does not cover 101). `any`: any 1-nt overlap counts; the same 102–131 read above WOULD count. Use `any` only for very short reads relative to a codon (rare for ribo-seq). |
 | `-p, --psite_offset NT` | — | Use one fixed offset for every read length and sample. Bypasses enrichment-based selection. |
-| `--offset_mode {per_sample,combined}` | `per_sample` | `per_sample`: each sample uses its own offsets; drift surfaced in `offset_drift_<align>.svg`. `combined`: pool all samples and apply one offset table to every sample (use this when individual samples have very low coverage and the per-sample selection is noisy). |
+| `--offset_mode {per_sample,combined}` | `per_sample` | `per_sample`: each sample uses its own offsets; drift surfaced in `offset_drift_<align>.svg` and audited per sample in `offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv`. `combined`: pool all samples and apply one offset table to every sample (use this when individual samples have very low coverage and the per-sample selection is noisy). |
 
 #### Outputs and plotting
 
@@ -516,7 +517,7 @@ Plain `mitoribopy <flags>` (no subcommand) routes to `mitoribopy rpf` and prints
 |---|---|---|
 | `-o, --output DIR` | `analysis_results` | Base output directory. |
 | `--downstream_dir NAME` | `footprint_density` | Per-sample subdirectory name for frame and codon analyses. |
-| `--plot_dir NAME` | `plots_and_csv` | Subdirectory name for offset CSVs and plots. |
+| `--plot_dir NAME` | `offset_diagnostics` | Subdirectory name for offset CSVs and plots. CSVs (offset tables, per-sample offsets, summaries) land under `<plot_dir>/csv/`; PNG/SVG diagnostics under `<plot_dir>/plots/`. Per-sample offsets live at `<plot_dir>/csv/per_sample_offset/<sample>/`. |
 | `-fmt, --plot_format {png,pdf,svg}` | `png` | File format for saved plots. SVG recommended for publication-ready vector output. |
 | `--x_breaks NT [NT ...]` | — | Optional custom x-axis tick marks for offset line plots. |
 | `--line_plot_style {combined,separate}` | `combined` | Draw 5'/3' offsets in one panel or two. |
@@ -542,21 +543,24 @@ Plain `mitoribopy <flags>` (no subcommand) routes to `mitoribopy rpf` and prints
 |---|---|---|
 | `--structure_density` | off | Export log2 and scaled density values from footprint-density tables. |
 | `--structure_density_norm_perc FRAC` | 0.99 | Upper percentile used to cap and scale structure-density values. |
-| `--cor_plot` | off | Generate publication-quality codon-correlation plots (one per non-base sample) under `<output>/codon_correlation/`. Each figure is rendered as both SVG (vector, for figures) and 300 dpi PNG (for slides), with: identity (y = x) line, OLS regression line, an `r / R² / p / slope / intercept / N` stat box, an Okabe-Ito colour-blind safe palette per Category, and leader-line labels for the 10 codons farthest from the regression line (placed greedily to avoid overlap). |
-| `--base_sample NAME` | — | Reference sample for codon-correlation comparisons. Required by `--cor_plot`. |
+| `--cor_plot` | off | Generate publication-quality codon-correlation plots (one per non-base sample). When `--analysis_sites=both`, produces parallel outputs under `<output>/codon_correlation/p_site/` AND `<output>/codon_correlation/a_site/`; with single-site analysis only the matching folder appears. Each figure is rendered as both SVG (vector, for figures) and 300 dpi PNG (for slides), with: identity (y = x) line, OLS regression line, an `r / R² / p / slope / intercept / N` stat box, an Okabe-Ito colour-blind safe palette per Category, and leader-line labels for the 10 codons farthest from the regression line (placed greedily to avoid overlap). When `--cor_plot` is set but skipped (e.g., `--base_sample` missing), the pipeline log explicitly states the reason. |
+| `--base_sample NAME` | — | Reference sample for codon-correlation comparisons. Required by `--cor_plot`. Must match an existing sample directory name. |
 | `--cor_mask_method {percentile,fixed,none}` | `percentile` | Masking rule for extreme codon-correlation outliers. The masked-version plot drops codons above the threshold so the bulk of the distribution is visible. |
 | `--cor_mask_percentile FRAC` | 0.99 | Used when `--cor_mask_method percentile`. |
 | `--cor_mask_threshold FLOAT` | — | Used when `--cor_mask_method fixed`. |
+| `--read_coverage_raw` / `--no-read_coverage_raw` | on | Toggle the `coverage_profile_plots/read_coverage_raw[_codon]/` folders. Independent of `--read_coverage_rpm`. |
+| `--read_coverage_rpm` / `--no-read_coverage_rpm` | on | Toggle the `coverage_profile_plots/read_coverage_rpm[_codon]/` folders. Independent of `--read_coverage_raw`. |
+| `--igv_export` / `--no-igv_export` | off | Write per-sample IGV-loadable BedGraph tracks under `<output>/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph`. P-site tracks default to forest green, A-site to dark orange (set via `track color=` header); load alongside the same FASTA the BEDs were aligned to. |
 
 #### Coverage-profile output reference
 
-`coverage_profile_plots/` always contains two kinds of figures:
+`coverage_profile_plots/` always contains two kinds of figures (v0.4.4 flat layout):
 
-- **`read_coverage_*`** (top-level, site-independent) — depth across the transcript using the FULL read footprint (broad peak). The same plot regardless of `--analysis_sites`. Variants: `_rpm` (RPM-normalised), `_raw` (raw counts), `_rpm_codon` / `_raw_codon` (codon-binned across the CDS for compact comparison across long transcripts).
-- **`{p,a}/site_density_*`** (per-site, single-nucleotide P-site or A-site density) — narrow peak at the chosen ribosomal site. Variants:
-  - `site_density_rpm` / `site_density_raw` — full-transcript density.
-  - `site_density_rpm_codon` / `site_density_raw_codon` — same density but binned per CDS codon.
-  - `site_density_rpm_frame` / `site_density_raw_frame` — **frame-coloured CDS-only nt plots**. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind-safe palette. Frame-0 dominance (~70–90% of CDS density on frame 0) is the canonical mt-Ribo-seq QC signature; if frames 1 and 2 are visible, the library has spurious offset selection, mis-trimmed reads, or contamination from non-ribosome-protected RNA.
+- **`read_coverage_*`** (top-level, site-independent) — depth across the transcript using the FULL read footprint (broad peak). The same plot regardless of `--analysis_sites`. Variants: `_rpm` (RPM-normalised), `_raw` (raw counts), `_rpm_codon` / `_raw_codon` (codon-binned across the CDS). Each `_rpm` and `_raw` family is independently toggleable via `--read_coverage_rpm` / `--read_coverage_raw`.
+- **`{p_site,a_site}_density_*`** (per-site, single-nucleotide P-site or A-site density, sibling of `read_coverage_*`) — narrow peak at the chosen ribosomal site. The legacy nested `p/` / `a/` subfolders are gone; the site is encoded in the filename prefix. Variants:
+  - `{p_site,a_site}_density_rpm` / `_density_raw` — full-transcript density.
+  - `{p_site,a_site}_density_rpm_codon` / `_density_raw_codon` — same density but binned per CDS codon.
+  - `{p_site,a_site}_density_rpm_frame` / `_density_raw_frame` — **frame-coloured CDS-only nt plots**. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind-safe palette. Frame-0 dominance (~70–90% of CDS density on frame 0) is the canonical mt-Ribo-seq QC signature; if frames 1 and 2 are visible, the library has spurious offset selection, mis-trimmed reads, or contamination from non-ribosome-protected RNA.
 
 For the translation-efficiency integration, use the dedicated `mitoribopy rnaseq` subcommand.
 
@@ -700,40 +704,57 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
     mitoribopy.log
     rpf_counts.tsv                     # per-sample per-gene RPF counts; feeds rnaseq
     run_settings.json                  # includes reference_checksum (SHA256 of --fasta)
-    plots_and_csv/
-      offset_<align>.csv               # COMBINED enrichment summary (diagnostic)
-      p_site_offsets_<align>.csv       # COMBINED selected offsets (diagnostic)
-      offset_drift_<align>.svg         # per-sample 5'/3' offset comparison; read this FIRST
-      offset_*.svg                     # heatmaps + line plots
-      per_sample/
-        <sample>/
-          offset_<align>.csv           # per-sample enrichment summary
-          p_site_offsets_<align>.csv   # per-sample selected offsets (used downstream)
-    translation_profile/               # one site subdir per requested site
-      p/<sample>/                      # P-site outputs (analysis_sites in {p,both})
-        footprint_density/             # *_footprint_density.csv  (cols: Position, Nucleotide,
-                                       #   A_site, P_site)  +  *_depth.png
-        translating_frame/             # frame_usage_total.csv, frame_usage_by_transcript.csv
-        codon_usage/                   # codon_usage_<transcript>.csv, codon_usage_total.csv,
-                                       # a_site_codon_usage_<transcript>.csv, ...
-      a/<sample>/                      # A-site outputs (analysis_sites in {a,both}); same shape
-    coverage_profile_plots/
-      read_coverage_rpm/               # SITE-INDEPENDENT (written ONCE even
-      read_coverage_raw/               # when both sites are analysed; the
-      read_coverage_rpm_codon/         # plots use only read start/end and do
-      read_coverage_raw_codon/         # not depend on the chosen ribosomal site)
-      p/                               # P-site density (analysis_sites in {p,both})
-        site_density_rpm/              # nucleotide-resolution P-site density (RPM)
-        site_density_raw/              # nucleotide-resolution P-site density (raw counts)
-        site_density_rpm_codon/        # codon-binned across CDS, RPM
-        site_density_raw_codon/        # codon-binned across CDS, raw
-        site_density_rpm_frame/        # CDS-only nt plot, bars coloured by reading
-                                       # frame (0/1/2 vs CDS start). Frame-0 dominance
-                                       # is the canonical mt-Ribo-seq QC signature.
-        site_density_raw_frame/        # same as _rpm_frame but raw counts
-      a/                               # A-site density (analysis_sites in {a,both}); same shape
+    offset_diagnostics/                # renamed from plots_and_csv/ in v0.4.4
+      csv/                             # all CSV diagnostics live here
+        offset_<align>.csv             # COMBINED enrichment summary
+        p_site_offsets_<align>.csv     # COMBINED selected offsets
+        read_length_summary.csv        # filtered RPF window per sample
+        per_sample_offset/             # renamed from per_sample/ in v0.4.4
+          <sample>/
+            offset_<align>.csv         # per-sample enrichment summary
+            p_site_offsets_<align>.csv # per-sample selected offsets
+            offset_applied.csv         # exact offsets row applied to <sample>
+                                       # (audit so reviewers can verify
+                                       # per-sample selection from disk)
+      plots/                           # all PNG/SVG diagnostics live here
+        offset_drift_<align>.svg       # per-sample 5'/3' offset comparison; read this FIRST
+        offset_*.svg                   # heatmaps + line plots
+        unfiltered_heatmap_*.svg
+        <sample>_read_length_distribution.svg
+    translation_profile/               # FLAT layout (v0.4.4): one folder per sample,
+      <sample>/                        # site is encoded in filename prefix.
+        footprint_density/             # <transcript>_footprint_density.csv (cols:
+                                       #   Position, Nucleotide, A_site, P_site)
+                                       # + <transcript>_p_site_depth.png and/or
+                                       #   <transcript>_a_site_depth.png
+        translating_frame/             # p_site_frame_usage_total.csv, p_site_*_by_transcript.csv,
+                                       # a_site_frame_usage_total.csv, a_site_*_by_transcript.csv,
+                                       # plus matching _plot.png files
+        codon_usage/                   # p_site_codon_usage_<transcript>.csv (P-site, stop-masked),
+                                       # p_site_codon_usage_total.csv,
+                                       # a_site_codon_usage_<transcript>.csv (A-site, no mask),
+                                       # a_site_codon_usage_total.csv, plus matching _plot.png files
+    coverage_profile_plots/            # FLAT layout (v0.4.4): site is the filename prefix.
+      read_coverage_rpm/               # SITE-INDEPENDENT (gated by --read_coverage_rpm)
+      read_coverage_raw/               # SITE-INDEPENDENT (gated by --read_coverage_raw)
+      read_coverage_rpm_codon/
+      read_coverage_raw_codon/
+      p_site_density_rpm/              # P-site nt-resolution density (RPM)
+      p_site_density_raw/              # P-site nt-resolution density (raw)
+      p_site_density_rpm_codon/        # codon-binned across CDS, RPM
+      p_site_density_raw_codon/        # codon-binned across CDS, raw
+      p_site_density_rpm_frame/        # CDS-only nt plot, frame-coloured (0/1/2 vs CDS start);
+                                       # frame-0 dominance is the canonical mt-Ribo-seq QC.
+      p_site_density_raw_frame/        # same but raw counts
+      a_site_density_*/                # A-site mirror folders (only when analysis_sites in {a,both})
     structure_density/                 # if --structure_density (uses P-site by default)
-    codon_correlation/                 # if --cor_plot (publication-quality SVG + 300 dpi PNG)
+    codon_correlation/                 # if --cor_plot
+      p_site/<base>_vs_<sample>_{all,masked}.{csv,svg,png}    # P-site correlation
+      a_site/<base>_vs_<sample>_{all,masked}.{csv,svg,png}    # A-site correlation
+    igv_tracks/                        # if --igv_export
+      <sample>/
+        <sample>_p_site.bedgraph       # P-site footprint density (forest green track)
+        <sample>_a_site.bedgraph       # A-site footprint density (dark orange track)
   rnaseq/                              # if rnaseq config supplied
     te.tsv                             # one row per (sample, gene): rpf_count, mrna_abundance, te
     delta_te.tsv                       # one row per gene: mrna_log2fc, rpf_log2fc, delta_te_log2,
@@ -744,17 +765,19 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
     run_settings.json
 ```
 
-The per-site subdirectory (`p/` or `a/`) is always present, even in single-site runs, so downstream tooling never has to branch on `--analysis_sites`.
+In v0.4.4 the legacy `p/` / `a/` subfolders under `translation_profile/` and `coverage_profile_plots/` were dropped. The site is encoded in filename prefixes (`p_site_*` / `a_site_*`) so a single per-sample folder hosts both sites without ambiguity, and downstream tooling never has to branch on `--analysis_sites`.
 
 ### Key files to look at first
 
 - **`align/kit_resolution.tsv`** — confirm each sample resolved to the right kit and dedup strategy. The `source` column tells you whether it was `detected`, `user_fallback`, `inferred_pretrimmed`, or set explicitly.
 - **`align/read_counts.tsv`** — track per-stage drop-off. The invariants `rrna_aligned + post_rrna_filter == post_trim` and `mt_aligned + unaligned_to_mt == post_rrna_filter` must hold; if they don't, something is wrong with alignment.
-- **`rpf/plots_and_csv/offset_drift_<align>.svg`** — per-sample offset comparison. Outliers are visible by eye in seconds.
-- **`rpf/plots_and_csv/offset_<align>.svg`** (heatmap + line plots) — the combined enrichment around the anchor codon. A sharp peak at the canonical P-site offset (~12–15 nt from the 5' end for most mt-Ribo-seq libraries) confirms library quality.
-- **`rpf/translation_profile/p/<sample>/codon_usage/codon_usage_total.csv`** — overall P-site codon occupancy. Compare against `translation_profile/a/<sample>/codon_usage/codon_usage_total.csv` to see the A-site picture.
-- **`rpf/coverage_profile_plots/p/site_density_rpm_frame/<transcript>_*.svg`** — frame-coloured single-nucleotide P-site density across the CDS only. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind safe palette. **Frame-0 dominance is the canonical mt-Ribo-seq QC signature**: a healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region. The `site_density_raw_frame/` companion has the same plots in raw counts (use this when comparing against published per-codon counts; otherwise prefer the RPM version for cross-sample comparison).
-- **`rpf/codon_correlation/<base>_vs_<other>_*.svg|png`** — publication-quality scatter of codon usage between samples (only when `--cor_plot` is set with `--base_sample`). Includes identity (y = x) line, OLS regression, an `r / R² / p / slope / intercept / N` stat box, and leader-line labels for the 10 codons farthest from the regression line.
+- **`rpf/offset_diagnostics/plots/offset_drift_<align>.svg`** — per-sample offset comparison. Outliers are visible by eye in seconds.
+- **`rpf/offset_diagnostics/plots/offset_<align>.svg`** (heatmap + line plots) — the combined enrichment around the anchor codon. A sharp peak at the canonical P-site offset (~12–15 nt from the 5' end for most mt-Ribo-seq libraries) confirms library quality.
+- **`rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv`** — exact offsets row applied to `<sample>` downstream. New in v0.4.4 so a reviewer can confirm from disk that per-sample offset selection was honoured by the translation-profile and coverage-profile steps.
+- **`rpf/translation_profile/<sample>/codon_usage/p_site_codon_usage_total.csv`** — overall P-site codon occupancy. Compare against `a_site_codon_usage_total.csv` (same folder) to see the A-site picture.
+- **`rpf/coverage_profile_plots/p_site_density_rpm_frame/<transcript>_*.svg`** — frame-coloured single-nucleotide P-site density across the CDS only. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind safe palette. **Frame-0 dominance is the canonical mt-Ribo-seq QC signature**: a healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region. The `p_site_density_raw_frame/` companion has the same plots in raw counts (use this when comparing against published per-codon counts; otherwise prefer the RPM version for cross-sample comparison).
+- **`rpf/codon_correlation/{p_site,a_site}/<base>_vs_<other>_*.svg|png`** — publication-quality scatter of codon usage between samples, one folder per requested site (only when `--cor_plot` is set with `--base_sample`). Includes identity (y = x) line, OLS regression, an `r / R² / p / slope / intercept / N` stat box, and leader-line labels for the 10 codons farthest from the regression line.
+- **`rpf/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph`** — IGV-loadable footprint density tracks (only when `--igv_export` is set). Open them alongside the FASTA the BEDs were aligned to; P-site is forest green, A-site dark orange.
 
 ---
 
@@ -1033,6 +1056,36 @@ sampleC     pretrimmed                       0
 ```
 
 then call `mitoribopy align --sample-overrides path/to/overrides.tsv …`.
+
+---
+
+## Tools
+
+Standalone helper scripts under `mitoribopy.tools.*` — useful for shrinking inputs to a quick smoke-test size before a full pipeline run.
+
+### Subsample a BED file
+
+```bash
+python -m mitoribopy.tools.subsample \
+    --input  results/align/bed/sample.bed \
+    --output /tmp/sample_subsampled.bed \
+    --n 50000 \
+    --seed 42
+```
+
+Reservoir-samples `--n` BED rows (Algorithm R, deterministic with `--seed`). Use the subsampled BED as `--directory` input to `mitoribopy rpf` for a fast end-to-end test.
+
+### Subsample a FASTQ file
+
+```bash
+python -m mitoribopy.tools.subsample_fastq \
+    --input  raw/sample.fastq.gz \
+    --output /tmp/sample_subsampled.fastq.gz \
+    --n 200000 \
+    --seed 42
+```
+
+Reservoir-samples `--n` FASTQ records (4 lines each); gzip is auto-detected on either end via the `.gz` suffix. Plain `.fastq` works too. The first record header must start with `@` or the tool fails fast.
 
 ---
 

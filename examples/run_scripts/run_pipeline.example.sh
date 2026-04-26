@@ -170,7 +170,8 @@ RPF_OPTS=(
 
   # --- Outputs / plotting ------------------------------------------------
   --downstream_dir footprint_density
-  --plot_dir plots_and_csv
+  --plot_dir offset_diagnostics    # CSVs go to <plot_dir>/csv/, plots to <plot_dir>/plots/.
+                                   # Per-sample offsets at <plot_dir>/csv/per_sample_offset/.
   --plot_format svg                # png | pdf | svg
   --line_plot_style combined       # combined | separate
   --cap_percentile 0.999
@@ -188,11 +189,18 @@ RPF_OPTS=(
   # --- Optional modules --------------------------------------------------
   # --structure_density
   # --structure_density_norm_perc 0.99
-  # --cor_plot
-  # --base_sample sampleA          # required by --cor_plot
+  --cor_plot                       # publication-quality codon-correlation scatter,
+                                   # one folder per requested site (P, A) when both
+                                   # are generated.
+  --base_sample WT_R1              # required by --cor_plot; change to YOUR reference.
   # --cor_mask_method percentile   # percentile | fixed | none
   # --cor_mask_percentile 0.99
   # --cor_mask_threshold 1.5
+
+  # --- Read-coverage outputs (default: both raw and rpm) ------------------
+  --no-read_coverage_raw           # skip read_coverage_raw[_codon]/.
+  --read_coverage_rpm              # write read_coverage_rpm[_codon]/.
+  --igv_export                     # write igv_tracks/<sample>/<sample>_{p,a}_site.bedgraph.
 
   # --- Shared --------------------------------------------------------------
   --threads "${THREADS}"
@@ -254,9 +262,13 @@ echo
 echo "Key files to look at first:"
 echo "  ${OUTPUT_DIR}/align/kit_resolution.tsv      # per-sample kit + dedup decisions"
 echo "  ${OUTPUT_DIR}/align/read_counts.tsv         # per-stage drop-off invariants"
-echo "  ${OUTPUT_DIR}/rpf/plots_and_csv/offset_drift_*.svg"
-echo "  ${OUTPUT_DIR}/rpf/coverage_profile_plots/p/site_density_rpm_frame/  # frame-coloured QC"
-echo "  ${OUTPUT_DIR}/rpf/translation_profile/p/<sample>/codon_usage/codon_usage_total.csv"
+echo "  ${OUTPUT_DIR}/rpf/offset_diagnostics/plots/offset_drift_*.svg"
+echo "  ${OUTPUT_DIR}/rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv"
+echo "                                              # exact offsets row applied per sample"
+echo "  ${OUTPUT_DIR}/rpf/coverage_profile_plots/p_site_density_rpm_frame/  # frame-coloured QC"
+echo "  ${OUTPUT_DIR}/rpf/translation_profile/<sample>/codon_usage/p_site_codon_usage_total.csv"
+echo "  ${OUTPUT_DIR}/rpf/codon_correlation/{p_site,a_site}/<base>_vs_<sample>_*.{svg,png}"
+echo "  ${OUTPUT_DIR}/rpf/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph  # IGV tracks"
 if [[ "${RUN_RNASEQ}" == "true" ]]; then
 echo "  ${OUTPUT_DIR}/rnaseq/te.tsv  +  delta_te.tsv  +  plots/"
 fi

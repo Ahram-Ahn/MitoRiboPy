@@ -77,7 +77,10 @@ offset_mode: per_sample                # per_sample | combined
 
 # --- Outputs / plotting ------------------------------------------------
 downstream_dir: footprint_density      # per-sample subdir for frame and codon analyses
-plot_dir: plots_and_csv                # subdir for offset CSVs and plots
+plot_dir: offset_diagnostics           # subdir for offset CSVs and plots; CSV/PNGs split
+                                       # into <plot_dir>/csv/ and <plot_dir>/plots/.
+                                       # Per-sample offsets land at
+                                       # <plot_dir>/csv/per_sample_offset/<sample>/
 plot_format: png                       # png | pdf | svg
 x_breaks: null                         # custom x-axis tick marks for offset line plots
 line_plot_style: combined              # combined | separate -- 5'/3' panels
@@ -101,8 +104,20 @@ mt_mrna_substring_patterns:            # used when rpm_norm_mode=mt_mrna
 structure_density: false               # export log2 + scaled density values
 structure_density_norm_perc: 0.99      # upper percentile used to cap structure density
 
-cor_plot: false                        # publication-quality codon-correlation scatter
-base_sample: null                      # reference sample (REQUIRED when cor_plot=true)
+cor_plot: true                         # publication-quality codon-correlation scatter.
+                                       # When analysis_sites=both, runs once per site
+                                       # and writes into codon_correlation/p_site/ and
+                                       # codon_correlation/a_site/.
+base_sample: WT_R1                     # reference sample (REQUIRED when cor_plot=true).
+                                       # Must match an existing sample directory name;
+                                       # change this to one of YOUR sample names.
 cor_mask_method: percentile            # percentile | fixed | none
 cor_mask_percentile: 0.99              # used when cor_mask_method=percentile
 cor_mask_threshold: null               # used when cor_mask_method=fixed
+
+read_coverage_raw: false               # set true to also write read_coverage_raw[_codon]/.
+                                       # Off by default in the example: the RPM track below
+                                       # is what most users want for cross-sample comparison.
+read_coverage_rpm: true                # write coverage_profile_plots/read_coverage_rpm[_codon]/
+igv_export: true                       # write per-sample BedGraph tracks (P-site green,
+                                       # A-site orange) under igv_tracks/<sample>/ for IGV.

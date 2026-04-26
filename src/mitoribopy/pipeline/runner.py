@@ -604,6 +604,35 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Fixed absolute cutoff used when --cor_mask_method fixed.",
     )
     optional_group.add_argument(
+        "--read_coverage_raw",
+        action=argparse.BooleanOptionalAction,
+        default=defaults["read_coverage_raw"],
+        help=(
+            "Write read-coverage plots in raw counts under "
+            "coverage_profile_plots/read_coverage_raw[_codon]/. "
+            "Use --no-read_coverage_raw to skip."
+        ),
+    )
+    optional_group.add_argument(
+        "--read_coverage_rpm",
+        action=argparse.BooleanOptionalAction,
+        default=defaults["read_coverage_rpm"],
+        help=(
+            "Write read-coverage plots in RPM under "
+            "coverage_profile_plots/read_coverage_rpm[_codon]/. "
+            "Use --no-read_coverage_rpm to skip."
+        ),
+    )
+    optional_group.add_argument(
+        "--igv_export",
+        action=argparse.BooleanOptionalAction,
+        default=defaults["igv_export"],
+        help=(
+            "Export per-sample BedGraph tracks (P-site / A-site) under "
+            "<output>/igv_tracks/<sample>/, suitable for opening in IGV."
+        ),
+    )
+    optional_group.add_argument(
         "--use_rna_seq",
         action="store_true",
         default=defaults["use_rna_seq"],
