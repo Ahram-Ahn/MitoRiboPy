@@ -170,6 +170,118 @@ def test_non_dry_run_requires_output_contam_index_mt_index_inputs(
     assert "--mt-index" in err
 
 
+# ---------- --config flag (flat YAML / JSON / TOML) -------------------------
+
+
+def test_align_config_flag_loads_yaml_values_into_args(tmp_path, capsys) -> None:
+    """A flat YAML passed via --config should populate args for every
+    flag whose dest matches a top-level key. Catches the silent no-op
+    where --config was registered on the parser but never consumed."""
+    fastq_dir = tmp_path / "fq"
+    fastq_dir.mkdir()
+    cfg = tmp_path / "align.yaml"
+    cfg.write_text(
+        "kit_preset: illumina_truseq_umi\n"
+        "min_length: 99\n"
+        "max_length: 50\n"
+        "quality: 42\n"
+        "mapq: 31\n"
+        "seed: 7\n"
+    )
+
+    exit_code = cli.main([
+        "align",
+        "--config", str(cfg),
+        "--fastq-dir", str(fastq_dir),
+        "--contam-index", str(tmp_path / "ci"),
+        "--mt-index", str(tmp_path / "mi"),
+        "--dry-run",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    # The dry-run plan prints the resolved kit + cutadapt window;
+    # both must reflect the YAML values, not the argparse defaults.
+    assert "kit=illumina_truseq_umi" in out
+    assert "umi_length=8" in out                 # comes from the kit preset
+    assert "cutadapt trim per sample (min=99 max=50 nt)" in out
+    assert "MAPQ filter at q >= 31" in out
+
+
+def test_align_cli_flag_wins_over_config_value(tmp_path, capsys) -> None:
+    """An explicit CLI flag must override the same key set in --config."""
+    fastq_dir = tmp_path / "fq"
+    fastq_dir.mkdir()
+    cfg = tmp_path / "align.yaml"
+    cfg.write_text("min_length: 99\nmapq: 31\n")
+
+    exit_code = cli.main([
+        "align",
+        "--config", str(cfg),
+        "--min-length", "25",                    # overrides 99
+        "--fastq-dir", str(fastq_dir),
+        "--contam-index", str(tmp_path / "ci"),
+        "--mt-index", str(tmp_path / "mi"),
+        "--dry-run",
+    ])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "(min=25 max=45 nt)" in out           # CLI win, max stays at default
+    assert "MAPQ filter at q >= 31" in out       # mapq still from config
+
+
+def test_align_config_warns_on_unknown_key(tmp_path, caplog) -> None:
+    """Unknown YAML keys are logged but do not abort the run."""
+    import logging
+
+    fastq_dir = tmp_path / "fq"
+    fastq_dir.mkdir()
+    cfg = tmp_path / "align.yaml"
+    cfg.write_text("kit_preset: illumina_smallrna\nzz_typo_key: 1\n")
+
+    # The package logger sets propagate=False so caplog (which hooks the
+    # root logger) would not see the record. Re-enable propagation for
+    # the duration of the test, restore it afterwards.
+    pkg_logger = logging.getLogger("mitoribopy")
+    saved_propagate = pkg_logger.propagate
+    pkg_logger.propagate = True
+    try:
+        with caplog.at_level(logging.WARNING, logger="mitoribopy"):
+            exit_code = cli.main([
+                "align",
+                "--config", str(cfg),
+                "--fastq-dir", str(fastq_dir),
+                "--contam-index", str(tmp_path / "ci"),
+                "--mt-index", str(tmp_path / "mi"),
+                "--dry-run",
+            ])
+    finally:
+        pkg_logger.propagate = saved_propagate
+
+    assert exit_code == 0
+    assert any(
+        "Ignoring unknown --config keys" in rec.message
+        and "zz_typo_key" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_align_config_missing_file_errors_with_clear_message(
+    tmp_path, capsys
+) -> None:
+    exit_code = cli.main([
+        "align",
+        "--config", str(tmp_path / "does_not_exist.yaml"),
+        "--fastq-dir", str(tmp_path),
+        "--contam-index", "x",
+        "--mt-index", "y",
+        "--dry-run",
+    ])
+    err = capsys.readouterr().err
+    assert exit_code == 2
+    assert "ERROR" in err
+    assert "Config file not found" in err
+
+
 # ---------- end-to-end orchestration (mocked) -------------------------------
 
 

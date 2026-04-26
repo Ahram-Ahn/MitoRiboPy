@@ -800,8 +800,40 @@ def _resolve_per_sample(
 
 def run(argv: Iterable[str]) -> int:
     """Entry point for ``mitoribopy align <args>``."""
+    argv_list = list(argv)
     parser = build_parser()
-    args = parser.parse_args(list(argv))
+
+    # Pre-parse just --config so we can fold any YAML / JSON / TOML
+    # values into the parser's defaults BEFORE the real parse pass.
+    # CLI flags still win on conflict because they appear in argv and
+    # parse_args treats them as explicitly-set values that override the
+    # default. Same pattern as `mitoribopy rpf`.
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=None)
+    pre_args, _ = pre_parser.parse_known_args(argv_list)
+    if pre_args.config:
+        try:
+            cfg = common.load_config_file(pre_args.config)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
+            return 2
+        known_dests = {
+            action.dest for action in parser._actions
+            if action.dest and action.dest != "help"
+        }
+        applied = {
+            key: value for key, value in cfg.items() if key in known_dests
+        }
+        unknown = sorted(set(cfg) - set(applied))
+        if unknown:
+            log_warning(
+                "ALIGN",
+                "Ignoring unknown --config keys: " + ", ".join(unknown),
+            )
+        if applied:
+            parser.set_defaults(**applied)
+
+    args = parser.parse_args(argv_list)
     common.apply_common_arguments(args)
 
     # Enumerate FASTQs first so the per-sample resolver can scan each
