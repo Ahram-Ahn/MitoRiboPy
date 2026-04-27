@@ -210,6 +210,19 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Threads passed to cutadapt and bowtie2 in from-FASTQ mode.",
     )
+    fastq.add_argument(
+        "--no-auto-pseudo-replicate",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable the default behaviour where any condition with only "
+            "1 sample is auto-split into rep1 / rep2 by FASTQ record "
+            "parity. Without auto-split, pyDESeq2 will refuse to fit "
+            "dispersion on n=1-per-condition designs and the run will "
+            "fail. Pass this flag only if you genuinely have biological "
+            "replicates already named correctly in the condition map."
+        ),
+    )
 
     return parser
 
@@ -277,6 +290,52 @@ def _write_delta_te_table(rows: Iterable[DTeRow], path: Path) -> None:
 # ---------- from-FASTQ orchestrator -----------------------------------------
 
 
+def _auto_split_singletons(
+    samples: list,
+    condition_map: dict,
+    workdir: Path,
+    label: str,
+) -> tuple[list, dict]:
+    """Auto-split any sample whose condition has only one member.
+
+    Returns ``(updated_samples, updated_condition_map)``. Both inputs
+    are left intact; the caller swaps in the returned objects. Emits a
+    stderr WARNING per sample that gets split so the behaviour is
+    never silent.
+    """
+    from ..rnaseq.split_replicates import split_sample_into_pseudo_replicates
+
+    by_condition: dict = {}
+    for s in samples:
+        cond = condition_map.get(s.sample)
+        if cond is None:
+            continue
+        by_condition.setdefault(cond, []).append(s)
+
+    new_samples: list = []
+    new_map = dict(condition_map)
+    for s in samples:
+        cond = condition_map.get(s.sample)
+        if cond is not None and len(by_condition.get(cond, [])) == 1:
+            rep1, rep2 = split_sample_into_pseudo_replicates(s, workdir)
+            new_samples.extend([rep1, rep2])
+            new_map[rep1.sample] = cond
+            new_map[rep2.sample] = cond
+            sys.stderr.write(
+                f"[mitoribopy rnaseq] WARNING: {label} condition "
+                f"{cond!r} has only 1 sample ({s.sample!r}); auto-"
+                f"splitting reads by record parity into pseudo-"
+                f"replicates {rep1.sample!r} / {rep2.sample!r}. These "
+                "are mechanical halves of the same library, NOT "
+                "biological replicates — DESeq2 dispersion estimates "
+                "will be artificially low. Pass "
+                "--no-auto-pseudo-replicate to disable.\n"
+            )
+        else:
+            new_samples.append(s)
+    return new_samples, new_map
+
+
 def _provenance_entry(result) -> dict:
     rk = result.resolved_kit
     return {
@@ -332,6 +391,36 @@ def _run_from_fastq(args, output_dir: Path) -> int:
     else:
         ribo_samples = []
 
+    condition_map = _load_condition_map(
+        Path(args.condition_map) if args.condition_map else None
+    )
+
+    # Auto-split any condition with only one sample so pyDESeq2 has
+    # n>=2 to fit dispersion on. Pass --no-auto-pseudo-replicate to
+    # opt out (the run will then fail at the DESeq2 step on n=1
+    # designs, which is what users with real biological replicates
+    # already named correctly want).
+    original_map = dict(condition_map)
+    if not getattr(args, "no_auto_pseudo_replicate", False):
+        rna_samples, condition_map = _auto_split_singletons(
+            rna_samples, condition_map, workdir / "rna_split", "RNA-seq"
+        )
+        if ribo_samples:
+            ribo_samples, condition_map = _auto_split_singletons(
+                ribo_samples, condition_map, workdir / "ribo_split", "Ribo-seq"
+            )
+
+    # Persist the (possibly augmented) condition map so the downstream
+    # delta-TE step picks up the new rep1 / rep2 entries when it re-
+    # reads --condition-map from disk.
+    if condition_map != original_map:
+        augmented = output_dir / "condition_map.augmented.tsv"
+        with augmented.open("w", encoding="utf-8") as handle:
+            handle.write("sample\tcondition\n")
+            for s, c in sorted(condition_map.items()):
+                handle.write(f"{s}\t{c}\n")
+        args.condition_map = str(augmented)
+
     if args.bowtie2_index:
         bt2_index = Path(args.bowtie2_index)
     else:
@@ -366,10 +455,6 @@ def _run_from_fastq(args, output_dir: Path) -> int:
     if ribo_results:
         write_counts_matrix(ribo_results, output_dir / "rpf_counts_matrix.tsv")
         write_long_counts(ribo_results, output_dir / "rpf_counts.tsv")
-
-    condition_map = _load_condition_map(
-        Path(args.condition_map) if args.condition_map else None
-    )
 
     samples, counts_df, metadata_df = build_sample_sheet(
         rna_results, ribo_results, condition_map
