@@ -30,7 +30,14 @@ from ..rnaseq import (
     ReferenceMismatchError,
 )
 from ..rnaseq._types import DTeRow, TeRow
-from ..rnaseq.plots import plot_delta_te_volcano, plot_mrna_vs_rpf_scatter
+from ..rnaseq.plots import (
+    plot_delta_te_volcano,
+    plot_ma,
+    plot_mrna_vs_rpf_scatter,
+    plot_pca,
+    plot_te_bar_grouped,
+    plot_te_heatmap,
+)
 from . import common
 
 
@@ -459,6 +466,9 @@ def _run_from_fastq(args, output_dir: Path) -> int:
     samples, counts_df, metadata_df = build_sample_sheet(
         rna_results, ribo_results, condition_map
     )
+    plot_pca(
+        counts_df, metadata_df, output_dir / "plots" / "sample_pca.png"
+    )
     results_df = run_deseq2(
         counts_df,
         metadata_df,
@@ -679,6 +689,13 @@ def run(argv: Iterable[str]) -> int:
     _write_delta_te_table(dte_rows, output_dir / "delta_te.tsv")
     plot_mrna_vs_rpf_scatter(dte_rows, output_dir / "plots" / "mrna_vs_rpf.png")
     plot_delta_te_volcano(dte_rows, output_dir / "plots" / "delta_te_volcano.png")
+    plot_ma(de_table, output_dir / "plots" / "ma.png")
+    plot_te_bar_grouped(
+        te_rows, condition_map, output_dir / "plots" / "te_bar_by_condition.png"
+    )
+    plot_te_heatmap(
+        te_rows, condition_map, output_dir / "plots" / "te_heatmap.png"
+    )
 
     settings = {
         "subcommand": "rnaseq",
