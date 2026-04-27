@@ -8,6 +8,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- **Per-stage timing in `mitoribopy align`.** Each per-sample stage
+  (cutadapt → bowtie2 contam → mt-align → MAPQ → dedup → BAM→BED) now
+  emits one compact line carrying its wall-clock duration, e.g.
+  `[ALIGN] sampleA: trim          12.3s — kit=auto, kept 941k/1.0M reads`.
+  At the end of the run a per-stage summary table is appended to both
+  the console and `mitoribopy.log`, showing total/mean/max across all
+  samples plus an overall wall-clock line — useful for spotting which
+  step dominates a run and for sizing `--threads`/`--max-parallel-samples`.
+  Resume-only runs (every sample loaded from cache) skip the table since
+  no fresh stage timings exist to summarize. Backed by a new
+  `mitoribopy.progress` module (`Stopwatch`, `StageTimings`,
+  `format_duration`, `render_summary_lines`) plus an optional tqdm-based
+  `SampleCounter` that activates when tqdm is installed and the run is
+  in parallel mode (graceful no-op fallback otherwise).
 - **`--max-parallel-samples N` for `mitoribopy align`.** Run multiple
   samples concurrently in a `ThreadPoolExecutor`. Default `1` (serial,
   fully backward-compatible). When combined with `--threads T`, each

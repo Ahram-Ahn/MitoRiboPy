@@ -54,6 +54,14 @@ from ..align.sample_resolve import (
     write_kit_resolution_tsv,
 )
 from ..console import configure_file_logging, log_info, log_progress, log_warning
+from ..progress import (
+    SampleCounter,
+    StageTimings,
+    Stopwatch,
+    format_duration,
+    render_summary_lines,
+    stage_timer,
+)
 from . import common
 
 
@@ -559,6 +567,7 @@ def _process_one_sample(
     args: argparse.Namespace,
     resolution: SampleResolution,
     threads: int,
+    timings: StageTimings | None = None,
 ) -> SampleCounts:
     sample = resolution.sample
     fastq_in = resolution.fastq
@@ -582,106 +591,119 @@ def _process_one_sample(
     bed_out = bed_dir / f"{sample}.bed"
 
     threads = max(1, int(threads))
+    sample_sw = Stopwatch()
+    sample_sw.__enter__()
 
-    _log_sample_stage(
+    with stage_timer(timings, sample, "trim") as sw:
+        cutadapt = trim_step.run_cutadapt(
+            fastq_in=fastq_in,
+            fastq_out=trimmed_fq,
+            resolved=resolved_kit,
+            min_length=args.min_length,
+            max_length=args.max_length,
+            quality=args.quality,
+            threads=threads,
+            log_json=cutadapt_log,
+        )
+    _log_stage_done(
         sample,
         "trim",
-        f"kit={resolved_kit.kit}, adapter={resolved_kit.adapter}, "
-        f"umi_length={resolved_kit.umi_length}",
-    )
-    cutadapt = trim_step.run_cutadapt(
-        fastq_in=fastq_in,
-        fastq_out=trimmed_fq,
-        resolved=resolved_kit,
-        min_length=args.min_length,
-        max_length=args.max_length,
-        quality=args.quality,
-        threads=threads,
-        log_json=cutadapt_log,
-    )
-    _log_sample_stage(
-        sample,
-        "trim",
-        f"kept {cutadapt.reads_passing_filters}/{cutadapt.input_reads} reads after cutadapt",
+        sw.seconds,
+        f"kit={resolved_kit.kit}, kept "
+        f"{_short_count(cutadapt.reads_passing_filters)}/"
+        f"{_short_count(cutadapt.input_reads)} reads",
     )
 
-    _log_sample_stage(sample, "contam-filter", f"subtracting contaminants with index {args.contam_index}")
-    contam = contam_step.subtract_contaminants(
-        fastq_in=trimmed_fq,
-        contam_index=Path(args.contam_index),
-        fastq_out_unaligned=nocontam_fq,
-        strandedness=args.library_strandedness,
-        threads=threads,
-        seed=args.seed,
-    )
-    _log_sample_stage(
+    with stage_timer(timings, sample, "contam-filter") as sw:
+        contam = contam_step.subtract_contaminants(
+            fastq_in=trimmed_fq,
+            contam_index=Path(args.contam_index),
+            fastq_out_unaligned=nocontam_fq,
+            strandedness=args.library_strandedness,
+            threads=threads,
+            seed=args.seed,
+        )
+    _log_stage_done(
         sample,
         "contam-filter",
-        f"{contam.unaligned_reads} reads passed through; {contam.aligned_to_contam} removed as contaminants",
+        sw.seconds,
+        f"{_short_count(contam.unaligned_reads)} passed, "
+        f"{_short_count(contam.aligned_to_contam)} removed",
     )
     # The trimmed FASTQ is no longer read after contam-filter consumes
     # it. Drop it now so a 1000-sample run does not fill the disk with
     # ~50% of the original input size in regenerable .fq.gz copies.
     _maybe_unlink(trimmed_fq, keep=keep_intermediates)
 
-    _log_sample_stage(sample, "mt-align", f"aligning against {args.mt_index}")
-    alignment = align_step.align_mt(
-        fastq_in=nocontam_fq,
-        mt_index=Path(args.mt_index),
-        bam_out=aligned_bam,
-        strandedness=args.library_strandedness,
-        threads=threads,
-        seed=args.seed,
-    )
-    _log_sample_stage(
+    with stage_timer(timings, sample, "mt-align") as sw:
+        alignment = align_step.align_mt(
+            fastq_in=nocontam_fq,
+            mt_index=Path(args.mt_index),
+            bam_out=aligned_bam,
+            strandedness=args.library_strandedness,
+            threads=threads,
+            seed=args.seed,
+        )
+    _log_stage_done(
         sample,
         "mt-align",
-        f"aligned {alignment.aligned}/{alignment.total_reads} reads to the mt-transcriptome",
+        sw.seconds,
+        f"aligned {_short_count(alignment.aligned)}/"
+        f"{_short_count(alignment.total_reads)} to mt-tx",
     )
     _maybe_unlink(nocontam_fq, keep=keep_intermediates)
 
-    _log_sample_stage(sample, "mapq-filter", f"keeping reads with MAPQ >= {args.mapq}")
-    mapq_kept = bam_utils.filter_bam_mapq(
-        bam_in=aligned_bam,
-        bam_out=mapq_bam,
-        mapq_threshold=args.mapq,
+    with stage_timer(timings, sample, "mapq-filter") as sw:
+        mapq_kept = bam_utils.filter_bam_mapq(
+            bam_in=aligned_bam,
+            bam_out=mapq_bam,
+            mapq_threshold=args.mapq,
+        )
+    _log_stage_done(
+        sample,
+        "mapq-filter",
+        sw.seconds,
+        f"MAPQ>={args.mapq}, kept {_short_count(mapq_kept)} reads",
     )
-    _log_sample_stage(sample, "mapq-filter", f"kept {mapq_kept} reads")
     # The pre-MAPQ BAM is identical to mapq_bam minus the filtered reads;
     # nothing downstream reads it again.
     _maybe_unlink(aligned_bam, keep=keep_intermediates)
     _maybe_unlink(aligned_bam.with_suffix(".bam.bai"), keep=keep_intermediates)
 
-    _log_sample_stage(sample, "dedup", f"strategy={resolved_dedup}")
+    with stage_timer(timings, sample, "dedup") as sw:
+        if resolved_dedup == "skip":
+            # Avoid the hardlink/copy of skip_dedup. bam_to_bed6 reads BAM
+            # content, not a path, so feeding mapq.bam directly is identical
+            # and saves the duplicated dedup.bam + dedup.bam.bai pair on
+            # every no-UMI sample.
+            dedup = dedup_step.skip_dedup_in_place(mapq_bam)
+        else:
+            dedup = dedup_step.run_dedup(
+                strategy=resolved_dedup,
+                umi_length=resolved_kit.umi_length,
+                bam_in=mapq_bam,
+                bam_out=dedup_bam,
+                log_path=dedup_log,
+                umi_tools_method=args.umi_dedup_method,
+            )
     if resolved_dedup == "skip":
-        # Avoid the hardlink/copy of skip_dedup. bam_to_bed6 reads BAM
-        # content, not a path, so feeding mapq.bam directly is identical
-        # and saves the duplicated dedup.bam + dedup.bam.bai pair on
-        # every no-UMI sample.
-        dedup = dedup_step.skip_dedup_in_place(mapq_bam)
-        _log_sample_stage(
-            sample,
-            "dedup",
-            f"strategy=skip; passing {dedup.output_reads} reads through unchanged",
-        )
+        dedup_detail = f"skip; {_short_count(dedup.output_reads)} reads through"
     else:
-        dedup = dedup_step.run_dedup(
-            strategy=resolved_dedup,
-            umi_length=resolved_kit.umi_length,
-            bam_in=mapq_bam,
-            bam_out=dedup_bam,
-            log_path=dedup_log,
-            umi_tools_method=args.umi_dedup_method,
+        dedup_detail = (
+            f"{resolved_dedup}; kept {_short_count(dedup.output_reads)}/"
+            f"{_short_count(dedup.input_reads)} reads"
         )
-        _log_sample_stage(
-            sample,
-            "dedup",
-            f"kept {dedup.output_reads}/{dedup.input_reads} reads after deduplication",
-        )
+    _log_stage_done(sample, "dedup", sw.seconds, dedup_detail)
 
-    _log_sample_stage(sample, "bam-to-bed", f"writing {bed_out.name}")
-    bam_utils.bam_to_bed6(bam_in=dedup.bam_path, bed_out=bed_out)
-    _log_sample_stage(sample, "bam-to-bed", "finished BED6 export")
+    with stage_timer(timings, sample, "bam-to-bed") as sw:
+        bam_utils.bam_to_bed6(bam_in=dedup.bam_path, bed_out=bed_out)
+    _log_stage_done(sample, "bam-to-bed", sw.seconds, f"wrote {bed_out.name}")
+
+    sample_sw.__exit__(None, None, None)
+    log_info(
+        "ALIGN",
+        f"{sample}: ✓ done in {format_duration(sample_sw.seconds)}",
+    )
 
     return counts_step.assemble_sample_counts(
         sample=sample,
@@ -754,8 +776,63 @@ def _maybe_unlink(path: Path, *, keep: bool) -> None:
 
 
 def _log_sample_stage(sample: str, stage: str, detail: str) -> None:
-    """Emit a concise, consistent per-sample status line."""
+    """Emit a concise, consistent per-sample status line.
+
+    Retained for callers that have not been migrated to the timed
+    :func:`_log_stage_done` form. New per-sample stages should prefer
+    :func:`_log_stage_done` so the duration is captured uniformly.
+    """
     log_info("ALIGN", f"{sample}: {stage} - {detail}")
+
+
+def _log_stage_done(
+    sample: str, stage: str, seconds: float, detail: str
+) -> None:
+    """Emit a single compact per-stage line with elapsed wall time.
+
+    Format::
+
+        [ALIGN] sampleA: trim          12.3s — kit=auto, kept 941k/1.0M reads
+
+    A fixed 11-char stage column and a 7-char right-aligned duration
+    keep multi-sample logs scannable at a glance.
+    """
+    duration = format_duration(seconds)
+    log_info(
+        "ALIGN",
+        f"{sample}: {stage:<11} {duration:>7} — {detail}",
+    )
+
+
+_COUNT_SUFFIXES = (("G", 1_000_000_000), ("M", 1_000_000), ("k", 1_000))
+
+
+def _short_count(n: int | float | None) -> str:
+    """Render an integer-ish count as a compact string.
+
+    ``941_382 -> '941k'``, ``1_000_000 -> '1.0M'``, ``523 -> '523'``.
+    Returns ``'-'`` for ``None`` / negatives so a missing field never
+    shows up as a confusing zero in a stage log.
+    """
+    if n is None:
+        return "-"
+    try:
+        v = float(n)
+    except (TypeError, ValueError):
+        return str(n)
+    if v < 0:
+        return "-"
+    if v < 1000:
+        return f"{int(v)}"
+    for suffix, divisor in _COUNT_SUFFIXES:
+        if v >= divisor:
+            scaled = v / divisor
+            if scaled >= 100:
+                return f"{int(round(scaled))}{suffix}"
+            if scaled >= 10:
+                return f"{scaled:.1f}{suffix}".replace(".0", "")
+            return f"{scaled:.1f}{suffix}"
+    return f"{int(v)}"
 
 
 def _resolve_per_sample(
@@ -1095,6 +1172,10 @@ def run(argv: Iterable[str]) -> int:
     completed_counter = {"done": len(rows)}
     counter_lock = threading.Lock()
     total = len(resolutions)
+    timings = StageTimings()
+    sample_counter: SampleCounter | None = None
+    wall_sw = Stopwatch()
+    wall_sw.__enter__()
 
     def _run_one(resolution: SampleResolution) -> SampleCounts:
         counts = _process_one_sample(
@@ -1102,6 +1183,7 @@ def run(argv: Iterable[str]) -> int:
             args=args,
             resolution=resolution,
             threads=per_worker_threads,
+            timings=timings,
         )
         _write_sample_done(sample_done_dir, counts)
         with counter_lock:
@@ -1114,79 +1196,111 @@ def run(argv: Iterable[str]) -> int:
             f"mt_aligned={counts.mt_aligned}, "
             f"post_dedup={counts.mt_aligned_after_dedup}).",
         )
+        if sample_counter is not None:
+            sample_counter.advance(resolution.sample)
         return counts
 
-    if effective_parallel <= 1:
-        # Serial path: preserves deterministic log ordering and avoids
-        # spinning a thread pool for the common single-sample case.
-        for index, resolution in enumerate(pending, start=1):
-            log_progress(
-                "ALIGN",
-                len(rows) + index,
-                total,
-                f"Processing sample {len(rows) + index}/{total} "
-                f"({resolution.sample}).",
-            )
-            rows.append(_run_one(resolution))
-    else:
-        # Parallel path. Submit all pending samples to a thread pool;
-        # iterate in completion order. On first exception, cancel
-        # not-yet-started futures and re-raise -- preserves the existing
-        # fail-fast semantics. Already-running futures finish naturally
-        # because we cannot interrupt subprocess.run() cleanly.
-        log_info(
-            "ALIGN",
-            f"Submitting {len(pending)} sample(s) to a "
-            f"ThreadPoolExecutor(max_workers={effective_parallel}).",
-        )
-        for resolution in pending:
-            log_info("ALIGN", f"{resolution.sample}: queued.")
-        with ThreadPoolExecutor(max_workers=effective_parallel) as executor:
-            future_to_sample: dict[Future[SampleCounts], str] = {}
-            for resolution in pending:
-                future = executor.submit(_run_one, resolution)
-                future_to_sample[future] = resolution.sample
-            try:
-                done_set, _ = wait(
-                    future_to_sample.keys(), return_when=FIRST_EXCEPTION
+    # Optional tqdm "samples done" counter for the parallel path; the
+    # serial path keeps its existing per-sample log_progress banner so
+    # tests / non-TTY runs see the same output as before.
+    counter_disabled = effective_parallel <= 1 or len(pending) == 0
+    sample_counter = SampleCounter(
+        total=len(pending),
+        desc="ALIGN samples",
+        disable=counter_disabled,
+    )
+    sample_counter.__enter__()
+    try:
+        if effective_parallel <= 1:
+            # Serial path: preserves deterministic log ordering and
+            # avoids spinning a thread pool for the common single-
+            # sample case.
+            for index, resolution in enumerate(pending, start=1):
+                log_progress(
+                    "ALIGN",
+                    len(rows) + index,
+                    total,
+                    f"Processing sample {len(rows) + index}/{total} "
+                    f"({resolution.sample}).",
                 )
-                # If a future raised, surface the first exception now;
-                # other in-flight futures will be left to finish via the
-                # executor context manager's shutdown(wait=True).
-                for future in done_set:
-                    exc = future.exception()
-                    if exc is not None:
-                        sample = future_to_sample[future]
-                        log_warning(
-                            "ALIGN",
-                            f"{sample}: failed with "
-                            f"{type(exc).__name__}: {exc}; "
-                            "cancelling pending samples.",
-                        )
-                        # Cancel any future that hasn't started yet.
-                        for pending_future in future_to_sample:
-                            if not pending_future.done():
-                                pending_future.cancel()
-                        raise exc
-                # No exception path -- collect the rest of the results.
-                for future in future_to_sample:
-                    rows.append(future.result())
-            except BaseException:
-                # Best-effort cancel + propagate. The 'with' block waits
-                # for already-running workers to finish (subprocess.run
-                # cannot be interrupted mid-call).
-                for pending_future in future_to_sample:
-                    if not pending_future.done():
-                        pending_future.cancel()
-                raise
+                rows.append(_run_one(resolution))
+        else:
+            # Parallel path. Submit all pending samples to a thread
+            # pool; iterate in completion order. On first exception,
+            # cancel not-yet-started futures and re-raise -- preserves
+            # the existing fail-fast semantics. Already-running
+            # futures finish naturally because we cannot interrupt
+            # subprocess.run() cleanly.
+            log_info(
+                "ALIGN",
+                f"Submitting {len(pending)} sample(s) to a "
+                f"ThreadPoolExecutor(max_workers={effective_parallel}).",
+            )
+            for resolution in pending:
+                log_info("ALIGN", f"{resolution.sample}: queued.")
+            with ThreadPoolExecutor(max_workers=effective_parallel) as executor:
+                future_to_sample: dict[Future[SampleCounts], str] = {}
+                for resolution in pending:
+                    future = executor.submit(_run_one, resolution)
+                    future_to_sample[future] = resolution.sample
+                try:
+                    done_set, _ = wait(
+                        future_to_sample.keys(), return_when=FIRST_EXCEPTION
+                    )
+                    # If a future raised, surface the first exception
+                    # now; other in-flight futures will be left to
+                    # finish via the executor context manager's
+                    # shutdown(wait=True).
+                    for future in done_set:
+                        exc = future.exception()
+                        if exc is not None:
+                            sample = future_to_sample[future]
+                            log_warning(
+                                "ALIGN",
+                                f"{sample}: failed with "
+                                f"{type(exc).__name__}: {exc}; "
+                                "cancelling pending samples.",
+                            )
+                            for pending_future in future_to_sample:
+                                if not pending_future.done():
+                                    pending_future.cancel()
+                            raise exc
+                    # No exception path -- collect the rest of the
+                    # results.
+                    for future in future_to_sample:
+                        rows.append(future.result())
+                except BaseException:
+                    # Best-effort cancel + propagate. The 'with' block
+                    # waits for already-running workers to finish
+                    # (subprocess.run cannot be interrupted mid-call).
+                    for pending_future in future_to_sample:
+                        if not pending_future.done():
+                            pending_future.cancel()
+                    raise
+    finally:
+        sample_counter.__exit__(None, None, None)
 
     # Deterministic sort by sample name.
     rows.sort(key=lambda row: row.sample)
     counts_step.write_read_counts_table(rows, output_dir / "read_counts.tsv")
+
+    wall_sw.__exit__(None, None, None)
     log_info(
         "ALIGN",
-        f"Finished align pipeline for {len(rows)} sample(s). Wrote "
-        "read_counts.tsv, kit_resolution.tsv, and run_settings.json to "
+        f"Finished align pipeline for {len(rows)} sample(s) in "
+        f"{format_duration(wall_sw.seconds)}. Wrote read_counts.tsv, "
+        "kit_resolution.tsv, and run_settings.json to "
         f"{output_dir}.",
     )
+
+    # Per-stage timing summary table (skipped for resume-only runs
+    # where every sample was loaded from cache and no stage timings
+    # were recorded).
+    if timings.per_sample_view():
+        for line in render_summary_lines(
+            timings,
+            wall_seconds=wall_sw.seconds,
+            samples_total=len(timings.per_sample_view()),
+        ):
+            log_info("ALIGN", line)
     return 0

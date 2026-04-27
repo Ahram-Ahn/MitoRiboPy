@@ -720,3 +720,104 @@ def test_align_parallel_failure_propagates(
     # The aggregated read_counts.tsv must NOT be written when the run
     # fails -- callers rely on its presence to gate downstream stages.
     assert not (out_dir / "read_counts.tsv").exists()
+
+
+# ---------- per-stage timing + summary --------------------------------------
+
+
+def test_align_logs_per_stage_timing_and_emits_summary(
+    tmp_path, mocked_align_step_functions
+) -> None:
+    """Each stage line carries a duration; a summary table follows the run."""
+    fq_dir = tmp_path / "fq"
+    fq_dir.mkdir()
+    for name in ("sA", "sB"):
+        (fq_dir / f"{name}.fq.gz").write_text("@r1\nAAA\n+\nIII\n")
+
+    out_dir = tmp_path / "out"
+    exit_code = cli.main(
+        [
+            "align",
+            "--kit-preset",
+            "illumina_smallrna",
+            "--fastq-dir",
+            str(fq_dir),
+            "--contam-index",
+            str(_make_fake_index(tmp_path / "c")),
+            "--mt-index",
+            str(_make_fake_index(tmp_path / "m")),
+            "--output",
+            str(out_dir),
+        ]
+    )
+    assert exit_code == 0
+
+    log_text = (out_dir / "mitoribopy.log").read_text()
+
+    # Compact per-stage lines: "[ALIGN] sample: stage <pad> <duration> — detail"
+    # The em-dash separator is the marker for the new format.
+    for sample in ("sA", "sB"):
+        for stage in ("trim", "contam-filter", "mt-align", "mapq-filter",
+                       "dedup", "bam-to-bed"):
+            assert f"{sample}: {stage}" in log_text, f"missing stage line {sample}: {stage}"
+        assert f"{sample}: ✓ done in" in log_text, f"missing per-sample done line for {sample}"
+
+    # End-of-run summary table lines.
+    assert "Timing summary (2 sample(s)" in log_text
+    assert "stage" in log_text and "total" in log_text and "max" in log_text
+    assert "wall:" in log_text
+
+
+def test_align_summary_skipped_when_all_samples_resumed(
+    tmp_path, mocked_align_step_functions
+) -> None:
+    """If --resume reloads every sample from cache, no stages run -> no summary."""
+    from mitoribopy.align._types import SampleCounts
+
+    fq_dir = tmp_path / "fq"
+    fq_dir.mkdir()
+    (fq_dir / "sA.fq.gz").write_text("")
+
+    out_dir = tmp_path / "out_resumed"
+    sample_done_dir = out_dir / ".sample_done"
+    sample_done_dir.mkdir(parents=True)
+    # Pre-seed a completion marker that matches the SampleCounts schema
+    # so resume can reload it.
+    cached = SampleCounts(
+        sample="sA",
+        total_reads=1000,
+        post_trim=850,
+        rrna_aligned=350,
+        post_rrna_filter=500,
+        mt_aligned=480,
+        unaligned_to_mt=20,
+        mt_aligned_after_mapq=470,
+        mt_aligned_after_dedup=470,
+    )
+    (sample_done_dir / "sA.json").write_text(
+        json.dumps({k: getattr(cached, k) for k in SampleCounts.__dataclass_fields__})
+    )
+
+    exit_code = cli.main(
+        [
+            "align",
+            "--kit-preset",
+            "illumina_smallrna",
+            "--fastq-dir",
+            str(fq_dir),
+            "--contam-index",
+            str(_make_fake_index(tmp_path / "c")),
+            "--mt-index",
+            str(_make_fake_index(tmp_path / "m")),
+            "--output",
+            str(out_dir),
+            "--resume",
+        ]
+    )
+    assert exit_code == 0
+
+    log_text = (out_dir / "mitoribopy.log").read_text()
+    # No stage timings recorded -> no summary block emitted.
+    assert "Timing summary" not in log_text
+    # But the resume notice is still there.
+    assert "resumed from" in log_text
