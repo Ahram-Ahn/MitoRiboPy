@@ -11,6 +11,7 @@ from mitoribopy.progress import (
     StageTimings,
     Stopwatch,
     format_duration,
+    render_step_timeline,
     render_summary_lines,
     stage_timer,
 )
@@ -202,3 +203,48 @@ def test_render_summary_lines_handles_empty() -> None:
     t = StageTimings()
     lines = render_summary_lines(t, samples_total=0)
     assert any("no stages recorded" in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# render_step_timeline (rpf-style single-pass timing)
+# ---------------------------------------------------------------------------
+
+
+def test_render_step_timeline_basic_layout() -> None:
+    lines = render_step_timeline(
+        [
+            ("step 1 init", 0.025),
+            ("step 7 downstream", 4 * 60 + 12.0),
+        ],
+        wall_seconds=4 * 60 + 30.0,
+    )
+    # Title + header + 2 rows + wall
+    assert len(lines) == 5
+    assert "Timing summary" in lines[0]
+    assert "2 step(s)" in lines[0]
+    assert "step" in lines[1] and "duration" in lines[1]
+    body = "\n".join(lines)
+    assert "step 1 init" in body
+    assert "step 7 downstream" in body
+    assert "25ms" in body
+    assert "4m 12s" in body
+    assert lines[-1].startswith("wall: ")
+
+
+def test_render_step_timeline_handles_empty() -> None:
+    assert render_step_timeline([]) == ["Timing summary: no steps recorded."]
+
+
+def test_render_step_timeline_omits_wall_when_none() -> None:
+    lines = render_step_timeline([("only step", 1.0)])
+    assert lines[-1].strip().startswith("only step")
+    assert not any(line.startswith("wall:") for line in lines)
+
+
+def test_render_step_timeline_columns_pad_to_longest_label() -> None:
+    short, long = "x", "step 7 a-very-long-name-for-padding"
+    lines = render_step_timeline([(short, 1.0), (long, 2.0)])
+    # Each non-title row should have the same byte length so the
+    # duration column lines up.
+    rows = lines[1:]  # skip title
+    assert len({len(r) for r in rows}) == 1, rows

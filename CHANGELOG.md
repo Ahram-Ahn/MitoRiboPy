@@ -8,6 +8,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- **Per-step timing in `mitoribopy rpf`.** Each of the 7 pipeline
+  steps (initialize → load read counts → unfiltered read-length QC →
+  filter BED → offset enrichment → offset selection → downstream
+  modules) is now wrapped in a stopwatch in `pipeline.runner` and
+  emits a one-line duration immediately after its existing
+  `[PIPELINE] Step K/7 OK: …` banner, e.g.
+  `[PIPELINE] step 4 filter BED: 8.7s`. After all steps complete (or
+  the pipeline bails out early), a per-step timing summary table is
+  appended to both the console and `mitoribopy.log` plus an overall
+  wall-clock line — symmetric with the per-sample timing already in
+  `mitoribopy align`. New `mitoribopy.progress.render_step_timeline`
+  helper backs the table. The internal `_emit_step_ok` / `Step K/7
+  OK: …` banner format is unchanged, so existing consumers that
+  grep the log for step completion continue to work.
 - **Per-stage timing in `mitoribopy align`.** Each per-sample stage
   (cutadapt → bowtie2 contam → mt-align → MAPQ → dedup → BAM→BED) now
   emits one compact line carrying its wall-clock duration, e.g.

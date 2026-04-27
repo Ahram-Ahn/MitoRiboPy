@@ -251,6 +251,41 @@ def render_summary_lines(
     return out
 
 
+def render_step_timeline(
+    steps: list[tuple[str, float]],
+    *,
+    wall_seconds: float | None = None,
+    title: str = "Timing summary",
+) -> list[str]:
+    """Render a single-pass step timeline as a list of log-ready lines.
+
+    For pipelines that run a fixed sequence of named steps once (e.g.
+    `mitoribopy rpf`), this is the single-column counterpart to
+    :func:`render_summary_lines` (which aggregates across multiple
+    samples). Returns one title line, one header, one row per step,
+    and an optional ``wall:`` footer.
+
+    ``steps`` is an ordered list of ``(label, seconds)`` pairs; the
+    label may be longer than the duration column and is left-aligned.
+    """
+    if not steps:
+        return [f"{title}: no steps recorded."]
+
+    label_w = max(len("step"), max(len(label) for label, _ in steps))
+    dur_w = 10
+    header = f"{'step'.ljust(label_w)}  {'duration'.rjust(dur_w)}"
+
+    out: list[str] = [f"{title} ({len(steps)} step(s)):", header]
+    for label, seconds in steps:
+        out.append(
+            f"{label.ljust(label_w)}  "
+            f"{format_duration(seconds).rjust(dur_w)}"
+        )
+    if wall_seconds is not None:
+        out.append(f"wall: {format_duration(wall_seconds)}")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Optional tqdm progress bar
 # ---------------------------------------------------------------------------

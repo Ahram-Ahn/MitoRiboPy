@@ -12,6 +12,7 @@ from ..cli.common import MitoRiboPyHelpFormatter
 from ..console import configure_file_logging, log_message
 from ..config import DEFAULT_CONFIG, load_user_config
 from ..data import available_codon_table_names
+from ..progress import Stopwatch, format_duration, render_step_timeline
 
 StatusWriter = Callable[[str], None]
 
@@ -835,22 +836,73 @@ def run_pipeline(
 
     status_writer = log_message if emit_status is None else emit_status
 
-    context = build_pipeline_context(args)
+    # Per-step timing: each step is wrapped in a Stopwatch, the duration
+    # is emitted immediately after the step's own OK banner, and a final
+    # summary table is rendered at the end. Mirrors the per-sample timing
+    # already in `mitoribopy align`.
+    step_timings: list[tuple[str, float]] = []
+    wall_sw = Stopwatch()
+    wall_sw.__enter__()
+
+    def _run_step(label: str, fn, *fargs, **fkwargs):
+        sw = Stopwatch()
+        sw.__enter__()
+        try:
+            result = fn(*fargs, **fkwargs)
+        finally:
+            sw.__exit__(None, None, None)
+            step_timings.append((label, sw.seconds))
+            status_writer(
+                f"[PIPELINE] {label}: {format_duration(sw.seconds)}"
+            )
+        return result
+
+    context = _run_step("step 1 initialize", build_pipeline_context, args)
     status_writer(
         "[PIPELINE] Step 1/"
         f"{TOTAL_PIPELINE_STEPS} OK: initialized outputs, annotations, and RPF range."
     )
 
-    load_total_read_counts(context, status_writer)
-    run_unfiltered_read_length_qc(context, status_writer)
+    _run_step(
+        "step 2 read-counts", load_total_read_counts, context, status_writer
+    )
+    _run_step(
+        "step 3 read-length QC",
+        run_unfiltered_read_length_qc,
+        context,
+        status_writer,
+    )
 
-    if not filter_bed_inputs(context, status_writer):
-        return 0
-    if not compute_offset_enrichment_step(context, status_writer):
-        return 0
+    # Steps 4 + 5 each may bail out (no rows pass the BED filter, or no
+    # offsets could be enriched). The summary still renders for the
+    # steps that did run, which is exactly what the user wants when
+    # diagnosing why a run stopped early.
+    if _run_step(
+        "step 4 filter BED", filter_bed_inputs, context, status_writer
+    ) and _run_step(
+        "step 5 offset enrichment",
+        compute_offset_enrichment_step,
+        context,
+        status_writer,
+    ):
+        _run_step(
+            "step 6 offset selection",
+            select_offsets_and_plot,
+            context,
+            status_writer,
+        )
+        _run_step(
+            "step 7 downstream",
+            run_downstream_modules,
+            context,
+            status_writer,
+        )
 
-    select_offsets_and_plot(context, status_writer)
-    run_downstream_modules(context, status_writer)
+    wall_sw.__exit__(None, None, None)
+    for line in render_step_timeline(
+        step_timings, wall_seconds=wall_sw.seconds
+    ):
+        status_writer(f"[PIPELINE] {line}")
     return 0
 
 

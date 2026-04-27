@@ -393,7 +393,30 @@ def test_end_to_end_cli_smoke_generates_codon_usage_outputs(tmp_path: Path) -> N
     fp_cols = pd.read_csv(footprint_csv, nrows=1).columns.tolist()
     assert fp_cols == ["Position", "Nucleotide", "A_site", "P_site"]
     assert log_file.exists()
-    assert "[PIPELINE] Step 7/7" in log_file.read_text(encoding="utf-8")
+    log_text = log_file.read_text(encoding="utf-8")
+    assert "[PIPELINE] Step 7/7" in log_text
+
+    # Per-step timing lines: each "step K <name>: <duration>" line is
+    # emitted by the timed wrapper around every pipeline step. The
+    # first three steps always run; later steps may bail out early on
+    # pathological fixtures, but never on the smoke fixture.
+    for step_label in (
+        "step 1 initialize",
+        "step 2 read-counts",
+        "step 3 read-length QC",
+        "step 4 filter BED",
+        "step 5 offset enrichment",
+        "step 6 offset selection",
+        "step 7 downstream",
+    ):
+        assert f"[PIPELINE] {step_label}: " in log_text, (
+            f"missing timing line for: {step_label}"
+        )
+
+    # End-of-run summary table.
+    assert "Timing summary (" in log_text
+    assert "duration" in log_text
+    assert "wall:" in log_text
 
     codon_df = pd.read_csv(codon_usage_csv)
     codon_col = next((col for col in codon_df.columns if col.lower() == "codon"), None)
