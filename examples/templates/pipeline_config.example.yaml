@@ -103,16 +103,35 @@ align:
                                            # whose .sample_done/<sample>.json marker exists.
 
   # --- Concurrency ---------------------------------------------------------
+  # threads: 8                             # forwarded to cutadapt + bowtie2.
+                                           # `mitoribopy all --threads N` is
+                                           # NOT auto-forwarded into the per-
+                                           # stage argv -- set it under each
+                                           # stage section instead.
   # max_parallel_samples: 1                # >1 runs samples concurrently; the
-                                           # global --threads value is divided
+                                           # `threads:` value above is divided
                                            # across workers (max(1, threads // N)
                                            # threads per tool). The joint
                                            # `mitoribopy rpf` stage is unaffected.
+
+  # --- Timing output ------------------------------------------------------
+  # No knobs here -- timing is on by default. Each per-sample stage
+  # (cutadapt, bowtie2 contam, mt-align, MAPQ, dedup, BAM->BED) logs
+  # one compact line carrying its wall-clock duration to both the
+  # console and `<output>/align/mitoribopy.log`, e.g.
+  #     [ALIGN] sampleA: trim          12.3s — kit=auto, kept 941k/1.0M reads
+  # After the run, an [ALIGN] Timing summary table appends per-stage
+  # total / mean / max across all samples plus an overall wall line.
 
 
 # ============================================================================
 # rpf
 # ============================================================================
+# Per-step timing is on by default. Each of the 7 rpf steps emits one
+# compact duration line right after its `[PIPELINE] Step K/7 OK: ...`
+# banner, e.g. `[PIPELINE] step 4 filter BED: 8.7s`. After the run, a
+# [PIPELINE] Timing summary table is appended to <output>/rpf/mitoribopy.log
+# with a per-step duration column and an overall wall line.
 rpf:
 
   # --- Core inputs (REQUIRED) -----------------------------------------------

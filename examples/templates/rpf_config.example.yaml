@@ -19,6 +19,14 @@
 # Note: for the end-to-end orchestrator (`mitoribopy all --config ...`)
 # you want pipeline_config.example.yaml instead, which uses the
 # three-section align: / rpf: / rnaseq: shape.
+#
+# Per-step timing: each of the 7 rpf steps (initialize -> read counts ->
+# read-length QC -> filter BED -> offset enrichment -> offset selection
+# -> downstream modules) emits a one-line duration immediately after
+# its `[PIPELINE] Step K/7 OK: ...` banner. After the run, an end-of-
+# run [PIPELINE] Timing summary table appears in mitoribopy.log with a
+# per-step duration column and an overall wall line. No extra config
+# is needed -- timing is on by default.
 
 # --- Core inputs / outputs ---------------------------------------------
 # These are usually passed on the command line because they vary per
