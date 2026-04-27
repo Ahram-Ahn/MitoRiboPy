@@ -30,6 +30,15 @@ align:
   mapq: 0                            # mock data has no MAPQ signal
   dedup_strategy: auto
 
+  # threads: 8                       # forwarded to cutadapt + bowtie2.
+  # max_parallel_samples: 2          # >1 runs samples concurrently. With
+                                     # threads divided across workers, total
+                                     # CPU stays around `threads`. Default 1.
+                                     # Each per-sample stage logs its wall
+                                     # time, and mock_run/align/mitoribopy.log
+                                     # ends with an [ALIGN] Timing summary
+                                     # table (total / mean / max per stage).
+
   samples:
     - name: sample_UMI
       kit_preset: illumina_truseq_umi

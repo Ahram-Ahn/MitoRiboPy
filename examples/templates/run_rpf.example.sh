@@ -177,3 +177,6 @@ echo "  ${OUTPUT_DIR}/codon_correlation/{p_site,a_site}/<base>_vs_<sample>_*.{sv
 echo "                                        # publication-quality codon scatters"
 echo "  ${OUTPUT_DIR}/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph"
 echo "                                        # IGV-loadable footprint density tracks"
+echo "  ${OUTPUT_DIR}/mitoribopy.log          # per-step timing for the 7 rpf steps"
+echo "                                        # plus the end-of-run [PIPELINE] Timing"
+echo "                                        # summary (per-step duration + wall)."

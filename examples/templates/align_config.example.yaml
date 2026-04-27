@@ -86,3 +86,12 @@ log_level: INFO                        # DEBUG | INFO | WARNING | ERROR
 # max_parallel_samples: 1              # >1 runs samples concurrently; the global
                                        # --threads value is divided across workers
                                        # (each tool gets max(1, threads // N) threads).
+
+# --- Timing output ----------------------------------------------------
+# Per-stage timing is on by default and needs no config knob. Each
+# per-sample stage (cutadapt, bowtie2 contam, mt-align, MAPQ, dedup,
+# BAM->BED) logs one compact line carrying its wall duration to both
+# console and `<output>/mitoribopy.log`, e.g.
+#     [ALIGN] sampleA: trim          12.3s -- kit=auto, kept 941k/1.0M reads
+# After the run, an [ALIGN] Timing summary table appends per-stage
+# total / mean / max across all samples plus an overall wall line.

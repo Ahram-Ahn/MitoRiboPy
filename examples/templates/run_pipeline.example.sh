@@ -53,7 +53,12 @@ CONDITION_A="control"
 CONDITION_B="knockdown"
 
 # Compute knobs.
-THREADS=8
+THREADS=8                 # global thread budget for cutadapt + bowtie2.
+MAX_PARALLEL_SAMPLES=4    # align-only: >1 runs samples concurrently; THREADS
+                          # is auto-divided across workers (each tool gets
+                          # max(1, THREADS // MAX_PARALLEL_SAMPLES) threads).
+                          # Set to 1 for the pre-parallelism serial behaviour.
+                          # The joint `mitoribopy rpf` stage is unaffected.
 LOG_LEVEL=INFO            # DEBUG | INFO | WARNING | ERROR
 RUN_RNASEQ=false          # set true to run the optional translation-efficiency stage
 
@@ -110,6 +115,16 @@ ALIGN_OPTS=(
   # --- Intermediate files / resume --------------------------------------
   # --keep-intermediates           # default off; keep trimmed.fq.gz / nocontam.fq.gz / pre-MAPQ .bam
   # --resume                       # skip samples whose .sample_done/<sample>.json marker exists
+
+  # --- Execution / concurrency -----------------------------------------
+  --max-parallel-samples "${MAX_PARALLEL_SAMPLES}"
+                                   # Run multiple samples concurrently via a
+                                   # ThreadPoolExecutor. THREADS is divided
+                                   # across workers, so total CPU stays
+                                   # around ${THREADS} regardless of N.
+                                   # Resume-cached samples skip the pool.
+                                   # Default 1 (serial). The joint rpf stage
+                                   # is unaffected by this flag.
 
   # --- Shared --------------------------------------------------------------
   --threads "${THREADS}"
@@ -266,6 +281,10 @@ echo
 echo "Key files to look at first:"
 echo "  ${OUTPUT_DIR}/align/kit_resolution.tsv      # per-sample kit + dedup decisions"
 echo "  ${OUTPUT_DIR}/align/read_counts.tsv         # per-stage drop-off invariants"
+echo "  ${OUTPUT_DIR}/align/mitoribopy.log          # per-stage timing per sample +"
+echo "                                              # end-of-run [ALIGN] Timing summary"
+echo "  ${OUTPUT_DIR}/rpf/mitoribopy.log            # per-step timing for rpf +"
+echo "                                              # end-of-run [PIPELINE] Timing summary"
 echo "  ${OUTPUT_DIR}/rpf/offset_diagnostics/plots/offset_drift_*.svg"
 echo "  ${OUTPUT_DIR}/rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv"
 echo "                                              # exact offsets row applied per sample"

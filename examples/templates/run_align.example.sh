@@ -39,7 +39,12 @@ MT_INDEX="${PROJECT_ROOT}/input_data/indexes/mt_tx"
 OUTPUT_DIR="${PROJECT_ROOT}/results/align"
 
 # Compute knobs.
-THREADS=8
+THREADS=8                 # global thread budget for cutadapt + bowtie2.
+MAX_PARALLEL_SAMPLES=4    # >1 runs samples concurrently in a thread pool;
+                          # THREADS is auto-divided across workers, so each
+                          # tool sees max(1, THREADS // MAX_PARALLEL_SAMPLES)
+                          # threads (here: 4 workers x 2 threads = ~8 cores).
+                          # Set to 1 for the original serial behaviour.
 LOG_LEVEL=INFO            # DEBUG | INFO | WARNING | ERROR
 
 
@@ -96,6 +101,17 @@ ALIGN_OPTS=(
   # --keep-intermediates           # default off; keep trimmed.fq.gz / nocontam.fq.gz / pre-MAPQ .bam
   # --resume                       # skip samples whose .sample_done/<sample>.json marker exists
 
+  # --- Execution / concurrency -----------------------------------------
+  --max-parallel-samples "${MAX_PARALLEL_SAMPLES}"
+                                   # Run multiple samples concurrently via a
+                                   # ThreadPoolExecutor. Per-sample work is
+                                   # independent (cutadapt -> bowtie2 ->
+                                   # MAPQ -> dedup -> BAM->BED). Resume-cached
+                                   # samples short-circuit the pool. Failures
+                                   # are fail-fast: pending futures are
+                                   # cancelled and the first exception is
+                                   # re-raised. Default 1 (serial).
+
   # --- Shared --------------------------------------------------------------
   --threads "${THREADS}"
   --log-level "${LOG_LEVEL}"
@@ -118,3 +134,6 @@ echo "                                        #   rrna_aligned + post_rrna_filte
 echo "                                        #   mt_aligned   + unaligned_to_mt == post_rrna_filter"
 echo "  ${OUTPUT_DIR}/bed/<sample>.bed        # strand-aware BED6 -- input to mitoribopy rpf"
 echo "  ${OUTPUT_DIR}/run_settings.json       # full per-sample resolution + tool versions"
+echo "  ${OUTPUT_DIR}/mitoribopy.log          # per-stage timing per sample, plus the"
+echo "                                        # end-of-run [ALIGN] Timing summary table"
+echo "                                        # (total / mean / max per stage + wall)."
