@@ -32,6 +32,8 @@ from .reference_gate import (
 )
 from .te import compute_delta_te, compute_te
 from .counts import load_ribo_counts
+from .fastq_pairing import FastqSample, detect_samples, enumerate_fastqs
+from .umi_detect import UmiDetectionResult, detect_umi
 
 __all__ = [
     "DE_COLUMN_ALIASES",
@@ -39,17 +41,22 @@ __all__ = [
     "DeColumnMap",
     "DeFormat",
     "DeTable",
+    "FastqSample",
     "GENE_ID_CONVENTIONS",
     "GeneIdConvention",
     "HUMAN_MT_MRNAS",
     "MtGene",
     "ReferenceMismatchError",
     "TeRow",
+    "UmiDetectionResult",
     "YEAST_MT_MRNAS",
     "compute_delta_te",
     "compute_reference_checksum",
     "compute_te",
     "detect_de_format",
+    "detect_samples",
+    "detect_umi",
+    "enumerate_fastqs",
     "load_de_table",
     "load_ribo_counts",
     "match_mt_mrnas",

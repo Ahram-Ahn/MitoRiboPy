@@ -52,6 +52,9 @@ dev = [
 toml-py310 = [
   "tomli>=2.0;python_version<'3.11'",
 ]
+fastq = [
+  "pydeseq2>=0.4",
+]
 
 [project.scripts]
 mitoribopy = "mitoribopy.cli:main"
