@@ -19,6 +19,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
+from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
@@ -370,6 +372,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    execution = parser.add_argument_group("Execution")
+    execution.add_argument(
+        "--max-parallel-samples",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Number of samples to process concurrently. With --threads T, "
+            "each worker uses max(1, T // N) tool threads so total CPU "
+            "use stays around T. Default 1 (serial; backward-compatible). "
+            "Per-sample work (cutadapt + bowtie2 + dedup + BAM->BED) is "
+            "embarrassingly parallel; the joint 'mitoribopy rpf' stage is "
+            "unaffected."
+        ),
+    )
+
     return parser
 
 
@@ -522,11 +540,25 @@ def _write_run_settings(
     return path
 
 
+def _per_worker_threads(threads: int | None, max_parallel: int) -> int:
+    """Divide the global --threads budget across parallel sample workers.
+
+    With --threads T and --max-parallel-samples N, each worker's external
+    tools (cutadapt / bowtie2 / umi_tools) get ``max(1, T // N)`` threads
+    so total CPU use stays around T regardless of N. Floors at 1 so a
+    pathological T < N does not produce 0-thread tool invocations.
+    """
+    t = int(threads) if threads is not None else 1
+    n = max(1, int(max_parallel))
+    return max(1, t // n)
+
+
 def _process_one_sample(
     *,
     output_dir: Path,
     args: argparse.Namespace,
     resolution: SampleResolution,
+    threads: int,
 ) -> SampleCounts:
     sample = resolution.sample
     fastq_in = resolution.fastq
@@ -549,7 +581,7 @@ def _process_one_sample(
     dedup_log = deduped_dir / f"{sample}.dedup.log"
     bed_out = bed_dir / f"{sample}.bed"
 
-    threads = getattr(args, "threads", None) or 1
+    threads = max(1, int(threads))
 
     _log_sample_stage(
         sample,
@@ -1026,15 +1058,16 @@ def run(argv: Iterable[str]) -> int:
     if resume_active:
         sample_done_dir.mkdir(parents=True, exist_ok=True)
 
-    rows: list[SampleCounts] = []
-    for index, resolution in enumerate(resolutions, start=1):
-        log_progress(
-            "ALIGN",
-            index,
-            len(resolutions),
-            f"Processing sample {index}/{len(resolutions)} ({resolution.sample}).",
-        )
+    requested_threads = getattr(args, "threads", None) or 1
+    max_parallel = max(1, int(getattr(args, "max_parallel_samples", 1) or 1))
+    per_worker_threads = _per_worker_threads(requested_threads, max_parallel)
 
+    # Split resolutions into resume-cached (instantly available) and
+    # pending (need real work). Cached samples short-circuit the executor
+    # so they don't occupy a worker slot for what is just a JSON read.
+    rows: list[SampleCounts] = []
+    pending: list[SampleResolution] = []
+    for resolution in resolutions:
         cached = (
             _load_sample_done(sample_done_dir, resolution.sample)
             if resume_active
@@ -1047,20 +1080,105 @@ def run(argv: Iterable[str]) -> int:
                 f".sample_done/{resolution.sample}.json (already complete).",
             )
             rows.append(cached)
-            continue
+        else:
+            pending.append(resolution)
 
+    effective_parallel = min(max_parallel, max(1, len(pending)))
+    log_info(
+        "ALIGN",
+        f"Concurrency: {effective_parallel} parallel sample(s) x "
+        f"{per_worker_threads} thread(s) per tool "
+        f"(--threads={requested_threads}, --max-parallel-samples={max_parallel}, "
+        f"{len(pending)} sample(s) to run, {len(rows)} resumed).",
+    )
+
+    completed_counter = {"done": len(rows)}
+    counter_lock = threading.Lock()
+    total = len(resolutions)
+
+    def _run_one(resolution: SampleResolution) -> SampleCounts:
         counts = _process_one_sample(
             output_dir=output_dir,
             args=args,
             resolution=resolution,
+            threads=per_worker_threads,
         )
         _write_sample_done(sample_done_dir, counts)
-        rows.append(counts)
+        with counter_lock:
+            completed_counter["done"] += 1
+            done = completed_counter["done"]
         log_info(
             "ALIGN",
-            f"{resolution.sample}: complete (post_trim={counts.post_trim}, "
-            f"mt_aligned={counts.mt_aligned}, post_dedup={counts.mt_aligned_after_dedup}).",
+            f"{resolution.sample}: complete ({done}/{total}) "
+            f"(post_trim={counts.post_trim}, "
+            f"mt_aligned={counts.mt_aligned}, "
+            f"post_dedup={counts.mt_aligned_after_dedup}).",
         )
+        return counts
+
+    if effective_parallel <= 1:
+        # Serial path: preserves deterministic log ordering and avoids
+        # spinning a thread pool for the common single-sample case.
+        for index, resolution in enumerate(pending, start=1):
+            log_progress(
+                "ALIGN",
+                len(rows) + index,
+                total,
+                f"Processing sample {len(rows) + index}/{total} "
+                f"({resolution.sample}).",
+            )
+            rows.append(_run_one(resolution))
+    else:
+        # Parallel path. Submit all pending samples to a thread pool;
+        # iterate in completion order. On first exception, cancel
+        # not-yet-started futures and re-raise -- preserves the existing
+        # fail-fast semantics. Already-running futures finish naturally
+        # because we cannot interrupt subprocess.run() cleanly.
+        log_info(
+            "ALIGN",
+            f"Submitting {len(pending)} sample(s) to a "
+            f"ThreadPoolExecutor(max_workers={effective_parallel}).",
+        )
+        for resolution in pending:
+            log_info("ALIGN", f"{resolution.sample}: queued.")
+        with ThreadPoolExecutor(max_workers=effective_parallel) as executor:
+            future_to_sample: dict[Future[SampleCounts], str] = {}
+            for resolution in pending:
+                future = executor.submit(_run_one, resolution)
+                future_to_sample[future] = resolution.sample
+            try:
+                done_set, _ = wait(
+                    future_to_sample.keys(), return_when=FIRST_EXCEPTION
+                )
+                # If a future raised, surface the first exception now;
+                # other in-flight futures will be left to finish via the
+                # executor context manager's shutdown(wait=True).
+                for future in done_set:
+                    exc = future.exception()
+                    if exc is not None:
+                        sample = future_to_sample[future]
+                        log_warning(
+                            "ALIGN",
+                            f"{sample}: failed with "
+                            f"{type(exc).__name__}: {exc}; "
+                            "cancelling pending samples.",
+                        )
+                        # Cancel any future that hasn't started yet.
+                        for pending_future in future_to_sample:
+                            if not pending_future.done():
+                                pending_future.cancel()
+                        raise exc
+                # No exception path -- collect the rest of the results.
+                for future in future_to_sample:
+                    rows.append(future.result())
+            except BaseException:
+                # Best-effort cancel + propagate. The 'with' block waits
+                # for already-running workers to finish (subprocess.run
+                # cannot be interrupted mid-call).
+                for pending_future in future_to_sample:
+                    if not pending_future.done():
+                        pending_future.cancel()
+                raise
 
     # Deterministic sort by sample name.
     rows.sort(key=lambda row: row.sample)

@@ -31,7 +31,7 @@ Top-level flags: `--version, -V`, `--help, -h`.
 
 - `--config PATH` — JSON / YAML / TOML configuration file; CLI flags win on conflict.
 - `--dry-run` — print planned actions and exit 0 without executing.
-- `--threads N` — exports `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `MITORIBOPY_THREADS`.
+- `--threads N` — exports `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `MITORIBOPY_THREADS`. Combined with `--max-parallel-samples M` on `align`, each worker's tool sees `max(1, N // M)` threads so total CPU stays ≈ N.
 - `--log-level {DEBUG,INFO,WARNING,ERROR}` (default `INFO`).
 
 ---
@@ -77,6 +77,10 @@ Top-level flags: `--version, -V`, `--help, -h`.
 
 - `--keep-intermediates` (default off) — keep `trimmed/<sample>.trimmed.fq.gz`, `contam_filtered/<sample>.nocontam.fq.gz`, and the pre-MAPQ `aligned/<sample>.bam`. Without this flag they are deleted as soon as the next step consumes them.
 - `--resume` — skip samples whose `<output>/.sample_done/<sample>.json` marker is already present (auto-set by `mitoribopy all --resume` when the stage's `read_counts.tsv` is missing).
+
+### Execution / concurrency
+
+- `--max-parallel-samples N` (default `1`, serial) — number of samples to align concurrently in a thread pool. Per-sample work (cutadapt → bowtie2 → MAPQ → dedup → BAM→BED) is independent across samples; resume-cached samples skip the pool. With `--threads T`, each worker's tools get `max(1, T // N)` threads — total CPU stays ≈ T regardless of N. The joint `mitoribopy rpf` stage is unaffected (offset selection is pooled across all samples). On any per-sample failure the run is fail-fast: pending futures are cancelled and the first exception is re-raised.
 
 ---
 

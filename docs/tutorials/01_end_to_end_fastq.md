@@ -138,6 +138,26 @@ The dry-run prints the exact argv each subcommand will receive, and auto-wires `
 $ mitoribopy all --config pipeline_config.yaml --output results/ --threads 8
 ```
 
+For multi-sample batches you can align several samples concurrently. `mitoribopy all` does not take `--max-parallel-samples` directly — set it under the `align:` section of your YAML (it is forwarded to the align stage automatically):
+
+```yaml
+align:
+  # ... existing keys ...
+  max_parallel_samples: 4
+```
+
+Then re-run with the same `--threads 8`:
+
+```bash
+$ mitoribopy all --config pipeline_config.yaml --output results/ --threads 8
+```
+
+`--threads` is auto-divided across workers (here, 4 workers × 2 threads/tool ≈ 8 cores total), and the joint `rpf` stage stays serial because offset selection is pooled across all samples. If you only want to run the standalone align stage, the same flag is available on the CLI:
+
+```bash
+$ mitoribopy align --max-parallel-samples 4 --threads 8 ...
+```
+
 On completion, inspect:
 
 ```text

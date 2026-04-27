@@ -373,6 +373,13 @@ align:
   seed: 42
   dedup_strategy: auto            # auto | umi-tools | skip
 
+  # Concurrency. >1 runs samples in parallel; the global --threads value
+  # is divided across workers (each tool gets max(1, threads // N)
+  # threads), so total CPU use stays around `threads`. The joint
+  # `mitoribopy rpf` stage is unaffected -- offsets are selected across
+  # all samples and remain serial there.
+  # max_parallel_samples: 1
+
   # Per-sample overrides (mixed-UMI batches). Use this when each FASTQ
   # has a different UMI length / position / kit. The 'name' field must
   # match the FASTQ basename with .fq[.gz] / .fastq[.gz] stripped.

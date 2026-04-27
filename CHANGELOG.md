@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- **`--max-parallel-samples N` for `mitoribopy align`.** Run multiple
+  samples concurrently in a `ThreadPoolExecutor`. Default `1` (serial,
+  fully backward-compatible). When combined with `--threads T`, each
+  worker's external tools (cutadapt, bowtie2, umi_tools) get
+  `max(1, T // N)` threads, so total CPU use stays ≈ T regardless of
+  N — set `--threads` to your total CPU budget and `--max-parallel-samples`
+  to how many samples should run side-by-side. Resume-cached samples
+  short-circuit the pool. On any per-sample failure the run is
+  fail-fast: pending futures are cancelled and the first exception is
+  re-raised, matching the previous serial behaviour. The joint
+  `mitoribopy rpf` stage is unaffected — offset selection and
+  `rpf_counts.tsv` aggregate across all samples and remain serial.
+  Also wired through `mitoribopy all` via the `align.max_parallel_samples`
+  YAML key.
+
 ## [0.4.5] - 2026-04-25
 
 ### Added

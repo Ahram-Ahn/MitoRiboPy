@@ -83,3 +83,6 @@ resume: false                          # set true to skip samples whose
 # --- Shared (logging / threads) ---------------------------------------
 log_level: INFO                        # DEBUG | INFO | WARNING | ERROR
 # threads: 8                           # forwarded to bowtie2 + cutadapt + BLAS env vars
+# max_parallel_samples: 1              # >1 runs samples concurrently; the global
+                                       # --threads value is divided across workers
+                                       # (each tool gets max(1, threads // N) threads).

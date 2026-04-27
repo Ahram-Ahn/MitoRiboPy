@@ -533,3 +533,190 @@ def test_end_to_end_picks_up_umi_dedup_when_umi_present(
     assert settings["dedup_strategy"] == "umi-tools"
     assert settings["per_sample"][0]["umi_length"] == 8
     assert settings["per_sample"][0]["applied_kit"] == "illumina_truseq_umi"
+
+
+# ---------- --max-parallel-samples concurrency ----------------------------
+
+
+def test_max_parallel_samples_default_is_one() -> None:
+    parser = build_parser()
+    ns = parser.parse_args([])
+    assert ns.max_parallel_samples == 1
+
+
+def test_max_parallel_samples_parses_value() -> None:
+    parser = build_parser()
+    ns = parser.parse_args(["--max-parallel-samples", "4"])
+    assert ns.max_parallel_samples == 4
+
+
+def test_max_parallel_samples_help_mentions_threads_division() -> None:
+    parser = build_parser()
+    help_text = parser.format_help()
+    assert "--max-parallel-samples" in help_text
+    # The help should explain that --threads is divided across workers,
+    # so a user setting both flags doesn't double-allocate CPU.
+    assert "T // N" in help_text or "threads // N" in help_text
+
+
+@pytest.mark.parametrize(
+    "threads, max_parallel, expected",
+    [
+        (8, 4, 2),
+        (8, 1, 8),
+        (1, 4, 1),  # threads < max_parallel -> floor at 1
+        (7, 4, 1),  # integer-division floor
+        (None, 4, 1),  # threads=None falls back to 1
+        (None, 1, 1),
+        (16, 4, 4),
+        (3, 2, 1),
+    ],
+)
+def test_per_worker_threads_divides_budget_across_workers(
+    threads, max_parallel, expected
+) -> None:
+    from mitoribopy.cli.align import _per_worker_threads
+
+    assert _per_worker_threads(threads, max_parallel) == expected
+
+
+def test_align_parallel_completes_all_samples(
+    tmp_path, mocked_align_step_functions
+) -> None:
+    """End-to-end run with 4 mocked samples and --max-parallel-samples 2.
+
+    All per-sample BED files and the aggregated read_counts.tsv must
+    match the serial reference run; only execution order changes.
+    """
+    fq_dir = tmp_path / "fq"
+    fq_dir.mkdir()
+    sample_names = ["sA", "sB", "sC", "sD"]
+    for name in sample_names:
+        (fq_dir / f"{name}.fq.gz").write_text("@r1\nAAA\n+\nIII\n")
+
+    contam_idx = _make_fake_index(tmp_path / "idx" / "c")
+    mt_idx = _make_fake_index(tmp_path / "idx" / "m")
+    out_dir = tmp_path / "out"
+
+    exit_code = cli.main(
+        [
+            "align",
+            "--kit-preset",
+            "illumina_smallrna",
+            "--fastq-dir",
+            str(fq_dir),
+            "--contam-index",
+            str(contam_idx),
+            "--mt-index",
+            str(mt_idx),
+            "--output",
+            str(out_dir),
+            "--threads",
+            "8",
+            "--max-parallel-samples",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    for name in sample_names:
+        assert (out_dir / "bed" / f"{name}.bed").exists(), f"missing bed/{name}.bed"
+        assert (out_dir / "aligned" / f"{name}.mapq.bam").exists()
+
+    counts_lines = (out_dir / "read_counts.tsv").read_text().splitlines()
+    # Header + one row per sample, sorted by sample name.
+    assert counts_lines[0].split("\t")[0] == "sample"
+    sample_col = [line.split("\t")[0] for line in counts_lines[1:]]
+    assert sample_col == sorted(sample_names)
+
+
+def test_align_parallel_passes_divided_threads_to_tools(
+    tmp_path, monkeypatch, mocked_align_step_functions
+) -> None:
+    """With --threads 8 --max-parallel-samples 4, each tool sees threads=2."""
+    seen_threads: list[int] = []
+
+    real_cutadapt = align_cli.trim_step.run_cutadapt
+
+    def capturing_cutadapt(*, threads, **kwargs):
+        seen_threads.append(threads)
+        return real_cutadapt(threads=threads, **kwargs)
+
+    monkeypatch.setattr(
+        align_cli.trim_step, "run_cutadapt", capturing_cutadapt
+    )
+
+    fq_dir = tmp_path / "fq"
+    fq_dir.mkdir()
+    for name in ("a", "b", "c", "d"):
+        (fq_dir / f"{name}.fq.gz").write_text("")
+
+    out_dir = tmp_path / "out"
+    exit_code = cli.main(
+        [
+            "align",
+            "--kit-preset",
+            "illumina_smallrna",
+            "--fastq-dir",
+            str(fq_dir),
+            "--contam-index",
+            str(_make_fake_index(tmp_path / "c")),
+            "--mt-index",
+            str(_make_fake_index(tmp_path / "m")),
+            "--output",
+            str(out_dir),
+            "--threads",
+            "8",
+            "--max-parallel-samples",
+            "4",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(seen_threads) == 4
+    # 8 // 4 = 2 per worker.
+    assert all(t == 2 for t in seen_threads), seen_threads
+
+
+def test_align_parallel_failure_propagates(
+    tmp_path, monkeypatch, mocked_align_step_functions
+) -> None:
+    """If one sample raises, the run exits non-zero (fail-fast)."""
+    real_align_mt = align_cli.align_step.align_mt
+
+    def selective_align(*, fastq_in, **kwargs):
+        # Sample 'b' blows up in alignment; others succeed.
+        if "b.nocontam" in str(fastq_in) or str(fastq_in).endswith("b.fq.gz"):
+            raise RuntimeError("synthetic alignment failure for sample b")
+        return real_align_mt(fastq_in=fastq_in, **kwargs)
+
+    monkeypatch.setattr(align_cli.align_step, "align_mt", selective_align)
+
+    fq_dir = tmp_path / "fq"
+    fq_dir.mkdir()
+    for name in ("a", "b", "c", "d"):
+        (fq_dir / f"{name}.fq.gz").write_text("")
+
+    out_dir = tmp_path / "out_fail"
+    with pytest.raises(RuntimeError, match="synthetic alignment failure"):
+        cli.main(
+            [
+                "align",
+                "--kit-preset",
+                "illumina_smallrna",
+                "--fastq-dir",
+                str(fq_dir),
+                "--contam-index",
+                str(_make_fake_index(tmp_path / "c")),
+                "--mt-index",
+                str(_make_fake_index(tmp_path / "m")),
+                "--output",
+                str(out_dir),
+                "--max-parallel-samples",
+                "2",
+            ]
+        )
+
+    # The aggregated read_counts.tsv must NOT be written when the run
+    # fails -- callers rely on its presence to gate downstream stages.
+    assert not (out_dir / "read_counts.tsv").exists()

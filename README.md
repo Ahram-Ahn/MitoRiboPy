@@ -281,6 +281,8 @@ mitoribopy all --config pipeline_config.yaml --output results/ --threads 8
 
 This is the canonical invocation. The YAML is self-documenting, version-controllable, and loads exactly the same way the CLI reads it programmatically.
 
+For multi-sample batches, add `max_parallel_samples: N` under the `align:` section of your YAML to align samples concurrently — `--threads` is auto-divided across workers so total CPU use stays ≈ `--threads`. (`mitoribopy all` does not take `--max-parallel-samples` directly at the CLI; the flag is read from the YAML and forwarded to the align stage. The standalone `mitoribopy align` subcommand does accept it on the CLI — see [Example B](#b-just-the-align-stage-on-a-directory-of-fastqs) below.) The joint `rpf` stage stays serial (offset selection is a pooled-across-samples computation). See [Execution / concurrency](#execution--concurrency) under the `mitoribopy align` reference.
+
 ### Alternative: bash wrapper for batch / cluster jobs
 
 When every flag should be visible in the job script (e.g. for a cluster scheduler that captures stdout/stderr per task), wrap the YAML invocation in a thin shell wrapper:
@@ -369,7 +371,7 @@ Every subcommand inherits these shared options:
 |---|---|---|
 | `--config PATH` | — | Configuration file (.json, .yaml, .yml, or .toml). CLI flags override values from the file. |
 | `--dry-run` | off | Print planned actions and exit 0 without executing. |
-| `--threads N` | 1 | Preferred thread count; exports `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `MITORIBOPY_THREADS`. |
+| `--threads N` | 1 | Preferred thread count; exports `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `MITORIBOPY_THREADS`. When combined with `--max-parallel-samples M` (align only), each parallel worker's external tools see `max(1, N // M)` threads so the total CPU budget stays ≈ N. |
 | `--log-level {DEBUG,INFO,WARNING,ERROR}` | `INFO` | Python logging level for console output. |
 
 ---
@@ -452,6 +454,25 @@ The per-sample resolution table (sample, detected_kit, applied_kit, match_rate, 
 |---|---|---|
 | `--dedup-strategy {auto,umi-tools,skip}` | `auto` | Per-sample resolved. `auto` → `umi-tools` for UMI samples, `skip` otherwise. When the resolved strategy is `skip`, the orchestrator does **not** write a duplicate `deduped/<sample>.dedup.bam` — the upstream `aligned/<sample>.mapq.bam` is fed straight into BED conversion. The legacy `mark-duplicates` (picard) option was removed in v0.4.5 because coordinate-only dedup destroys codon-occupancy signal on mt-Ribo-seq libraries (see [docs/validation/taco1_ko_regression.md](docs/validation/taco1_ko_regression.md) for the empirical evidence). |
 | `--umi-dedup-method {unique,percentile,cluster,adjacency,directional}` | `unique` | umi_tools `--method`. `unique` collapses only on exact coord+UMI match; other methods may over-collapse in low-complexity mt regions. |
+
+#### Execution / concurrency
+
+Per-sample work in `align` (cutadapt → bowtie2 → MAPQ → dedup → BAM→BED) is independent across samples — each sample writes only to its own per-sample paths. `--max-parallel-samples N` runs that work concurrently in a thread pool while the joint `mitoribopy rpf` stage stays serial (offsets are selected across all samples and aggregate `rpf_counts.tsv` requires a single pass).
+
+| Flag | Default | Description |
+|---|---|---|
+| `--max-parallel-samples N` | `1` | Number of samples to align concurrently. With `--threads T`, each worker's external tools (cutadapt, bowtie2, umi_tools) get `max(1, T // N)` threads, so total CPU use stays ≈ T regardless of N. Default `1` = serial (current behaviour, fully backward-compatible). Resume-cached samples skip the pool entirely. On any per-sample failure the run is fail-fast: pending futures are cancelled and the first exception is re-raised. |
+
+**Sizing guidance.** A reasonable starting point on a workstation or HPC node: pick `T` = total CPU budget (cores you can use), then choose `N` so each worker still gets ≥ 2 threads — i.e. `N ≤ T / 2`. Examples:
+
+| Cores available | Suggested `--threads` | Suggested `--max-parallel-samples` | Per-tool threads |
+|---|---|---|---|
+| 8 | 8 | 4 | 2 |
+| 16 | 16 | 4 | 4 |
+| 16 | 16 | 8 | 2 |
+| 32 | 32 | 8 | 4 |
+
+I/O-bound stages (FASTQ gzip read, BAM write) can saturate disk bandwidth before they saturate CPU; if your alignment outputs live on slow networked storage, smaller `N` (more threads per worker, fewer concurrent samples) often wins over larger `N`. The joint `rpf` stage is unaffected — it runs in a single process regardless of this flag.
 
 #### Intermediate files
 
@@ -910,6 +931,22 @@ mitoribopy align \
   --output results/align/ \
   --threads 8
 ```
+
+For batches with many samples, add `--max-parallel-samples N` to align several samples concurrently. `--threads` is divided across workers, so total CPU use stays ≈ 8 below — `4 workers × 2 threads/tool`:
+
+```bash
+mitoribopy align \
+  --kit-preset auto \
+  --library-strandedness forward \
+  --fastq-dir input_data/ \
+  --contam-index input_data/indexes/rrna_contam \
+  --mt-index input_data/indexes/mt_tx \
+  --output results/align/ \
+  --threads 8 \
+  --max-parallel-samples 4
+```
+
+The joint `mitoribopy rpf` stage is unaffected by this flag; offset selection and the aggregated `rpf_counts.tsv` always require a single pass over all samples together. See the [Execution / concurrency](#execution--concurrency) reference for sizing guidance.
 
 ### C. Just the rpf stage on existing BEDs (human, monosome)
 

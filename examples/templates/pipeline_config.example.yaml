@@ -102,6 +102,13 @@ align:
                                            # read_counts.tsv is missing; reloads samples
                                            # whose .sample_done/<sample>.json marker exists.
 
+  # --- Concurrency ---------------------------------------------------------
+  # max_parallel_samples: 1                # >1 runs samples concurrently; the
+                                           # global --threads value is divided
+                                           # across workers (max(1, threads // N)
+                                           # threads per tool). The joint
+                                           # `mitoribopy rpf` stage is unaffected.
+
 
 # ============================================================================
 # rpf
