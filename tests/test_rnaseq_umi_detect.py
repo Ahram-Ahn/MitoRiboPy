@@ -67,6 +67,21 @@ def test_no_umi_returns_zero_length(tmp_path: Path) -> None:
     assert result.length == 0
 
 
+def test_uniform_throughout_returns_zero(tmp_path: Path) -> None:
+    """Real RNA-seq reads are uniformly high-entropy across the whole window.
+
+    The detector must NOT fire in that case — a UMI signal requires a
+    discontinuity (flat region followed by biological signal). This is the
+    failure mode that would otherwise trim biological bases off every read.
+    """
+    rng = random.Random(0)
+    reads = [_uniform(rng, 80) for _ in range(200)]
+    fq = tmp_path / "uniform.fastq"
+    _write_fastq(fq, reads)
+    result = detect_umi(fq)
+    assert result.length == 0
+
+
 def test_detect_works_on_gzipped_input(tmp_path: Path) -> None:
     rng = random.Random(0)
     reads = [_uniform(rng, 8) + _biased_body(rng, 50) for _ in range(200)]

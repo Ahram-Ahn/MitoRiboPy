@@ -395,8 +395,13 @@ def align_sample(
     sample_dir = workdir / sample.sample
     sample_dir.mkdir(parents=True, exist_ok=True)
 
+    # PE + UMI is unsupported, so don't waste cycles probing for one on
+    # paired samples — and avoid producing a resolved kit that would
+    # trip the NotImplementedError below for PE reads that just happen
+    # to look uniform.
+    effective_detect_umis = detect_umis and not sample.paired
     resolved, _detection, _umi = resolve_sample_kit(
-        sample, detect_umis=detect_umis
+        sample, detect_umis=effective_detect_umis
     )
 
     bam_out = sample_dir / f"{sample.sample}.bam"

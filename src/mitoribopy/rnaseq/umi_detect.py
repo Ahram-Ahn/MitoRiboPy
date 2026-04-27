@@ -170,6 +170,17 @@ def detect_umi(fastq: Path, *, n_reads: int = 5000) -> UmiDetectionResult:
         else:
             break
 
+    # If the flat run covers the ENTIRE window we cannot distinguish a
+    # UMI from a uniformly random biological insert (typical of normal
+    # RNA-seq / Ribo-seq libraries that span many genes and start
+    # positions). Return length=0 in that case — false-negative is
+    # recoverable, false-positive silently corrupts dedup or trims real
+    # bases off every read.
+    if head_run >= _WINDOW:
+        head_run = 0
+    if tail_run >= _WINDOW:
+        tail_run = 0
+
     head_snap = _snap_down(head_run)
     tail_snap = _snap_down(tail_run)
 
