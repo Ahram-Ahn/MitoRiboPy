@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .. import __version__
+from ..console import log_warning
 from ..rnaseq import (
     compute_delta_te,
     compute_reference_checksum,
@@ -568,8 +569,40 @@ def _run_from_fastq(args, output_dir: Path) -> int:
 
 
 def run(argv: Iterable[str]) -> int:
+    argv_list = list(argv)
     parser = build_parser()
-    args = parser.parse_args(list(argv))
+
+    # Pre-parse --config so we can fold YAML / JSON / TOML values into
+    # the parser's defaults BEFORE the real parse pass. CLI flags still
+    # win on conflict because they appear in argv_list as explicitly-
+    # set values that override the new defaults. Same pattern as
+    # `mitoribopy align` / `mitoribopy rpf`.
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=None)
+    pre_args, _ = pre_parser.parse_known_args(argv_list)
+    if pre_args.config:
+        try:
+            cfg = common.load_config_file(pre_args.config)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"[mitoribopy rnaseq] ERROR: {exc}", file=sys.stderr)
+            return 2
+        known_dests = {
+            action.dest for action in parser._actions
+            if action.dest and action.dest != "help"
+        }
+        applied = {
+            key: value for key, value in cfg.items() if key in known_dests
+        }
+        unknown = sorted(set(cfg) - set(applied))
+        if unknown:
+            log_warning(
+                "RNASEQ",
+                "Ignoring unknown --config keys: " + ", ".join(unknown),
+            )
+        if applied:
+            parser.set_defaults(**applied)
+
+    args = parser.parse_args(argv_list)
     common.apply_common_arguments(args)
 
     # --- Default-flow vs --de-table flow dispatch -----------------------
