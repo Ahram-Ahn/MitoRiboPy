@@ -47,23 +47,26 @@ MT_FASTA="${PROJECT_ROOT}/input_data/human-mt-mRNA.fasta"
 OUTPUT_DIR="${PROJECT_ROOT}/results"
 
 # Optional rnaseq inputs (only needed when the rnaseq stage runs).
-# `mitoribopy rnaseq` has TWO mutually-exclusive modes:
-#   * Mode A (PRE-COMPUTED DE) -- pass an existing DE table; SHA256
-#     reference-consistency gate is enforced against the rpf run above.
-#   * Mode B (FROM-FASTQ, v0.5.0+) -- pass raw RNA-seq + Ribo-seq FASTQs
-#     and the subcommand runs cutadapt + bowtie2 + pyDESeq2 itself.
-#     Requires the `[fastq]` extra: pip install 'mitoribopy[fastq]'.
-RNASEQ_MODE=a              # a (pre-computed DE) | b (from-FASTQ)
+# `mitoribopy rnaseq` has TWO mutually-exclusive flows:
+#   * DEFAULT (from-FASTQ) -- pass raw RNA-seq + Ribo-seq FASTQs and a
+#     transcriptome FASTA; the subcommand runs cutadapt + bowtie2 +
+#     pyDESeq2 itself. Recommended starting point. Requires the
+#     `[fastq]` extra: pip install 'mitoribopy[fastq]'.
+#   * ALTERNATIVE (--de-table) -- bring an existing DE table from an
+#     external DESeq2 / Xtail / Anota2Seq run. SHA256 reference-
+#     consistency gate is enforced against the rpf run above. Use this
+#     for publication-grade DE statistics over the full transcriptome.
+RNASEQ_FLOW="default"      # "default" (from-FASTQ) | "de-table" (alternative)
 
-# Mode A inputs:
-DE_TABLE="${PROJECT_ROOT}/de.tsv"
-
-# Mode B inputs:
+# Default-flow inputs:
 RNA_FASTQ_DIR="${PROJECT_ROOT}/input_data/rna_seq"
 RIBO_FASTQ_DIR="${PROJECT_ROOT}/input_data/ribo_seq"
 RNASEQ_ALIGN_THREADS=4
 
-# Both modes:
+# Alternative-flow inputs:
+DE_TABLE="${PROJECT_ROOT}/de.tsv"
+
+# Both flows:
 CONDITION_MAP="${PROJECT_ROOT}/samples.tsv"
 CONDITION_A="control"
 CONDITION_B="knockdown"
@@ -267,31 +270,11 @@ if [[ "${RUN_RNASEQ}" == "true" ]]; then
     --log-level "${LOG_LEVEL}"
   )
 
-  if [[ "${RNASEQ_MODE}" == "a" ]]; then
+  if [[ "${RNASEQ_FLOW}" == "default" ]]; then
     RNASEQ_OPTS=(
       "${RNASEQ_COMMON[@]}"
 
-      # --- DE table (Mode A) -------------------------------------------
-      --de-table "${DE_TABLE}"
-      --de-format auto             # auto | deseq2 | xtail | anota2seq | custom
-      # --de-gene-col gene_id      # only when --de-format custom
-      # --de-log2fc-col log2FoldChange
-      # --de-padj-col padj
-      # --de-basemean-col baseMean
-
-      # --- Ribo-seq inputs (Mode A) ------------------------------------
-      --ribo-dir "${OUTPUT_DIR}/rpf"
-      # --ribo-counts "${OUTPUT_DIR}/rpf/rpf_counts.tsv"   # explicit override
-
-      # --- Reference-consistency gate (Mode A; exactly one) ------------
-      --reference-gtf "${MT_FASTA}"
-      # --reference-checksum <sha256>
-    )
-  elif [[ "${RNASEQ_MODE}" == "b" ]]; then
-    RNASEQ_OPTS=(
-      "${RNASEQ_COMMON[@]}"
-
-      # --- From-FASTQ (Mode B; mutually exclusive with --de-table) ----
+      # --- From-FASTQ (default; mutually exclusive with --de-table) ----
       --rna-fastq "${RNA_FASTQ_DIR}"
       --ribo-fastq "${RIBO_FASTQ_DIR}"
       --reference-fasta "${MT_FASTA}"
@@ -305,8 +288,28 @@ if [[ "${RUN_RNASEQ}" == "true" ]]; then
                                    # rep1/rep2 and the run will fail at
                                    # pyDESeq2 dispersion.
     )
+  elif [[ "${RNASEQ_FLOW}" == "de-table" ]]; then
+    RNASEQ_OPTS=(
+      "${RNASEQ_COMMON[@]}"
+
+      # --- DE table (alternative flow) ---------------------------------
+      --de-table "${DE_TABLE}"
+      --de-format auto             # auto | deseq2 | xtail | anota2seq | custom
+      # --de-gene-col gene_id      # only when --de-format custom
+      # --de-log2fc-col log2FoldChange
+      # --de-padj-col padj
+      # --de-basemean-col baseMean
+
+      # --- Ribo-seq inputs (alternative flow) --------------------------
+      --ribo-dir "${OUTPUT_DIR}/rpf"
+      # --ribo-counts "${OUTPUT_DIR}/rpf/rpf_counts.tsv"   # explicit override
+
+      # --- Reference-consistency gate (alternative flow; exactly one) -
+      --reference-gtf "${MT_FASTA}"
+      # --reference-checksum <sha256>
+    )
   else
-    echo "RNASEQ_MODE must be 'a' or 'b' (got: ${RNASEQ_MODE})" >&2
+    echo "RNASEQ_FLOW must be 'default' or 'de-table' (got: ${RNASEQ_FLOW})" >&2
     exit 2
   fi
 

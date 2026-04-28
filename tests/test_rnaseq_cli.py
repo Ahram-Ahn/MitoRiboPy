@@ -55,17 +55,46 @@ def test_rnaseq_dry_run_prints_plan_and_exits_zero(capsys, tmp_path) -> None:
 
 
 def test_rnaseq_errors_listing_every_missing_required_arg(capsys) -> None:
+    """No flags → default flow (from raw FASTQ) is selected; the error
+    message must list every from-FASTQ required arg plus a HINT pointing
+    at the alternative --de-table flow.
+    """
     exit_code = cli.main(["rnaseq"])
     err = capsys.readouterr().err
     assert exit_code == 2
     for expected_flag in (
+        "--rna-fastq",
+        "--reference-fasta",
         "--gene-id-convention",
-        "--de-table",
+        "--output",
+        "--condition-map",
+        "--condition-a",
+        "--condition-b",
+    ):
+        assert expected_flag in err
+    # The HINT line tells users about the alternative flow.
+    assert "--de-table" in err
+
+
+def test_rnaseq_errors_listing_de_table_flow_required_args(capsys, tmp_path) -> None:
+    """When --de-table IS set, the missing-args list switches to the
+    DE-table-flow required args (no --rna-fastq, --reference-fasta etc.).
+    """
+    de = tmp_path / "de.tsv"
+    de.write_text("gene_id\tlog2FoldChange\tpadj\tbaseMean\n")
+    exit_code = cli.main(["rnaseq", "--de-table", str(de)])
+    err = capsys.readouterr().err
+    assert exit_code == 2
+    for expected_flag in (
+        "--gene-id-convention",
         "--ribo-dir or --ribo-counts",
         "--output",
         "--reference-gtf or --reference-checksum",
     ):
         assert expected_flag in err
+    # The from-FASTQ-only flags should NOT appear.
+    assert "--rna-fastq" not in err
+    assert "--reference-fasta" not in err
 
 
 def test_rnaseq_end_to_end_produces_te_and_delta_te(tmp_path) -> None:

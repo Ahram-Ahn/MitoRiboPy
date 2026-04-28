@@ -10,7 +10,7 @@ The package is built around four subcommands:
 |---|---|
 | `mitoribopy align` | FASTQ → BAM → BED6 + per-sample read counts (cutadapt + bowtie2 + umi_tools + pysam) |
 | `mitoribopy rpf` | BED/BAM → offsets, translation profile, codon usage, coverage plots |
-| `mitoribopy rnaseq` | TE / ΔTE integration with paired RNA-seq. Two modes: (a) **pre-computed-DE** — pass an existing DE table (DESeq2 / Xtail / Anota2Seq) + a prior rpf run, or (b) **from-FASTQ** — pass raw RNA-seq + Ribo-seq FASTQs and a transcriptome FASTA, and the subcommand runs trimming → bowtie2 → counting → pyDESeq2 itself before falling through into the same TE / ΔTE / plot path. SHA256 reference-consistency gate enforced in mode (a); reference hash recorded in mode (b). |
+| `mitoribopy rnaseq` | Translation efficiency from paired RNA-seq + Ribo-seq. **Default flow:** pass `--rna-fastq` + `--ribo-fastq` + `--reference-fasta` and the subcommand runs trimming → bowtie2 → counting → pyDESeq2 → TE / ΔTE / plots end-to-end (requires the `[fastq]` extra: `pip install 'mitoribopy[fastq]'`). **Alternative:** pass `--de-table` from an external DESeq2 / Xtail / Anota2Seq run + a prior rpf run; this path is mutually exclusive with `--rna-fastq` and enforces a SHA256 reference-consistency gate. |
 | `mitoribopy all` | End-to-end orchestrator that runs align + rpf + (optional) rnaseq from one YAML config and writes a composed `run_manifest.json` |
 
 ---
@@ -47,13 +47,13 @@ MitoRiboPy is a focused tool for the 13 mt-mRNAs of human mitochondria (or 8 mt-
 - **Per-sample adapter detection** with auto-fallback to the right kit. Mixed-kit and mixed-UMI batches resolve each sample independently. Pre-trimmed FASTQs (e.g. SRA-deposited data) are auto-detected and routed through cutadapt with no `-a` flag.
 - **Per-sample offset selection** so inter-sample drift in the canonical 12–15 nt 5' P-site offset doesn't bias your downstream codon-usage tables. A combined-across-samples diagnostic is still emitted and an `offset_drift_<align>.svg` plot makes drift visible at a glance.
 - **Both P-site and A-site downstream outputs** by default, side by side under per-site subdirectories. No ambiguity about which output corresponds to which site.
-- **Strict reference-consistency gate** for the optional translation-efficiency (TE / ΔTE) integration with paired RNA-seq: Ribo-seq and RNA-seq must hash to the identical transcript reference or the run aborts.
+- **End-to-end RNA-seq + Ribo-seq → TE / ΔTE in one subcommand.** `mitoribopy rnaseq` takes raw FASTQs and a transcriptome FASTA and runs trimming, bowtie2 alignment, per-transcript counting, and pyDESeq2 itself before emitting TE, ΔTE, and a six-figure plot set. (Bringing your own pre-computed DE table from R / Python remains supported via `--de-table` and enforces a SHA256 reference-consistency gate.)
 - **Strain-aware defaults**: built-in human (`-s h.sapiens`) and yeast (`-s s.cerevisiae`) annotations + codon tables, plus `custom` for any other organism with a published NCBI Genetic Code (mouse, fly, plants, fungi, ...).
 
 What MitoRiboPy is **not**:
 
 - Not a general-purpose nuclear Ribo-seq pipeline. The defaults, references, and dedup heuristics are calibrated for the low-complexity 13-mRNA mt universe.
-- Not a DE engine. RNA-seq DE (DESeq2 / Xtail / Anota2Seq) is run externally on the full transcriptome; MitoRiboPy consumes the resulting table and does TE / ΔTE on the mt-mRNA subset.
+- Not a general DE engine for nuclear genes. The default `mitoribopy rnaseq` flow runs **pyDESeq2 on the mt-mRNA subset only**, which is fine for exploring mt-translation efficiency end-to-end on a single library. For publication-grade DE statistics across the full transcriptome run DESeq2 / Xtail / Anota2Seq externally and pass the resulting table via `--de-table`.
 
 ---
 
@@ -330,7 +330,13 @@ mitoribopy align --kit-preset auto --fastq-dir fastqs/ \
 # Just rpf, against an existing BED dir
 mitoribopy rpf -s h -f ref.fa --directory bed/ -rpf 29 34 --output results/rpf/
 
-# Just rnaseq, against existing rpf output + a DE table
+# Just rnaseq (default flow): raw FASTQ -> pyDESeq2 -> TE / dTE
+mitoribopy rnaseq --rna-fastq rna_seq/ --ribo-fastq ribo_seq/ \
+  --reference-fasta ref.fa --gene-id-convention bare \
+  --condition-map samples.tsv --condition-a control --condition-b knockdown \
+  --output results/rnaseq/
+
+# Or rnaseq (alternative flow): existing rpf output + an external DE table
 mitoribopy rnaseq --de-table de.tsv --gene-id-convention hgnc \
   --ribo-dir results/rpf --reference-gtf ref.fa --output results/rnaseq/
 ```
@@ -602,19 +608,37 @@ The following short / legacy spellings are accepted as synonyms for the canonica
 
 ### `mitoribopy rnaseq`
 
-Two ways to run, picked automatically by which input flags you pass.
+Two ways to drive this subcommand. They are mutually exclusive — passing both `--rna-fastq` and `--de-table` exits with code 2.
 
-**Mode A — Pre-computed DE (the original).** Pass an existing DE table (DESeq2 / Xtail / Anota2Seq) + a prior `mitoribopy rpf` run; the subcommand emits TE and ΔTE tables plus diagnostic plots. Enforces a SHA256 reference-consistency gate: Ribo-seq and RNA-seq must hash to the identical transcript set. Triggered by `--de-table`. The DE engine runs externally (in R / Python) before this subcommand.
+**Default flow — from raw FASTQ.** Pass `--rna-fastq` + `--ribo-fastq` + `--reference-fasta` and the subcommand runs the whole pipeline: SE vs PE auto-detected from filename mate tokens, adapter auto-detected via the existing `align.adapter_detect`, UMI presence inferred from per-position Shannon entropy, cutadapt + bowtie2 per sample, reads counted per transcript, pyDESeq2 fit on the RNA side, then a fall-through into the same TE / ΔTE / plot path. When a condition has only one biological sample, FASTQs are **auto-split into `rep1` / `rep2` pseudo-replicates** by record parity so pyDESeq2 has n≥2 to fit dispersion (loud stderr WARNING per split; disable with `--no-auto-pseudo-replicate`). The reference-consistency hard-gate is skipped in this flow — instead the FASTA SHA256 is recorded in `run_settings.json` under `from_fastq.reference_checksum`. Requires the `[fastq]` optional-dependency extra:
 
-**Mode B — From-FASTQ (added in v0.5.0).** Pass raw RNA-seq + Ribo-seq FASTQs and a transcriptome FASTA. The subcommand auto-detects SE vs PE from filename mate tokens, auto-detects the adapter via the existing `align.adapter_detect`, infers UMI presence from per-position Shannon entropy, runs cutadapt + bowtie2 per sample, counts reads per transcript, runs pyDESeq2, then falls through into the same TE / ΔTE / plot path as Mode A. Triggered by `--rna-fastq`; mutually exclusive with `--de-table`. Requires the `[fastq]` extra (`pip install 'mitoribopy[fastq]'`). When a condition has only one biological sample, FASTQs are **auto-split into rep1 / rep2 pseudo-replicates** by record parity so pyDESeq2 has n≥2 to fit dispersion (loud stderr WARNING per split; disable with `--no-auto-pseudo-replicate`). The reference-consistency hard-gate is skipped in this mode (we hash the FASTA ourselves and record the hash in `run_settings.json` under `from_fastq.reference_fasta`).
+```bash
+pip install 'mitoribopy[fastq]'
+```
 
-The plot set is identical across both modes for the four plots that depend only on the DE table + counts (mRNA-vs-RPF scatter, ΔTE volcano, MA plot, TE bar plot per condition, TE heatmap). The PCA plot is emitted in Mode B only because it needs the full sample × gene counts matrix.
+**Alternative flow — bring your own DE table.** Pass `--de-table` from a prior external DESeq2 / Xtail / Anota2Seq run together with a prior `mitoribopy rpf` run (`--ribo-dir`). This is the right path for publication-grade DE statistics — run DE on the full transcriptome in R / Python and feed the result here. Enforces a SHA256 reference-consistency gate: Ribo-seq and RNA-seq must hash to the identical transcript set, otherwise the run aborts with a `MISMATCH` banner.
 
-#### DE table (Mode A)
+Both flows produce the same `te.tsv` / `delta_te.tsv` / `plots/` shape and emit five common plots (scatter, volcano, MA, TE bar by condition, TE heatmap). The default flow additionally writes intermediate counts matrices, a generated `de_table.tsv`, and a sixth `sample_pca.png` plot (PCA needs the full sample × gene counts matrix that only the default flow has on hand).
+
+#### Inputs (default flow, from raw FASTQ)
 
 | Flag | Default | Description |
 |---|---|---|
-| `--de-table PATH` | — | DE results table (CSV or TSV). **Required**. |
+| `--rna-fastq PATH [PATH ...]` | — | RNA-seq FASTQ files or directories. **Required for the default flow.** Mutually exclusive with `--de-table`. |
+| `--ribo-fastq PATH [PATH ...]` | — | Ribo-seq FASTQ files or directories. Optional; when omitted the run short-circuits after writing `de_table.tsv` (manifest mode `from-fastq-rna-only`). |
+| `--reference-fasta PATH` | — | Transcriptome FASTA. **Required for the default flow.** SHA256 recorded under `from_fastq.reference_checksum` in `run_settings.json`. |
+| `--bowtie2-index PREFIX` | — | Pre-built bowtie2 index prefix; skips `bowtie2-build`. `--reference-fasta` is still required for hashing. |
+| `--workdir DIR` | `<output>/work` | Scratch directory for trim / index / per-sample BAM artefacts. |
+| `--align-threads N` | `4` | Threads passed to cutadapt and bowtie2. (`--threads` separately drives BLAS / pyDESeq2 thread caps.) |
+| `--no-auto-pseudo-replicate` | off | Disable auto-split of n=1 conditions into `rep1` / `rep2` by FASTQ record parity. Without auto-split, pyDESeq2 will refuse to fit dispersion on n=1-per-condition designs and the run will fail. |
+
+In the default flow the `--condition-map` table must list every input sample (RNA + Ribo). Auto-split-generated `rep1` / `rep2` sample names are written to `<output>/condition_map.augmented.tsv` and the existing TE / ΔTE step picks them up automatically. PE + UMI is currently `NotImplementedError` — preprocess UMIs into the read name first, or use the alternative `--de-table` flow with your own pre-computed DE results.
+
+#### Alternative flow inputs (bring your own DE table)
+
+| Flag | Default | Description |
+|---|---|---|
+| `--de-table PATH` | — | DE results table (CSV or TSV). **Required to enter the alternative flow.** Mutually exclusive with `--rna-fastq`. |
 | `--de-format {auto,deseq2,xtail,anota2seq,custom}` | `auto` | DE table format; `auto` detects from column headers. |
 | `--de-gene-col NAME` | — | Column name for gene IDs. Used when `--de-format custom`. |
 | `--de-log2fc-col NAME` | — | Column name for log2 fold change. |
@@ -628,45 +652,29 @@ The plot set is identical across both modes for the four plots that depend only 
 | `--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}` | — | **Required, no default**. Mismatched conventions silently produce zero-match runs. Examples: `hgnc` → `MT-ND1`; `bare` → `ND1`; `ensembl` → `ENSG00000198888`; `refseq` → `YP_003024026.1`; `mt_prefixed` → `MT-ND1`. |
 | `--organism {h.sapiens,s.cerevisiae}` | `h.sapiens` | Organism for the mt-mRNA registry. Short / spelled-out forms (`h`, `y`, `human`, `yeast`) are accepted as synonyms. |
 
-#### Ribo-seq inputs (Mode A)
+#### Ribo-seq inputs (alternative flow only)
 
 | Flag | Default | Description |
 |---|---|---|
-| `--ribo-dir DIR` | — | Output directory of a prior `mitoribopy rpf` run. Must contain `rpf_counts.tsv` and `run_settings.json` (or `run_manifest.json`) with a recorded `reference_checksum`. |
+| `--ribo-dir DIR` | — | Output directory of a prior `mitoribopy rpf` run. Must contain `rpf_counts.tsv` and `run_settings.json` (or `run_manifest.json`) with a recorded `reference_checksum`. Required when using `--de-table`. |
 | `--ribo-counts PATH` | `<ribo-dir>/rpf_counts.tsv` | Explicit path to the per-sample per-gene RPF counts table. |
 
-#### From-FASTQ mode (Mode B; mutually exclusive with `--de-table`)
-
-| Flag | Default | Description |
-|---|---|---|
-| `--rna-fastq PATH [PATH ...]` | — | RNA-seq FASTQ files or directories. **Required to enter Mode B.** Mutually exclusive with `--de-table`. |
-| `--ribo-fastq PATH [PATH ...]` | — | Ribo-seq FASTQ files or directories. Optional in Mode B; when omitted the run short-circuits after writing `de_table.tsv` (mode `from-fastq-rna-only` in the manifest). |
-| `--reference-fasta PATH` | — | Transcriptome FASTA used to build (or reuse) a content-addressed bowtie2 index. **Required in Mode B.** Hash recorded under `from_fastq.reference_checksum` in `run_settings.json`. |
-| `--bowtie2-index PREFIX` | — | Pre-built bowtie2 index prefix; when set, `bowtie2-build` is skipped. `--reference-fasta` is still required for hashing. |
-| `--workdir DIR` | `<output>/work` | Scratch directory for trim / index / per-sample BAM artefacts. |
-| `--align-threads N` | `4` | Threads passed to cutadapt and bowtie2 in Mode B. (`--threads` separately drives BLAS thread caps for downstream NumPy / pyDESeq2.) |
-| `--no-auto-pseudo-replicate` | off | Disable the default behaviour where any condition with exactly one sample is auto-split into rep1 / rep2 by FASTQ record parity. Without auto-split, pyDESeq2 will refuse to fit dispersion on n=1-per-condition designs and the run will fail. |
-
-In Mode B the `--condition-map` table must list every input sample (RNA + Ribo). Auto-split-generated `rep1` / `rep2` sample names are written to `<output>/condition_map.augmented.tsv` and the existing TE / ΔTE step picks them up automatically.
-
-PE + UMI is currently `NotImplementedError` — preprocess UMIs into the read name before invoking from-FASTQ mode, or pass `--de-table` with your own pre-computed DE results.
-
-#### Reference-consistency gate (Mode A; exactly one)
+#### Reference-consistency gate (alternative flow only; exactly one)
 
 | Flag | Default | Description |
 |---|---|---|
 | `--reference-gtf PATH` | — | Reference used by RNA-seq; `mitoribopy rnaseq` hashes this and verifies it matches the hash in the rpf run's manifest. |
 | `--reference-checksum SHA256` | — | Precomputed SHA-256, useful when the reference file is not on the rnaseq host. |
 
-#### Conditions (optional, required for replicate-based ΔTE)
+#### Conditions
 
 | Flag | Default | Description |
 |---|---|---|
-| `--condition-map PATH` | — | TSV with columns `sample` and `condition` assigning Ribo-seq samples to conditions. |
-| `--condition-a NAME` | — | Reference condition. |
-| `--condition-b NAME` | — | Comparison condition. |
+| `--condition-map PATH` | — | TSV with columns `sample` and `condition`. **Required in the default flow** (drives the pyDESeq2 contrast). In the `--de-table` flow it is optional and enables a replicate-based Ribo log2FC for ΔTE. |
+| `--condition-a NAME` | — | Reference condition (required in the default flow). |
+| `--condition-b NAME` | — | Comparison condition (required in the default flow). |
 
-Without a condition map, `mitoribopy rnaseq` computes a point-estimate ΔTE using only the DE table's mRNA log2FC and emits rows with a `single_replicate_no_statistics` note.
+Without a condition map in the `--de-table` flow, `mitoribopy rnaseq` computes a point-estimate ΔTE using only the DE table's mRNA log2FC and emits rows with a `single_replicate_no_statistics` note.
 
 #### Output
 
@@ -809,14 +817,14 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
       ma.png                           # log10(baseMean) vs log2FoldChange, points coloured by padj
       te_bar_by_condition.png          # log2(TE) per gene, bars grouped by condition + SE error bars
       te_heatmap.png                   # gene × sample log2(TE) heatmap (RdBu, centred at 0)
+      sample_pca.png                   # PC1 vs PC2 from log1p counts (default flow only)
     run_settings.json
-    # --- Mode B (from-FASTQ) only ---
+    # --- default flow (--rna-fastq) only -----------------------------
     de_table.tsv                       # pyDESeq2 result in canonical DESeq2 schema
     rna_counts.tsv                     # wide gene × sample RNA-seq counts
     rpf_counts.tsv                     # long-format Ribo-seq counts (sample\tgene\tcount)
     rpf_counts_matrix.tsv              # wide gene × sample Ribo-seq counts
     condition_map.augmented.tsv        # original entries + auto-generated rep1 / rep2 names
-    plots/sample_pca.png                # PC1 vs PC2 from log1p counts (Mode B only)
 ```
 
 In v0.4.4 the legacy `p/` / `a/` subfolders under `translation_profile/` and `coverage_profile_plots/` were dropped. The site is encoded in filename prefixes (`p_site_*` / `a_site_*`) so a single per-sample folder hosts both sites without ambiguity, and downstream tooling never has to branch on `--analysis_sites`.
@@ -1050,23 +1058,9 @@ See [Custom organisms](#custom-organisms) for the annotation CSV schema, the cod
 
 ### G. RNA-seq integration for translation efficiency
 
-**Mode A — pre-computed DE table (`--de-table`).**
+**Default flow — raw FASTQ → pyDESeq2 → TE / ΔTE in one shot (`--rna-fastq`).**
 
-```bash
-mitoribopy rnaseq \
-  --de-table de.tsv \
-  --gene-id-convention hgnc \
-  --ribo-dir results/rpf \
-  --reference-gtf references/human-mt-mRNA.fasta \
-  --condition-map samples.tsv \
-  --condition-a control \
-  --condition-b knockdown \
-  --output results/rnaseq/
-```
-
-**Mode B — raw FASTQ → pyDESeq2 → TE / ΔTE in one shot (`--rna-fastq`).**
-
-Requires the `[fastq]` extra:
+Requires the `[fastq]` extra (one-off):
 
 ```bash
 pip install 'mitoribopy[fastq]'
@@ -1087,9 +1081,27 @@ mitoribopy rnaseq \
   --align-threads 8
 ```
 
-`--rna-fastq` accepts files OR directories; SE vs PE is auto-detected from filename mate tokens (`_R1/_R2`, `_1/_2`, `.1./.2.`, `_R1_001/_R2_001`, `_read1/_read2`). When a condition has only one biological sample, the FASTQ is auto-split into rep1 / rep2 by record parity so pyDESeq2 has n≥2 to fit dispersion (loud stderr WARNING per split; pass `--no-auto-pseudo-replicate` to disable). Mode A and Mode B are mutually exclusive — passing both `--de-table` and `--rna-fastq` exits with code 2.
+`--rna-fastq` accepts files OR directories; SE vs PE is auto-detected from filename mate tokens (`_R1/_R2`, `_1/_2`, `.1./.2.`, `_R1_001/_R2_001`, `_read1/_read2`). When a condition has only one biological sample, the FASTQ is auto-split into `rep1` / `rep2` by record parity so pyDESeq2 has n≥2 to fit dispersion (loud stderr WARNING per split; pass `--no-auto-pseudo-replicate` to disable).
 
-The shell-script template at [examples/templates/run_rnaseq.example.sh](examples/templates/run_rnaseq.example.sh) and the YAML template at [examples/templates/rnaseq_config.example.yaml](examples/templates/rnaseq_config.example.yaml) list every flag for both modes with its default value.
+**Alternative flow — bring your own DE table (`--de-table`).**
+
+When you already ran DESeq2 / Xtail / Anota2Seq externally (which is the recommended path for publication-grade DE statistics over the full transcriptome), feed the result via `--de-table` and skip the alignment / pyDESeq2 work inside the subcommand:
+
+```bash
+mitoribopy rnaseq \
+  --de-table de.tsv \
+  --gene-id-convention hgnc \
+  --ribo-dir results/rpf \
+  --reference-gtf references/human-mt-mRNA.fasta \
+  --condition-map samples.tsv \
+  --condition-a control \
+  --condition-b knockdown \
+  --output results/rnaseq/
+```
+
+The two flows are mutually exclusive — passing both `--rna-fastq` and `--de-table` exits with code 2.
+
+Templates: the shell-script template at [examples/templates/run_rnaseq.example.sh](examples/templates/run_rnaseq.example.sh) and the YAML template at [examples/templates/rnaseq_config.example.yaml](examples/templates/rnaseq_config.example.yaml) list every flag for both flows with its default value, with the default flow on top.
 
 ### H. Resume a partial run
 

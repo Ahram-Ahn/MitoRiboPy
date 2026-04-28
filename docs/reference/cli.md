@@ -136,54 +136,55 @@ Top-level flags: `--version, -V`, `--help, -h`.
 
 ## `mitoribopy rnaseq`
 
-Two mutually exclusive modes:
+Two mutually exclusive flows. Default is from raw FASTQ; pass `--de-table` to switch to the alternative pre-computed-DE flow. Passing both `--de-table` and `--rna-fastq` exits with code 2.
 
-- **Mode A** — pre-computed DE table (`--de-table`); enforces SHA256 reference-consistency gate.
-- **Mode B** — from-FASTQ (`--rna-fastq`); runs cutadapt + bowtie2 + pyDESeq2 itself; auto-splits n=1 conditions into rep1 / rep2 pseudo-replicates by record parity.
+### Default flow — from raw FASTQ (`--rna-fastq …`)
 
-Passing both `--de-table` and `--rna-fastq` exits with code 2.
+Requires the `[fastq]` optional-dependency extra: `pip install 'mitoribopy[fastq]'` (pulls in `pydeseq2>=0.4`).
 
-### DE table (Mode A)
+- `--rna-fastq PATH [PATH ...]` (**required**) — RNA-seq FASTQ files or directories.
+- `--ribo-fastq PATH [PATH ...]` — Ribo-seq FASTQ files or directories. When omitted, the run short-circuits after writing `de_table.tsv` (manifest mode `from-fastq-rna-only`).
+- `--reference-fasta PATH` (**required**) — transcriptome FASTA. SHA256 recorded in `from_fastq.reference_checksum`.
+- `--bowtie2-index PREFIX` — pre-built bowtie2 index prefix; skips `bowtie2-build`. `--reference-fasta` is still required for hashing.
+- `--workdir DIR` — scratch directory for trim / index / per-sample BAM. Defaults to `<output>/work`.
+- `--align-threads N` (default `4`) — threads passed to cutadapt and bowtie2.
+- `--no-auto-pseudo-replicate` — disable the auto-split of n=1 conditions into `rep1` / `rep2` (FASTQ record parity). Without auto-split, pyDESeq2 will refuse to fit dispersion on n=1-per-condition designs and the run will fail.
 
-- `--de-table PATH` (**required for Mode A**).
-- `--de-format {auto,deseq2,xtail,anota2seq,custom}` (default `auto`).
-- `--de-gene-col`, `--de-log2fc-col`, `--de-padj-col`, `--de-basemean-col` (used with `--de-format custom`).
+PE + UMI is currently `NotImplementedError` — preprocess UMIs into the read name first, or use the alternative flow.
 
-### Gene identifiers (both modes)
+### Gene identifiers (both flows)
 
 - `--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}` (**required, no default**).
 - `--organism {h.sapiens, s.cerevisiae}` (default `h.sapiens`). Synonyms: `h`, `y`, `human`, `yeast`.
 
-### Ribo-seq inputs (Mode A)
-
-- `--ribo-dir DIR` — output of a prior `mitoribopy rpf` run.
-- `--ribo-counts PATH` — defaults to `<ribo-dir>/rpf_counts.tsv`.
-
-### Reference-consistency gate (Mode A; exactly one)
-
-- `--reference-gtf PATH`
-- `--reference-checksum SHA256`
-
-### From-FASTQ mode (Mode B)
-
-- `--rna-fastq PATH [PATH ...]` (**required for Mode B**) — RNA-seq FASTQ files or directories.
-- `--ribo-fastq PATH [PATH ...]` — Ribo-seq FASTQ files or directories. When omitted, the run short-circuits after writing `de_table.tsv` (manifest mode `from-fastq-rna-only`).
-- `--reference-fasta PATH` (**required for Mode B**) — transcriptome FASTA. Hash recorded in `from_fastq.reference_checksum`.
-- `--bowtie2-index PREFIX` — pre-built bowtie2 index prefix; skips `bowtie2-build`. `--reference-fasta` is still required for hashing.
-- `--workdir DIR` — scratch directory for trim / index / per-sample BAM. Defaults to `<output>/work`.
-- `--align-threads N` (default `4`) — threads passed to cutadapt and bowtie2.
-- `--no-auto-pseudo-replicate` — disable auto-split of n=1 conditions into rep1 / rep2. Run will fail at pyDESeq2's dispersion-fitting step if any condition has only one sample.
-
-Mode B requires the optional `[fastq]` extra: `pip install 'mitoribopy[fastq]'` (pulls in `pydeseq2>=0.4`). PE + UMI is currently `NotImplementedError`.
-
 ### Conditions
 
-- `--condition-map PATH` — TSV with `sample` and `condition` columns. **Required in Mode B** (and required in Mode A for replicate-based ΔTE).
-- `--condition-a NAME`, `--condition-b NAME` — required in Mode B; optional in Mode A.
+- `--condition-map PATH` — TSV with `sample` and `condition` columns. **Required in the default flow** (drives the pyDESeq2 contrast). In the `--de-table` flow it is optional and enables a replicate-based Ribo log2FC for ΔTE.
+- `--condition-a NAME`, `--condition-b NAME` — required in the default flow; optional in the `--de-table` flow.
 
 ### Output
 
 - `--output DIR`.
+
+### Alternative flow — bring your own DE table (`--de-table …`)
+
+Use this when you already ran DESeq2 / Xtail / Anota2Seq externally. Mutually exclusive with `--rna-fastq`. Enforces a SHA256 reference-consistency gate.
+
+DE table:
+
+- `--de-table PATH` (**required to enter this flow**).
+- `--de-format {auto,deseq2,xtail,anota2seq,custom}` (default `auto`).
+- `--de-gene-col`, `--de-log2fc-col`, `--de-padj-col`, `--de-basemean-col` (used with `--de-format custom`).
+
+Ribo-seq inputs:
+
+- `--ribo-dir DIR` (**required**) — output of a prior `mitoribopy rpf` run.
+- `--ribo-counts PATH` — defaults to `<ribo-dir>/rpf_counts.tsv`.
+
+Reference-consistency gate (exactly one):
+
+- `--reference-gtf PATH`
+- `--reference-checksum SHA256`
 
 ---
 

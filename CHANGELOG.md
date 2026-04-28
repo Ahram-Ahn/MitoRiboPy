@@ -12,12 +12,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.5.0] - 2026-04-27
 
 ### Added
-- **`mitoribopy rnaseq` from-FASTQ mode (Mode B).** A second mode for the
-  rnaseq subcommand that takes raw RNA-seq + Ribo-seq FASTQs and a
-  transcriptome FASTA and runs trimming, bowtie2 alignment, per-
-  transcript counting, and pyDESeq2 itself before falling through into
-  the existing TE / ΔTE / plot path. Triggered by `--rna-fastq …`;
-  mutually exclusive with `--de-table`. SE vs PE is auto-detected from
+- **`mitoribopy rnaseq` is now from-FASTQ-by-default.** The default
+  flow takes raw RNA-seq + Ribo-seq FASTQs and a transcriptome FASTA
+  and runs trimming, bowtie2 alignment, per-transcript counting, and
+  pyDESeq2 itself before emitting TE / ΔTE / plots. The original
+  "bring your own DE table" flow stays fully supported as the
+  alternative flow (`--de-table`). The two flows are mutually
+  exclusive (passing both `--rna-fastq` and `--de-table` exits with
+  code 2). Running `mitoribopy rnaseq` with no flags now reports the
+  default-flow required args in the missing-flag error message and
+  emits a HINT line pointing at the alternative flow. SE vs PE is auto-detected from
   filename mate tokens (`_R1/_R2`, `_1/_2`, `.1./.2.`,
   `_R1_001/_R2_001`, `_read1/_read2`). Adapter is auto-detected via
   the existing `align.adapter_detect`; UMI presence is inferred from
@@ -32,7 +36,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **`[fastq]` optional-dependency extra** (`pydeseq2 >= 0.4`). Soft-
   imported so the existing pre-computed-DE flow keeps working without
   it. Install with `pip install 'mitoribopy[fastq]'`.
-- **Auto-pseudo-replicate fallback for n=1 conditions in Mode B.**
+- **Auto-pseudo-replicate fallback for n=1 conditions in the default flow.**
   pyDESeq2 needs at least two samples per condition to estimate
   dispersion. When a condition has exactly one sample, its FASTQ is
   automatically stream-split by record parity (record N → rep1 if
@@ -42,13 +46,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `<output>/condition_map.augmented.tsv`. Disable with
   `--no-auto-pseudo-replicate`.
 - **Four new diagnostic plots** added to the `rnaseq` output (both
-  modes for the first three; Mode B only for the fourth):
+  flows for the first three; default flow only for the fourth):
   `plots/ma.png` (DESeq2 MA plot), `plots/te_bar_by_condition.png`
   (log2(TE) per gene grouped by condition with SE error bars),
   `plots/te_heatmap.png` (gene × sample log2(TE) heatmap, RdBu
   centred at 0), `plots/sample_pca.png` (PC1 vs PC2 from log1p
   counts, SVD-based — no scikit-learn dep).
-- **New CLI flags on `mitoribopy rnaseq`** for Mode B:
+- **New CLI flags on `mitoribopy rnaseq`** for the default flow:
   `--rna-fastq PATH [PATH ...]`, `--ribo-fastq PATH [PATH ...]`,
   `--reference-fasta PATH`, `--bowtie2-index PREFIX`,
   `--workdir DIR`, `--align-threads N`,
@@ -73,21 +77,32 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   documents the Mode A / Mode B keys side-by-side.
 
 ### Changed
-- **Top-level `mitoribopy rnaseq` description** in the README and the
-  CLI-help banner now mentions both modes (pre-computed-DE and from-
-  FASTQ) rather than only the original.
-- **`docs/tutorials/02_rnaseq_integration.md` rewritten** to walk
-  through both modes step-by-step and explain the auto-pseudo-
-  replicate fallback.
+- **`mitoribopy rnaseq` reframed around the from-FASTQ default flow.**
+  The CLI help banner, the argparse argument-group ordering (default-
+  flow inputs first, alternative `--de-table` flow at the bottom), the
+  README rnaseq sections, the tutorial, the CLI reference, and the
+  example templates all now lead with the default flow. The label
+  "Mode A / Mode B" used in interim drafts has been retired in favour
+  of "default flow" / "alternative flow (--de-table)".
+- **Missing-flags error message uses the default flow.** Running
+  `mitoribopy rnaseq` with no flags now lists the default-flow
+  required args (`--rna-fastq`, `--reference-fasta`, …) and emits a
+  HINT line about the alternative flow. Previously listed the
+  `--de-table` flow's required args. Tests updated accordingly.
+- **Example templates default to the from-FASTQ flow.**
+  `run_rnaseq.example.sh` defaults to `FLOW="default"`;
+  `run_pipeline.example.sh` defaults to `RNASEQ_FLOW="default"`.
+  Pass `FLOW="de-table"` / `RNASEQ_FLOW="de-table"` to run the
+  alternative flow.
 
 ### Known gaps
-- **PE + UMI in Mode B is currently `NotImplementedError`.**
+- **PE + UMI in the default flow is currently `NotImplementedError`.**
   Preprocess UMIs into the read name first (e.g. via `umi_tools
   extract`), or pass `--de-table` with your own pre-computed DE
   results.
-- **Genome / splice-aware aligner in Mode B is out of scope.** The
-  bowtie2 index is built from a transcriptome FASTA, matching the
-  package's mt-mRNA focus.
+- **Genome / splice-aware aligner in the default flow is out of
+  scope.** The bowtie2 index is built from a transcriptome FASTA,
+  matching the package's mt-mRNA focus.
 
 ### Added (from the pre-0.5.0 `[Unreleased]` work; rolled into 0.5.0)
 - **Per-step timing in `mitoribopy rpf`.** Each of the 7 pipeline

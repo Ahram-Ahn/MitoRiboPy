@@ -1,10 +1,27 @@
-"""``mitoribopy rnaseq`` subcommand - DE + rpf -> TE / delta-TE + plots.
+"""``mitoribopy rnaseq`` subcommand — RNA-seq + Ribo-seq → TE / ΔTE + plots.
 
-Phase 5 of the v0.3.0 refactor. Consumes a pre-computed differential
-expression table (DESeq2 / Xtail / Anota2Seq) + a prior ``mitoribopy
-rpf`` run and emits ``te.tsv``, ``delta_te.tsv``, and diagnostic plots.
-A SHA256 reference-consistency gate rejects mismatched references
-before any math runs.
+Two ways to drive it:
+
+* **Default (from-FASTQ).** Pass raw RNA-seq + Ribo-seq FASTQs and a
+  transcriptome FASTA. The subcommand auto-detects SE vs PE from the
+  filename mate token, reuses the existing ``mitoribopy.align`` adapter
+  / kit / UMI machinery, runs cutadapt + bowtie2 per sample, counts
+  reads per transcript, runs pyDESeq2 on the RNA side, then falls
+  through into the TE / ΔTE / plot path. Requires the ``[fastq]``
+  optional-dependency extra (``pip install 'mitoribopy[fastq]'``).
+
+* **Alternative (pre-computed DE).** Pass an existing DE table (DESeq2
+  / Xtail / Anota2Seq) plus a prior ``mitoribopy rpf`` run via
+  ``--de-table`` + ``--ribo-dir``. A SHA256 reference-consistency gate
+  rejects mismatched references before any math runs. Use this when
+  you already ran DE externally on the full transcriptome — the
+  recommended path for publication-grade DE statistics.
+
+The two paths are mutually exclusive (passing both ``--rna-fastq`` and
+``--de-table`` exits with code 2) and produce the same ``te.tsv``,
+``delta_te.tsv``, and ``plots/`` output shape; the from-FASTQ path
+additionally writes the intermediate counts matrices and a generated
+``de_table.tsv``.
 """
 
 from __future__ import annotations
@@ -42,10 +59,13 @@ from . import common
 
 
 RNASEQ_SUBCOMMAND_HELP = (
-    "Integrate a pre-computed differential-expression (DESeq2 / Xtail / "
-    "Anota2Seq) table with a prior 'mitoribopy rpf' run and emit TE and "
-    "delta-TE tables + plots. Enforces a SHA256 reference-consistency "
-    "gate so Ribo-seq and RNA-seq must share the same transcript set."
+    "Translation efficiency (TE / delta-TE) from paired RNA-seq + Ribo-seq. "
+    "Default flow: pass --rna-fastq + --ribo-fastq + --reference-fasta and "
+    "the subcommand runs trimming, bowtie2 alignment, per-transcript counting, "
+    "and pyDESeq2 itself before emitting te.tsv, delta_te.tsv, and plots. "
+    "Alternative: pass --de-table from a prior external DESeq2 / Xtail / "
+    "Anota2Seq run together with --ribo-dir; this path is mutually exclusive "
+    "with --rna-fastq and enforces a SHA256 reference-consistency gate."
 )
 
 
@@ -57,124 +77,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     common.add_common_arguments(parser)
 
-    de = parser.add_argument_group("DE table")
-    de.add_argument(
-        "--de-table",
-        required=False,
-        metavar="PATH",
-        help="DESeq2 / Xtail / Anota2Seq results table (CSV or TSV).",
-    )
-    de.add_argument(
-        "--de-format",
-        choices=["auto", "deseq2", "xtail", "anota2seq", "custom"],
-        default="auto",
-        help="DE table format. 'auto' detects from column headers.",
-    )
-    de.add_argument("--de-gene-col", default=None, metavar="NAME")
-    de.add_argument("--de-log2fc-col", default=None, metavar="NAME")
-    de.add_argument("--de-padj-col", default=None, metavar="NAME")
-    de.add_argument("--de-basemean-col", default=None, metavar="NAME")
-
-    gene = parser.add_argument_group("Gene identifiers")
-    gene.add_argument(
-        "--gene-id-convention",
-        choices=["ensembl", "refseq", "hgnc", "mt_prefixed", "bare"],
-        required=False,
-        help=(
-            "Gene identifier convention used by the DE table. REQUIRED "
-            "(no default): mismatched conventions between DE and Ribo-seq "
-            "sides silently produce zero-match runs."
-        ),
-    )
-    gene.add_argument(
-        "--organism",
-        choices=["h.sapiens", "s.cerevisiae", "h", "y", "human", "yeast"],
-        default="h.sapiens",
-        help=(
-            "Organism for the mt-mRNA registry. Use 'h.sapiens' for "
-            "human, 's.cerevisiae' for budding yeast. Short / spelled-"
-            "out forms ('h', 'y', 'human', 'yeast') are accepted as "
-            "synonyms."
-        ),
-    )
-
-    ribo = parser.add_argument_group("Ribo-seq inputs")
-    ribo.add_argument(
-        "--ribo-dir",
-        required=False,
-        metavar="DIR",
-        help=(
-            "Directory produced by a prior 'mitoribopy rpf' run; expected "
-            "to contain rpf_counts.tsv and run_settings.json / "
-            "run_manifest.json with a recorded reference_checksum."
-        ),
-    )
-    ribo.add_argument(
-        "--ribo-counts",
-        required=False,
-        metavar="PATH",
-        help=(
-            "Explicit path to rpf_counts.tsv. Defaults to "
-            "<ribo-dir>/rpf_counts.tsv when --ribo-dir is set."
-        ),
-    )
-
-    ref = parser.add_argument_group("Reference-consistency gate")
-    ref.add_argument(
-        "--reference-gtf",
-        default=None,
-        metavar="PATH",
-        help=(
-            "Reference GTF / FASTA used by RNA-seq; we hash this and "
-            "verify it matches the hash recorded in the rpf run's "
-            "manifest. EXACTLY ONE of --reference-gtf / "
-            "--reference-checksum must be provided."
-        ),
-    )
-    ref.add_argument(
-        "--reference-checksum",
-        default=None,
-        metavar="SHA256",
-        help=(
-            "Precomputed SHA-256 of the shared reference (use instead of "
-            "--reference-gtf when the file is not on this host)."
-        ),
-    )
-
-    conditions = parser.add_argument_group("Conditions (optional)")
-    conditions.add_argument(
-        "--condition-map",
-        default=None,
-        metavar="PATH",
-        help=(
-            "TSV with columns 'sample' and 'condition' assigning Ribo-seq "
-            "samples to conditions. Required to emit an internal Ribo-seq "
-            "log2FC (used for delta-TE). Without this the delta-TE rows "
-            "carry only the mRNA log2FC and a 'single_replicate_"
-            "no_statistics' note."
-        ),
-    )
-    conditions.add_argument("--condition-a", default=None, metavar="NAME")
-    conditions.add_argument("--condition-b", default=None, metavar="NAME")
-
-    out = parser.add_argument_group("Output")
-    out.add_argument(
-        "--output",
-        required=False,
-        metavar="DIR",
-        help="Output directory for te.tsv, delta_te.tsv, and plots.",
-    )
-
-    fastq = parser.add_argument_group("From-FASTQ mode")
+    # ----- Default flow: from raw FASTQ ------------------------------------
+    fastq = parser.add_argument_group("Inputs (from raw FASTQ — default flow)")
     fastq.add_argument(
         "--rna-fastq",
         nargs="+",
         default=None,
         metavar="PATH",
         help=(
-            "RNA-seq FASTQ files or directories. Activates from-FASTQ "
-            "mode: the subcommand will trim, align, count, and run "
-            "pyDESeq2 itself. Mutually exclusive with --de-table."
+            "RNA-seq FASTQ files or directories. The default driver of "
+            "the rnaseq subcommand: pass these and the rest of the "
+            "pipeline (trim → bowtie2 → count → pyDESeq2 → TE / ΔTE / "
+            "plots) runs end-to-end. Mutually exclusive with --de-table."
         ),
     )
     fastq.add_argument(
@@ -183,16 +97,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help=(
-            "Ribo-seq FASTQ files or directories. Optional in from-FASTQ "
-            "mode; when omitted the run short-circuits after writing "
-            "de_table.tsv."
+            "Ribo-seq FASTQ files or directories. When omitted the run "
+            "short-circuits after writing de_table.tsv "
+            "(mode='from-fastq-rna-only' in run_settings.json)."
         ),
     )
     fastq.add_argument(
         "--reference-fasta",
         default=None,
         metavar="PATH",
-        help="Transcriptome FASTA used to build (or re-use) a bowtie2 index.",
+        help=(
+            "Transcriptome FASTA used to build (or reuse) a content-"
+            "addressed bowtie2 index. Required for the default flow. "
+            "The SHA256 is recorded under from_fastq.reference_checksum "
+            "in run_settings.json."
+        ),
     )
     fastq.add_argument(
         "--bowtie2-index",
@@ -215,7 +134,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         metavar="N",
-        help="Threads passed to cutadapt and bowtie2 in from-FASTQ mode.",
+        help=(
+            "Threads passed to cutadapt and bowtie2. Separate from "
+            "--threads (which caps BLAS / pyDESeq2 thread pools)."
+        ),
     )
     fastq.add_argument(
         "--no-auto-pseudo-replicate",
@@ -228,6 +150,132 @@ def build_parser() -> argparse.ArgumentParser:
             "dispersion on n=1-per-condition designs and the run will "
             "fail. Pass this flag only if you genuinely have biological "
             "replicates already named correctly in the condition map."
+        ),
+    )
+
+    # ----- Required in both flows ------------------------------------------
+    gene = parser.add_argument_group("Gene identifiers")
+    gene.add_argument(
+        "--gene-id-convention",
+        choices=["ensembl", "refseq", "hgnc", "mt_prefixed", "bare"],
+        required=False,
+        help=(
+            "Gene identifier convention used in the FASTA / DE table. "
+            "REQUIRED (no default): mismatched conventions silently "
+            "produce zero-match runs."
+        ),
+    )
+    gene.add_argument(
+        "--organism",
+        choices=["h.sapiens", "s.cerevisiae", "h", "y", "human", "yeast"],
+        default="h.sapiens",
+        help=(
+            "Organism for the mt-mRNA registry. Use 'h.sapiens' for "
+            "human, 's.cerevisiae' for budding yeast. Short / spelled-"
+            "out forms ('h', 'y', 'human', 'yeast') are accepted as "
+            "synonyms."
+        ),
+    )
+
+    conditions = parser.add_argument_group(
+        "Conditions (required in default flow; optional in --de-table flow)"
+    )
+    conditions.add_argument(
+        "--condition-map",
+        default=None,
+        metavar="PATH",
+        help=(
+            "TSV with columns 'sample' and 'condition'. Required by the "
+            "default flow (drives the pyDESeq2 contrast). In the "
+            "--de-table flow it is optional and enables a replicate-"
+            "based Ribo log2FC for delta-TE; without it the delta-TE "
+            "rows carry only the mRNA log2FC and a "
+            "'single_replicate_no_statistics' note."
+        ),
+    )
+    conditions.add_argument("--condition-a", default=None, metavar="NAME")
+    conditions.add_argument("--condition-b", default=None, metavar="NAME")
+
+    out = parser.add_argument_group("Output")
+    out.add_argument(
+        "--output",
+        required=False,
+        metavar="DIR",
+        help="Output directory for te.tsv, delta_te.tsv, and plots.",
+    )
+
+    # ----- Alternative flow: bring your own DE table -----------------------
+    de = parser.add_argument_group(
+        "Alternative inputs (bring your own DE table; mutually exclusive with --rna-fastq)"
+    )
+    de.add_argument(
+        "--de-table",
+        required=False,
+        metavar="PATH",
+        help=(
+            "Pre-computed DESeq2 / Xtail / Anota2Seq results table "
+            "(CSV or TSV). Use this when you already ran DE externally "
+            "on the full transcriptome — the recommended path for "
+            "publication-grade DE statistics. Requires --ribo-dir / "
+            "--ribo-counts and one of --reference-gtf / "
+            "--reference-checksum. Mutually exclusive with --rna-fastq."
+        ),
+    )
+    de.add_argument(
+        "--de-format",
+        choices=["auto", "deseq2", "xtail", "anota2seq", "custom"],
+        default="auto",
+        help="DE table format. 'auto' detects from column headers.",
+    )
+    de.add_argument("--de-gene-col", default=None, metavar="NAME")
+    de.add_argument("--de-log2fc-col", default=None, metavar="NAME")
+    de.add_argument("--de-padj-col", default=None, metavar="NAME")
+    de.add_argument("--de-basemean-col", default=None, metavar="NAME")
+
+    ribo = parser.add_argument_group(
+        "Ribo-seq inputs (--de-table flow)"
+    )
+    ribo.add_argument(
+        "--ribo-dir",
+        required=False,
+        metavar="DIR",
+        help=(
+            "Directory produced by a prior 'mitoribopy rpf' run; expected "
+            "to contain rpf_counts.tsv and run_settings.json / "
+            "run_manifest.json with a recorded reference_checksum."
+        ),
+    )
+    ribo.add_argument(
+        "--ribo-counts",
+        required=False,
+        metavar="PATH",
+        help=(
+            "Explicit path to rpf_counts.tsv. Defaults to "
+            "<ribo-dir>/rpf_counts.tsv when --ribo-dir is set."
+        ),
+    )
+
+    ref = parser.add_argument_group(
+        "Reference-consistency gate (--de-table flow; exactly one)"
+    )
+    ref.add_argument(
+        "--reference-gtf",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Reference GTF / FASTA used by RNA-seq; we hash this and "
+            "verify it matches the hash recorded in the rpf run's "
+            "manifest. EXACTLY ONE of --reference-gtf / "
+            "--reference-checksum must be provided in the --de-table flow."
+        ),
+    )
+    ref.add_argument(
+        "--reference-checksum",
+        default=None,
+        metavar="SHA256",
+        help=(
+            "Precomputed SHA-256 of the shared reference (use instead of "
+            "--reference-gtf when the file is not on this host)."
         ),
     )
 
@@ -524,11 +572,15 @@ def run(argv: Iterable[str]) -> int:
     args = parser.parse_args(list(argv))
     common.apply_common_arguments(args)
 
-    # --- Resolve required flags up front --------------------------------
+    # --- Default-flow vs --de-table flow dispatch -----------------------
+    # The default flow (from raw FASTQ) is selected unless the user
+    # passes --de-table, in which case we run the alternative pre-
+    # computed-DE flow. Passing both is a hard error so users do not
+    # accidentally silently shadow one with the other.
+    use_de_table = args.de_table is not None
     if args.dry_run:
-        return common.emit_dry_run(
-            "rnaseq",
-            [
+        if use_de_table:
+            actions = [
                 "resolve --de-format (auto-detect from headers) and load DE table",
                 "hash-verify --reference-gtf / --reference-checksum against "
                 "the rpf run's recorded reference_checksum (HARD FAIL on mismatch)",
@@ -538,21 +590,54 @@ def run(argv: Iterable[str]) -> int:
                 "compute TE per sample per gene = (RPF + 0.5) / (mRNA + 0.5)",
                 "compute delta-TE = log2(RPF_fc) - log2(mRNA_fc) with "
                 "replicate-based Ribo log2FC when --condition-map is given",
-                "emit te.tsv, delta_te.tsv, and plots (scatter + volcano)",
-            ],
-        )
+                "emit te.tsv, delta_te.tsv, and plots (scatter + volcano + MA + bar + heatmap)",
+            ]
+        else:
+            actions = [
+                "auto-detect SE / PE for every --rna-fastq + --ribo-fastq input",
+                "auto-detect adapter + UMI per sample (PE+UMI is NotImplementedError)",
+                "build (or reuse) bowtie2 index from --reference-fasta "
+                "(content-addressed cache: <workdir>/bt2_cache/transcriptome_<sha12>)",
+                "trim + align every sample (cutadapt + bowtie2); count primary "
+                "mapped reads per transcript",
+                "auto-split any condition with n=1 into rep1 / rep2 by record "
+                "parity (disable with --no-auto-pseudo-replicate)",
+                "build sample sheet, run pyDESeq2 contrast "
+                f"({args.condition_a or '<--condition-a>'} vs {args.condition_b or '<--condition-b>'})",
+                "serialise pyDESeq2 result to de_table.tsv (DESeq2 schema)",
+                f"match DE gene_ids against mt-mRNA registry ({args.organism}) "
+                f"using --gene-id-convention {args.gene_id_convention}",
+                "compute TE + delta-TE; emit te.tsv, delta_te.tsv, and 6 plots "
+                "(scatter, volcano, MA, TE bar by condition, TE heatmap, sample PCA)",
+                "record FASTA SHA256 + per-sample provenance in run_settings.json",
+            ]
+        return common.emit_dry_run("rnaseq", actions)
 
     from_fastq = args.rna_fastq is not None
-    if from_fastq and args.de_table is not None:
+    if from_fastq and use_de_table:
         print(
-            "[mitoribopy rnaseq] ERROR: --de-table cannot be combined with "
-            "--rna-fastq; from-FASTQ mode generates the DE table itself.",
+            "[mitoribopy rnaseq] ERROR: --rna-fastq and --de-table are "
+            "mutually exclusive. Pick one: --rna-fastq for the default "
+            "from-FASTQ flow (cutadapt + bowtie2 + pyDESeq2 inside the "
+            "subcommand), or --de-table to bring your own pre-computed "
+            "DE table from an external DESeq2 / Xtail / Anota2Seq run.",
             file=sys.stderr,
         )
         return 2
 
     missing: list[str] = []
-    if from_fastq:
+    if use_de_table:
+        # Alternative flow: DE table + prior rpf run.
+        if not args.gene_id_convention:
+            missing.append("--gene-id-convention")
+        if not args.ribo_dir and not args.ribo_counts:
+            missing.append("--ribo-dir or --ribo-counts")
+        if not args.output:
+            missing.append("--output")
+        if not (args.reference_gtf or args.reference_checksum):
+            missing.append("--reference-gtf or --reference-checksum")
+    else:
+        # Default flow: from raw FASTQ.
         if not args.rna_fastq:
             missing.append("--rna-fastq")
         if not args.reference_fasta:
@@ -567,23 +652,20 @@ def run(argv: Iterable[str]) -> int:
             missing.append("--condition-a")
         if not args.condition_b:
             missing.append("--condition-b")
-    else:
-        if not args.gene_id_convention:
-            missing.append("--gene-id-convention")
-        if not args.de_table:
-            missing.append("--de-table")
-        if not args.ribo_dir and not args.ribo_counts:
-            missing.append("--ribo-dir or --ribo-counts")
-        if not args.output:
-            missing.append("--output")
-        if not (args.reference_gtf or args.reference_checksum):
-            missing.append("--reference-gtf or --reference-checksum")
     if missing:
+        flow = "--de-table flow" if use_de_table else "default flow (from raw FASTQ)"
         print(
-            "[mitoribopy rnaseq] ERROR: missing required argument(s): "
-            + ", ".join(missing),
+            f"[mitoribopy rnaseq] ERROR: missing required argument(s) for "
+            f"the {flow}: " + ", ".join(missing),
             file=sys.stderr,
         )
+        if not use_de_table and not args.rna_fastq:
+            print(
+                "[mitoribopy rnaseq] HINT: pass --rna-fastq + --reference-fasta "
+                "to drive the default flow, or --de-table + --ribo-dir + "
+                "--reference-gtf to bring your own pre-computed DE table.",
+                file=sys.stderr,
+            )
         return 2
 
     output_dir = Path(args.output)

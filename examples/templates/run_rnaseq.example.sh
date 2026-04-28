@@ -2,23 +2,26 @@
 # MitoRiboPy rnaseq -- exhaustive shell-script template (rnaseq stage only).
 # Compatible with: MitoRiboPy 0.5.0+
 #
-# `mitoribopy rnaseq` has TWO mutually-exclusive modes, picked by which
-# input flag you set:
+# `mitoribopy rnaseq` has TWO mutually-exclusive flows:
 #
-#   * Mode A (PRE-COMPUTED DE) -- you already ran DESeq2 / Xtail /
+#   * DEFAULT (from-FASTQ) -- pass raw RNA-seq + Ribo-seq FASTQs and a
+#     transcriptome FASTA. The subcommand auto-detects SE vs PE from
+#     filename mate tokens, runs cutadapt + bowtie2 per sample, counts
+#     reads per transcript, runs pyDESeq2, then emits TE / ΔTE / plots.
+#     This is the default and the recommended starting point. Requires
+#     the `[fastq]` extra: pip install 'mitoribopy[fastq]'.
+#
+#   * ALTERNATIVE (--de-table) -- you already ran DESeq2 / Xtail /
 #     Anota2Seq externally on the full transcriptome and have the
 #     results table. Pass `--de-table`. SHA256 reference-consistency
-#     gate is enforced against a prior `mitoribopy rpf` run.
-#
-#   * Mode B (FROM-FASTQ, added in v0.5.0) -- pass raw RNA-seq +
-#     Ribo-seq FASTQs and a transcriptome FASTA. The subcommand auto-
-#     detects SE vs PE from filename mate tokens, runs cutadapt +
-#     bowtie2 per sample, counts reads per transcript, runs pyDESeq2,
-#     then falls through into the same TE / ΔTE / plot path as Mode A.
-#     Requires the `[fastq]` extra: pip install 'mitoribopy[fastq]'.
+#     gate is enforced against a prior `mitoribopy rpf` run. Use this
+#     for publication-grade DE statistics (the default flow runs DE on
+#     just the 13 mt-mRNAs, which is fine for exploration but noisy
+#     for inference).
 #
 # Quick start:
-#   1. Set MODE below (a or b) and edit the variables in its block.
+#   1. Set FLOW below ("default" or "de-table") and edit the
+#      corresponding variables block.
 #   2. chmod +x run_rnaseq.example.sh
 #   3. ./run_rnaseq.example.sh
 #
@@ -32,8 +35,8 @@ set -euo pipefail
 # ============================================================================
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Pick the mode: "a" = pre-computed DE table, "b" = from-FASTQ.
-MODE=a
+# Pick the flow: "default" = from-FASTQ (recommended), "de-table" = bring your own DE.
+FLOW="default"
 
 # Common knobs.
 THREADS=8                 # global thread budget (BLAS / pyDESeq2 caps)
@@ -47,34 +50,34 @@ MT_FASTA="${PROJECT_ROOT}/input_data/human-mt-mRNA.fasta"
 GENE_ID_CONVENTION="hgnc"      # ensembl | refseq | hgnc | mt_prefixed | bare
 ORGANISM="h.sapiens"           # h.sapiens | s.cerevisiae
 
-# Conditions (REQUIRED in Mode B; required for replicate-based ΔTE in Mode A).
+# Conditions (REQUIRED in default flow; optional / replicate-based ΔTE in --de-table flow).
 CONDITION_MAP="${PROJECT_ROOT}/samples.tsv"
 CONDITION_A="control"
 CONDITION_B="knockdown"
 
 
 # ============================================================================
-# Mode A: pre-computed DE table
+# Default flow: from-FASTQ
 # ============================================================================
-# Inputs (REQUIRED for Mode A):
-DE_TABLE="${PROJECT_ROOT}/de.tsv"
-RIBO_DIR="${PROJECT_ROOT}/results/rpf"
-
-
-# ============================================================================
-# Mode B: from-FASTQ
-# ============================================================================
-# Inputs (REQUIRED for Mode B):
+# Inputs (REQUIRED for the default flow):
 RNA_FASTQ_DIR="${PROJECT_ROOT}/input_data/rna_seq"
 RIBO_FASTQ_DIR="${PROJECT_ROOT}/input_data/ribo_seq"
 
-# Per-stage compute knobs (Mode B only).
+# Per-stage compute knobs (default flow only).
 ALIGN_THREADS=4                 # threads passed to cutadapt + bowtie2
 WORKDIR="${OUTPUT_DIR}/work"    # scratch (defaults to <output>/work if unset)
 
 
 # ============================================================================
-# Build per-mode argv
+# Alternative flow: pre-computed DE table
+# ============================================================================
+# Inputs (REQUIRED for the --de-table flow):
+DE_TABLE="${PROJECT_ROOT}/de.tsv"
+RIBO_DIR="${PROJECT_ROOT}/results/rpf"
+
+
+# ============================================================================
+# Build per-flow argv
 # ============================================================================
 COMMON_OPTS=(
   # --- Gene identifier convention (REQUIRED, no default) -----------------
@@ -94,31 +97,11 @@ COMMON_OPTS=(
   --log-level "${LOG_LEVEL}"
 )
 
-if [[ "${MODE}" == "a" ]]; then
+if [[ "${FLOW}" == "default" ]]; then
   RNASEQ_OPTS=(
     "${COMMON_OPTS[@]}"
 
-    # --- DE table (Mode A) ---------------------------------------------
-    --de-table "${DE_TABLE}"
-    --de-format auto              # auto | deseq2 | xtail | anota2seq | custom
-    # --de-gene-col gene_id       # only when --de-format custom
-    # --de-log2fc-col log2FoldChange
-    # --de-padj-col padj
-    # --de-basemean-col baseMean
-
-    # --- Ribo-seq inputs (Mode A) --------------------------------------
-    --ribo-dir "${RIBO_DIR}"
-    # --ribo-counts "${RIBO_DIR}/rpf_counts.tsv"   # explicit override
-
-    # --- Reference-consistency gate (Mode A; pass exactly one) --------
-    --reference-gtf "${MT_FASTA}"
-    # --reference-checksum 5ca397907373...        # OR pre-computed SHA256
-  )
-elif [[ "${MODE}" == "b" ]]; then
-  RNASEQ_OPTS=(
-    "${COMMON_OPTS[@]}"
-
-    # --- From-FASTQ inputs (Mode B; mutually exclusive with --de-table) -
+    # --- From-FASTQ inputs (default; mutually exclusive with --de-table)
     --rna-fastq "${RNA_FASTQ_DIR}"
     --ribo-fastq "${RIBO_FASTQ_DIR}"
     --reference-fasta "${MT_FASTA}"
@@ -136,8 +119,28 @@ elif [[ "${MODE}" == "b" ]]; then
     # on n=1-per-condition designs.
     # --no-auto-pseudo-replicate
   )
+elif [[ "${FLOW}" == "de-table" ]]; then
+  RNASEQ_OPTS=(
+    "${COMMON_OPTS[@]}"
+
+    # --- DE table (alternative flow) -----------------------------------
+    --de-table "${DE_TABLE}"
+    --de-format auto              # auto | deseq2 | xtail | anota2seq | custom
+    # --de-gene-col gene_id       # only when --de-format custom
+    # --de-log2fc-col log2FoldChange
+    # --de-padj-col padj
+    # --de-basemean-col baseMean
+
+    # --- Ribo-seq inputs (alternative flow) ----------------------------
+    --ribo-dir "${RIBO_DIR}"
+    # --ribo-counts "${RIBO_DIR}/rpf_counts.tsv"   # explicit override
+
+    # --- Reference-consistency gate (alternative flow; exactly one) ----
+    --reference-gtf "${MT_FASTA}"
+    # --reference-checksum 5ca397907373...        # OR pre-computed SHA256
+  )
 else
-  echo "MODE must be 'a' or 'b' (got: ${MODE})" >&2
+  echo "FLOW must be 'default' or 'de-table' (got: ${FLOW})" >&2
   exit 2
 fi
 
@@ -152,7 +155,7 @@ mitoribopy rnaseq "${RNASEQ_OPTS[@]}"
 # Done
 # ============================================================================
 echo
-echo "MitoRiboPy rnaseq finished (Mode ${MODE})."
+echo "MitoRiboPy rnaseq finished (FLOW=${FLOW})."
 echo "Inspect outputs under: ${OUTPUT_DIR}/"
 echo
 echo "Key files to look at first:"
@@ -164,10 +167,10 @@ echo "  ${OUTPUT_DIR}/plots/delta_te_volcano.png # ΔTE volcano"
 echo "  ${OUTPUT_DIR}/plots/ma.png               # DESeq2 MA plot"
 echo "  ${OUTPUT_DIR}/plots/te_bar_by_condition.png  # primary biological readout"
 echo "  ${OUTPUT_DIR}/plots/te_heatmap.png       # gene × sample log2(TE) heatmap"
-if [[ "${MODE}" == "b" ]]; then
-echo "  ${OUTPUT_DIR}/plots/sample_pca.png       # sample PCA (Mode B only)"
-echo "  ${OUTPUT_DIR}/de_table.tsv               # pyDESeq2 result (Mode B only)"
-echo "  ${OUTPUT_DIR}/rna_counts.tsv             # wide RNA-seq counts (Mode B only)"
-echo "  ${OUTPUT_DIR}/rpf_counts.tsv             # long-format Ribo-seq counts (Mode B only)"
+if [[ "${FLOW}" == "default" ]]; then
+echo "  ${OUTPUT_DIR}/plots/sample_pca.png       # sample PCA (default flow only)"
+echo "  ${OUTPUT_DIR}/de_table.tsv               # pyDESeq2 result (default flow only)"
+echo "  ${OUTPUT_DIR}/rna_counts.tsv             # wide RNA-seq counts (default flow only)"
+echo "  ${OUTPUT_DIR}/rpf_counts.tsv             # long-format Ribo-seq counts (default flow only)"
 echo "  ${OUTPUT_DIR}/condition_map.augmented.tsv  # rep1/rep2 names (when auto-split fired)"
 fi
