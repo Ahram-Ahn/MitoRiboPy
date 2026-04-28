@@ -1,5 +1,5 @@
 # MitoRiboPy -- exhaustive pipeline_config example (end-to-end `mitoribopy all`).
-# Compatible with: MitoRiboPy 0.4.5+
+# Compatible with: MitoRiboPy 0.5.0+
 #
 # Every flag from `mitoribopy align --help`, `mitoribopy rpf --help`,
 # and `mitoribopy rnaseq --help` is listed here with its default value
@@ -244,11 +244,30 @@ rpf:
 
 
 # ============================================================================
-# rnaseq (optional)  --  uncomment + set de_table to enable.
+# rnaseq (optional)  --  uncomment + set de_table OR rna_fastq to enable.
+# ============================================================================
+# Two mutually-exclusive modes:
+#   * Mode A (PRE-COMPUTED DE) -- set `de_table:` below.
+#   * Mode B (FROM-FASTQ, v0.5.0+) -- set `rna_fastq:` below; pyDESeq2 is
+#     run inside the subcommand. Requires the `[fastq]` extra:
+#         pip install 'mitoribopy[fastq]'
+# Setting BOTH `de_table:` and `rna_fastq:` exits with code 2.
 # ============================================================================
 # rnaseq:
 #
-#   # --- DE table ----------------------------------------------------------
+#   # --- Gene identifier convention (REQUIRED, no default; both modes) ---
+#   gene_id_convention: hgnc               # ensembl | refseq | hgnc | mt_prefixed | bare
+#   organism: h.sapiens                    # h.sapiens | s.cerevisiae
+#                                          # Synonyms: h, y, human, yeast.
+#
+#   # --- Conditions (REQUIRED in Mode B; required for replicate ΔTE in A) ---
+#   condition_map: samples.tsv             # TSV with `sample` and `condition` columns
+#   condition_a: control
+#   condition_b: knockdown
+#
+#   # --- Mode A keys (delete when using Mode B) --------------------------
+#
+#   # DE table:
 #   de_table: results/de.tsv               # DESeq2 / Xtail / Anota2Seq output
 #   de_format: auto                        # auto | deseq2 | xtail | anota2seq | custom
 #   de_gene_col: null                      # only when de_format=custom
@@ -256,24 +275,33 @@ rpf:
 #   de_padj_col: null
 #   de_basemean_col: null
 #
-#   # --- Gene identifier convention (REQUIRED, no default) -----------------
-#   gene_id_convention: hgnc               # ensembl | refseq | hgnc | mt_prefixed | bare
-#   organism: h.sapiens                    # h.sapiens | s.cerevisiae
-#                                          # Synonyms: h, y, human, yeast.
+#   # Ribo-seq inputs (auto-wired to <run_root>/rpf when rpf ran):
+#   # ribo_dir is auto-wired by `mitoribopy all`; uncomment to override.
+#   # ribo_counts: results/rpf/rpf_counts.tsv
 #
-#   # --- Ribo-seq inputs ---------------------------------------------------
-#   # ribo_dir is auto-wired to <run_root>/rpf when rpf ran.
-#   # ribo_counts: results/rpf/rpf_counts.tsv  # explicit override
-#
-#   # --- Reference-consistency gate (exactly one) --------------------------
-#   reference_gtf: input_data/human-mt-mRNA.fasta   # SHA256-hash-compared against
-#                                                    # rpf's reference_checksum
+#   # Reference-consistency gate (Mode A; exactly one):
+#   reference_gtf: input_data/human-mt-mRNA.fasta   # SHA256-hash-compared
+#                                                    # against rpf's
+#                                                    # reference_checksum
 #   # reference_checksum: <sha256>            # OR pre-computed checksum
 #
-#   # --- Conditions (optional; required for replicate-based dTE) ----------
-#   condition_map: samples.tsv               # TSV with `sample` and `condition` columns
-#   condition_a: control
-#   condition_b: knockdown
+#   # --- Mode B keys (delete when using Mode A) --------------------------
+#
+#   # rna_fastq:                              # files OR directories
+#   #   - input_data/rna_seq
+#   # ribo_fastq:
+#   #   - input_data/ribo_seq                 # optional; omit for rna-only run
+#   # reference_fasta: input_data/human-mt-mRNA.fasta
+#   #                                         # required in Mode B; SHA256
+#   #                                         # recorded in run_settings.json
+#   # bowtie2_index: null                     # optional pre-built bt2 prefix;
+#   #                                         # skips bowtie2-build
+#   # workdir: null                           # scratch; default <output>/work
+#   # align_threads: 4                        # threads for cutadapt + bowtie2
+#   # no_auto_pseudo_replicate: false         # default false; when true,
+#   #                                         # n=1 conditions are NOT split
+#   #                                         # into rep1/rep2 and the run
+#   #                                         # fails at pyDESeq2 dispersion.
 #
 #   # output is auto-wired to <run_root>/rnaseq when running through
 #   # `mitoribopy all`.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MitoRiboPy -- exhaustive shell-script template (end-to-end).
-# Compatible with: MitoRiboPy 0.4.5+
+# Compatible with: MitoRiboPy 0.5.0+
 #
 # Calls each subcommand (align -> rpf -> optional rnaseq) directly with
 # every available flag spelled out, so you can see and edit exactly
@@ -47,7 +47,23 @@ MT_FASTA="${PROJECT_ROOT}/input_data/human-mt-mRNA.fasta"
 OUTPUT_DIR="${PROJECT_ROOT}/results"
 
 # Optional rnaseq inputs (only needed when the rnaseq stage runs).
+# `mitoribopy rnaseq` has TWO mutually-exclusive modes:
+#   * Mode A (PRE-COMPUTED DE) -- pass an existing DE table; SHA256
+#     reference-consistency gate is enforced against the rpf run above.
+#   * Mode B (FROM-FASTQ, v0.5.0+) -- pass raw RNA-seq + Ribo-seq FASTQs
+#     and the subcommand runs cutadapt + bowtie2 + pyDESeq2 itself.
+#     Requires the `[fastq]` extra: pip install 'mitoribopy[fastq]'.
+RNASEQ_MODE=a              # a (pre-computed DE) | b (from-FASTQ)
+
+# Mode A inputs:
 DE_TABLE="${PROJECT_ROOT}/de.tsv"
+
+# Mode B inputs:
+RNA_FASTQ_DIR="${PROJECT_ROOT}/input_data/rna_seq"
+RIBO_FASTQ_DIR="${PROJECT_ROOT}/input_data/ribo_seq"
+RNASEQ_ALIGN_THREADS=4
+
+# Both modes:
 CONDITION_MAP="${PROJECT_ROOT}/samples.tsv"
 CONDITION_A="control"
 CONDITION_B="knockdown"
@@ -233,28 +249,12 @@ mitoribopy rpf "${RPF_OPTS[@]}"
 # Stage 3: rnaseq (optional)  --  DE table + rpf -> TE / dTE
 # ============================================================================
 if [[ "${RUN_RNASEQ}" == "true" ]]; then
-  RNASEQ_OPTS=(
-    # --- DE table -------------------------------------------------------
-    --de-table "${DE_TABLE}"
-    --de-format auto               # auto | deseq2 | xtail | anota2seq | custom
-    # --de-gene-col gene_id        # only when --de-format custom
-    # --de-log2fc-col log2FoldChange
-    # --de-padj-col padj
-    # --de-basemean-col baseMean
-
-    # --- Gene identifier convention (REQUIRED) -------------------------
+  RNASEQ_COMMON=(
+    # --- Gene identifier convention (REQUIRED, no default) -------------
     --gene-id-convention hgnc      # ensembl | refseq | hgnc | mt_prefixed | bare
     --organism h.sapiens           # h.sapiens | s.cerevisiae
 
-    # --- Ribo-seq inputs -----------------------------------------------
-    --ribo-dir "${OUTPUT_DIR}/rpf"
-    # --ribo-counts "${OUTPUT_DIR}/rpf/rpf_counts.tsv"   # explicit override
-
-    # --- Reference-consistency gate (exactly one) ----------------------
-    --reference-gtf "${MT_FASTA}"
-    # --reference-checksum <sha256>
-
-    # --- Conditions (optional; required for replicate-based dTE) -------
+    # --- Conditions (REQUIRED in Mode B; required for replicate ΔTE in A) ---
     --condition-map "${CONDITION_MAP}"
     --condition-a "${CONDITION_A}"
     --condition-b "${CONDITION_B}"
@@ -262,10 +262,53 @@ if [[ "${RUN_RNASEQ}" == "true" ]]; then
     # --- Output ---------------------------------------------------------
     --output "${OUTPUT_DIR}/rnaseq"
 
-    # --- Shared ----------------------------------------------------------
+    # --- Shared ---------------------------------------------------------
     --threads "${THREADS}"
     --log-level "${LOG_LEVEL}"
   )
+
+  if [[ "${RNASEQ_MODE}" == "a" ]]; then
+    RNASEQ_OPTS=(
+      "${RNASEQ_COMMON[@]}"
+
+      # --- DE table (Mode A) -------------------------------------------
+      --de-table "${DE_TABLE}"
+      --de-format auto             # auto | deseq2 | xtail | anota2seq | custom
+      # --de-gene-col gene_id      # only when --de-format custom
+      # --de-log2fc-col log2FoldChange
+      # --de-padj-col padj
+      # --de-basemean-col baseMean
+
+      # --- Ribo-seq inputs (Mode A) ------------------------------------
+      --ribo-dir "${OUTPUT_DIR}/rpf"
+      # --ribo-counts "${OUTPUT_DIR}/rpf/rpf_counts.tsv"   # explicit override
+
+      # --- Reference-consistency gate (Mode A; exactly one) ------------
+      --reference-gtf "${MT_FASTA}"
+      # --reference-checksum <sha256>
+    )
+  elif [[ "${RNASEQ_MODE}" == "b" ]]; then
+    RNASEQ_OPTS=(
+      "${RNASEQ_COMMON[@]}"
+
+      # --- From-FASTQ (Mode B; mutually exclusive with --de-table) ----
+      --rna-fastq "${RNA_FASTQ_DIR}"
+      --ribo-fastq "${RIBO_FASTQ_DIR}"
+      --reference-fasta "${MT_FASTA}"
+      # --bowtie2-index "${PROJECT_ROOT}/cache/transcriptome_5ca397907373"
+                                   # pre-built prefix; skips bowtie2-build
+      --workdir "${OUTPUT_DIR}/rnaseq/work"
+      --align-threads "${RNASEQ_ALIGN_THREADS}"
+      # --no-auto-pseudo-replicate
+                                   # default OFF; when set, n=1
+                                   # conditions are NOT split into
+                                   # rep1/rep2 and the run will fail at
+                                   # pyDESeq2 dispersion.
+    )
+  else
+    echo "RNASEQ_MODE must be 'a' or 'b' (got: ${RNASEQ_MODE})" >&2
+    exit 2
+  fi
 
   mitoribopy rnaseq "${RNASEQ_OPTS[@]}"
 fi

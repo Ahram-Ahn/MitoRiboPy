@@ -136,31 +136,50 @@ Top-level flags: `--version, -V`, `--help, -h`.
 
 ## `mitoribopy rnaseq`
 
-### DE table
+Two mutually exclusive modes:
 
-- `--de-table PATH` (**required**).
+- **Mode A** — pre-computed DE table (`--de-table`); enforces SHA256 reference-consistency gate.
+- **Mode B** — from-FASTQ (`--rna-fastq`); runs cutadapt + bowtie2 + pyDESeq2 itself; auto-splits n=1 conditions into rep1 / rep2 pseudo-replicates by record parity.
+
+Passing both `--de-table` and `--rna-fastq` exits with code 2.
+
+### DE table (Mode A)
+
+- `--de-table PATH` (**required for Mode A**).
 - `--de-format {auto,deseq2,xtail,anota2seq,custom}` (default `auto`).
 - `--de-gene-col`, `--de-log2fc-col`, `--de-padj-col`, `--de-basemean-col` (used with `--de-format custom`).
 
-### Gene identifiers
+### Gene identifiers (both modes)
 
 - `--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}` (**required, no default**).
 - `--organism {h.sapiens, s.cerevisiae}` (default `h.sapiens`). Synonyms: `h`, `y`, `human`, `yeast`.
 
-### Ribo-seq inputs
+### Ribo-seq inputs (Mode A)
 
 - `--ribo-dir DIR` — output of a prior `mitoribopy rpf` run.
 - `--ribo-counts PATH` — defaults to `<ribo-dir>/rpf_counts.tsv`.
 
-### Reference-consistency gate (exactly one)
+### Reference-consistency gate (Mode A; exactly one)
 
 - `--reference-gtf PATH`
 - `--reference-checksum SHA256`
 
-### Conditions (optional, required for replicate-based ΔTE)
+### From-FASTQ mode (Mode B)
 
-- `--condition-map PATH` (TSV with `sample` and `condition` columns).
-- `--condition-a NAME`, `--condition-b NAME`.
+- `--rna-fastq PATH [PATH ...]` (**required for Mode B**) — RNA-seq FASTQ files or directories.
+- `--ribo-fastq PATH [PATH ...]` — Ribo-seq FASTQ files or directories. When omitted, the run short-circuits after writing `de_table.tsv` (manifest mode `from-fastq-rna-only`).
+- `--reference-fasta PATH` (**required for Mode B**) — transcriptome FASTA. Hash recorded in `from_fastq.reference_checksum`.
+- `--bowtie2-index PREFIX` — pre-built bowtie2 index prefix; skips `bowtie2-build`. `--reference-fasta` is still required for hashing.
+- `--workdir DIR` — scratch directory for trim / index / per-sample BAM. Defaults to `<output>/work`.
+- `--align-threads N` (default `4`) — threads passed to cutadapt and bowtie2.
+- `--no-auto-pseudo-replicate` — disable auto-split of n=1 conditions into rep1 / rep2. Run will fail at pyDESeq2's dispersion-fitting step if any condition has only one sample.
+
+Mode B requires the optional `[fastq]` extra: `pip install 'mitoribopy[fastq]'` (pulls in `pydeseq2>=0.4`). PE + UMI is currently `NotImplementedError`.
+
+### Conditions
+
+- `--condition-map PATH` — TSV with `sample` and `condition` columns. **Required in Mode B** (and required in Mode A for replicate-based ΔTE).
+- `--condition-a NAME`, `--condition-b NAME` — required in Mode B; optional in Mode A.
 
 ### Output
 

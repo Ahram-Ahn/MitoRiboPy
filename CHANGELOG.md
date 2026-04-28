@@ -7,7 +7,89 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+(no changes pending)
+
+## [0.5.0] - 2026-04-27
+
 ### Added
+- **`mitoribopy rnaseq` from-FASTQ mode (Mode B).** A second mode for the
+  rnaseq subcommand that takes raw RNA-seq + Ribo-seq FASTQs and a
+  transcriptome FASTA and runs trimming, bowtie2 alignment, per-
+  transcript counting, and pyDESeq2 itself before falling through into
+  the existing TE / ΔTE / plot path. Triggered by `--rna-fastq …`;
+  mutually exclusive with `--de-table`. SE vs PE is auto-detected from
+  filename mate tokens (`_R1/_R2`, `_1/_2`, `.1./.2.`,
+  `_R1_001/_R2_001`, `_read1/_read2`). Adapter is auto-detected via
+  the existing `align.adapter_detect`; UMI presence is inferred from
+  per-position Shannon entropy on the first/last 16 nt of reads
+  (conservative — returns length=0 when uncertain). The bowtie2 index
+  is content-addressed (cached at
+  `<workdir>/bt2_cache/transcriptome_<sha12_of_fasta>`) so repeated
+  runs against the same FASTA skip the rebuild. The reference-
+  consistency hard-gate is skipped in Mode B; the FASTA SHA256 is
+  recorded under `from_fastq.reference_checksum` in `run_settings.json`
+  instead. The pre-computed-DE flow (Mode A) is unchanged.
+- **`[fastq]` optional-dependency extra** (`pydeseq2 >= 0.4`). Soft-
+  imported so the existing pre-computed-DE flow keeps working without
+  it. Install with `pip install 'mitoribopy[fastq]'`.
+- **Auto-pseudo-replicate fallback for n=1 conditions in Mode B.**
+  pyDESeq2 needs at least two samples per condition to estimate
+  dispersion. When a condition has exactly one sample, its FASTQ is
+  automatically stream-split by record parity (record N → rep1 if
+  even, rep2 if odd) so pyDESeq2 sees n=2. A loud stderr WARNING is
+  emitted per split. The augmented condition map (original entries +
+  rep1 / rep2 entries) lands at
+  `<output>/condition_map.augmented.tsv`. Disable with
+  `--no-auto-pseudo-replicate`.
+- **Four new diagnostic plots** added to the `rnaseq` output (both
+  modes for the first three; Mode B only for the fourth):
+  `plots/ma.png` (DESeq2 MA plot), `plots/te_bar_by_condition.png`
+  (log2(TE) per gene grouped by condition with SE error bars),
+  `plots/te_heatmap.png` (gene × sample log2(TE) heatmap, RdBu
+  centred at 0), `plots/sample_pca.png` (PC1 vs PC2 from log1p
+  counts, SVD-based — no scikit-learn dep).
+- **New CLI flags on `mitoribopy rnaseq`** for Mode B:
+  `--rna-fastq PATH [PATH ...]`, `--ribo-fastq PATH [PATH ...]`,
+  `--reference-fasta PATH`, `--bowtie2-index PREFIX`,
+  `--workdir DIR`, `--align-threads N`,
+  `--no-auto-pseudo-replicate`.
+- **New modules under `mitoribopy.rnaseq`:** `fastq_pairing`
+  (`FastqSample`, `enumerate_fastqs`, `detect_samples`),
+  `umi_detect` (`UmiDetectionResult`, `detect_umi`), `alignment`
+  (`SampleAlignmentResult`, `align_sample`, `count_per_transcript`,
+  `write_counts_matrix`, `write_long_counts`,
+  `build_bowtie2_index`), `de_analysis` (`build_sample_sheet`,
+  `run_deseq2`, `deseq2_to_de_table`, `write_de_table_tsv`),
+  `split_replicates` (`stream_split_by_parity`,
+  `split_sample_into_pseudo_replicates`).
+- **New example templates**:
+  [`examples/templates/run_rnaseq.example.sh`](examples/templates/run_rnaseq.example.sh)
+  and
+  [`examples/templates/rnaseq_config.example.yaml`](examples/templates/rnaseq_config.example.yaml)
+  exhaustively cover both modes; the existing
+  [`run_pipeline.example.sh`](examples/templates/run_pipeline.example.sh)
+  gains an `RNASEQ_MODE=a|b` toggle, and
+  [`pipeline_config.example.yaml`](examples/templates/pipeline_config.example.yaml)
+  documents the Mode A / Mode B keys side-by-side.
+
+### Changed
+- **Top-level `mitoribopy rnaseq` description** in the README and the
+  CLI-help banner now mentions both modes (pre-computed-DE and from-
+  FASTQ) rather than only the original.
+- **`docs/tutorials/02_rnaseq_integration.md` rewritten** to walk
+  through both modes step-by-step and explain the auto-pseudo-
+  replicate fallback.
+
+### Known gaps
+- **PE + UMI in Mode B is currently `NotImplementedError`.**
+  Preprocess UMIs into the read name first (e.g. via `umi_tools
+  extract`), or pass `--de-table` with your own pre-computed DE
+  results.
+- **Genome / splice-aware aligner in Mode B is out of scope.** The
+  bowtie2 index is built from a transcriptome FASTA, matching the
+  package's mt-mRNA focus.
+
+### Added (from the pre-0.5.0 `[Unreleased]` work; rolled into 0.5.0)
 - **Per-step timing in `mitoribopy rpf`.** Each of the 7 pipeline
   steps (initialize → load read counts → unfiltered read-length QC →
   filter BED → offset enrichment → offset selection → downstream
