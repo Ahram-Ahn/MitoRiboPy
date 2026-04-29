@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="MitoRiboPy — A Python package for mt-Ribo-seq" width="100%">
+</p>
+
 # MitoRiboPy
 
 Mitochondrial ribosome profiling (mt-Ribo-seq) analysis, end to end.
