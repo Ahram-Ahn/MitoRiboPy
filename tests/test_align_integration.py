@@ -170,8 +170,19 @@ def test_mitoribopy_align_end_to_end_on_tiny_synthetic_library(tmp_path):
     assert exit_code == 0, "align orchestrator exited non-zero"
 
     # 5) Verify output directory layout.
-    for subdir in ("trimmed", "contam_filtered", "aligned", "deduped", "bed"):
+    # `deduped/` is intentionally NOT in this list: when --dedup-strategy
+    # auto resolves to 'skip' (the case for non-UMI libraries like this
+    # synthetic one), the orchestrator does not write a duplicate
+    # `deduped/<sample>.dedup.bam` — the upstream mapq.bam goes straight
+    # into BED conversion. Documented in the README and validated
+    # separately in test_align_cli.py.
+    for subdir in ("trimmed", "contam_filtered", "aligned", "bed"):
         assert (out_dir / subdir).is_dir(), f"missing {subdir}/"
+    # `deduped/` should NOT exist on a non-UMI synthetic library because
+    # auto -> skip drops the redundant copy of the BAM.
+    assert not (out_dir / "deduped").exists(), (
+        "deduped/ should not be written when dedup auto-resolves to skip"
+    )
     assert (out_dir / "read_counts.tsv").is_file()
     assert (out_dir / "run_settings.json").is_file()
 
