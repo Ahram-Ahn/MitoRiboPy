@@ -624,7 +624,13 @@ pip install 'mitoribopy[fastq]'
 
 **Alternative flow — bring your own DE table.** Pass `--de-table` from a prior external DESeq2 / Xtail / Anota2Seq run together with a prior `mitoribopy rpf` run (`--ribo-dir`). This is the right path for publication-grade DE statistics — run DE on the full transcriptome in R / Python and feed the result here. Enforces a SHA256 reference-consistency gate: Ribo-seq and RNA-seq must hash to the identical transcript set, otherwise the run aborts with a `MISMATCH` banner.
 
-Both flows produce the same `te.tsv` / `delta_te.tsv` / `plots/` shape and emit eight common comparison plots (`mrna_vs_rpf`, `delta_te_volcano`, `ma`, `de_volcano_mrna`, `te_bar_by_condition`, `te_heatmap`, `te_compare_scatter`, `te_log2fc_bar`). The default flow additionally writes intermediate counts matrices, a generated `de_table.tsv`, an `rpf_de_table.tsv` from a second pyDESeq2 fit on the Ribo-seq subset, a `sample_pca.png` plot (PCA needs the full sample × gene counts matrix that only the default flow has on hand), and a `de_volcano_rpf.png` driven by `rpf_de_table.tsv`. The `te_compare_scatter` and `te_log2fc_bar` plots are emitted whenever a `--condition-map` plus `--base-sample` / `--compare-sample` (a.k.a. `--condition-a` / `--condition-b`) are set, in either flow.
+Both flows produce the same `te.tsv` / `delta_te.tsv` / `plots/` shape. The plot set splits into three tiers by availability:
+
+- **Always emitted (both flows):** `mrna_vs_rpf`, `delta_te_volcano`, `ma`, `de_volcano_mrna`, `te_bar_by_condition`, `te_heatmap` — six comparison plots driven only by the DE table + Ribo counts.
+- **Conditional (both flows, when `--condition-map` + `--base-sample` + `--compare-sample` are all set):** `te_compare_scatter`, `te_log2fc_bar` — these need replicate-per-condition information to compute per-condition TE means, so they are skipped in `--de-table` runs that omit a condition map.
+- **Default flow only:** `sample_pca` (PCA needs the full sample × gene counts matrix that only the default flow has on hand), and `de_volcano_rpf` (driven by an `rpf_de_table.tsv` from a second pyDESeq2 fit on the Ribo-seq subset; skipped with a stderr WARNING when the Ribo subset has fewer than two condition levels).
+
+Every PNG is rendered at **300 dpi** under a shared publication style (Okabe-Ito colour-blind-safe palette, sans-serif fonts, white-bbox gene labels with leader lines, stat boxes on the volcanos, replicate dots overlaid on the bar plot, condition strip on the heatmap, quadrant captions on `mrna_vs_rpf`) and is co-emitted as an **editable-text SVG sidecar** with the same stem (`mrna_vs_rpf.png` + `mrna_vs_rpf.svg`, etc.). The default flow additionally writes intermediate counts matrices, a generated `de_table.tsv`, and the `rpf_de_table.tsv` mentioned above.
 
 #### Inputs (default flow, from raw FASTQ)
 
@@ -819,24 +825,56 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
     te.tsv                             # one row per (sample, gene): rpf_count, mrna_abundance, te
     delta_te.tsv                       # one row per gene: mrna_log2fc, rpf_log2fc, delta_te_log2,
                                        # padj, note
-    plots/
-      # WT-vs-X comparison plots (titles wear `<base> vs <compare>` from
-      # --base-sample / --compare-sample so reviewers know the contrast at a glance)
-      mrna_vs_rpf.png                  # four-quadrant log2FC scatter (mRNA vs RPF)
-      delta_te_volcano.png             # ΔTE (log2) vs -log10(padj)
-      ma.png                           # log10(baseMean) vs log2FoldChange, points coloured by padj
-      de_volcano_mrna.png              # mRNA DE volcano (log2FC vs -log10 padj),
-                                       # red = sig up, blue = sig down, grey = n.s.,
-                                       # threshold guides at padj=0.05 and |L2FC|=1
-      de_volcano_rpf.png               # Ribo-seq DE volcano (default flow only;
-                                       # second pyDESeq2 fit on the Ribo subset)
-      te_bar_by_condition.png          # log2(TE) per gene, bars grouped by condition + SE error bars
-      te_heatmap.png                   # gene × sample log2(TE) heatmap (RdBu, centred at 0)
-      te_compare_scatter.png           # per-gene mean log2(TE) in <base> (x) vs <compare> (y)
-                                       # with identity line; emitted when both flags are set
-      te_log2fc_bar.png                # sorted bar of log2(TE_compare / TE_base) per gene;
-                                       # bars above zero mean TE up in the compare condition
-      sample_pca.png                   # PC1 vs PC2 from log1p counts (default flow only)
+    plots/                               # every entry below also has a sibling .svg
+                                         # at 300 dpi (PNG) + editable-text SVG (vector,
+                                         # Illustrator-friendly). Okabe-Ito colour-blind-
+                                         # safe palette across all plots; titles wear
+                                         # `<base> vs <compare>` from --base-sample /
+                                         # --compare-sample so reviewers know the
+                                         # contrast at a glance.
+      mrna_vs_rpf.png   (+ .svg)         # four-quadrant log2FC scatter (mRNA vs RPF) with
+                                         # faint quadrant captions (co-regulated up / buffered
+                                         # up / co-regulated down / buffered down) and points
+                                         # coloured by quadrant; identity y=x line drawn
+      delta_te_volcano.png   (+ .svg)    # ΔTE (log2) vs -log10(padj) with stat box
+                                         # (n_TE_up / n_TE_down / n_n.s.) and threshold
+                                         # guides at padj=0.05 + |ΔTE|=1
+      ma.png   (+ .svg)                  # log10(baseMean) vs log2FoldChange; sig up = vermillion,
+                                         # sig down = blue, n.s. = grey; sig genes labelled
+                                         # with white-bbox + leader line
+      de_volcano_mrna.png   (+ .svg)     # mRNA DE volcano (log2FC vs -log10 padj),
+                                         # vermillion = sig up, blue = sig down, grey = n.s.,
+                                         # threshold guides at padj=0.05 and |L2FC|=1;
+                                         # stat box reports counts; smart label placer
+                                         # spreads labels around dense clusters
+      de_volcano_rpf.png   (+ .svg)      # Ribo-seq DE volcano (default flow only;
+                                         # second pyDESeq2 fit on the Ribo subset; skipped
+                                         # with stderr WARNING when Ribo subset has fewer
+                                         # than two condition levels)
+      te_bar_by_condition.png   (+ .svg) # log2(TE) per gene, bars grouped by condition + SE
+                                         # error bars; every replicate also drawn as a
+                                         # black dot jittered along x within the bar's
+                                         # footprint (so the sample size behind each mean
+                                         # is visible by eye)
+      te_heatmap.png   (+ .svg)          # gene × sample log2(TE) heatmap (RdBu_r, centred
+                                         # at 0); coloured condition strip above the columns
+                                         # spells the assignment in white-bold; cell-value
+                                         # annotations get auto-contrast (white on saturated,
+                                         # black on faint)
+      te_compare_scatter.png   (+ .svg)  # per-gene mean log2(TE) in <base> (x) vs <compare>
+                                         # (y) with identity y=x line; per-replicate cloud
+                                         # behind gene-mean dots; gene-means coloured by
+                                         # direction; Pearson r in stat box. Emitted only
+                                         # when --condition-map + --base-sample +
+                                         # --compare-sample are all set.
+      te_log2fc_bar.png   (+ .svg)       # sorted bar of log2(TE_compare / TE_base) per gene
+                                         # with the numeric log2FC printed at each bar's
+                                         # tip; bars above zero (vermillion) mean TE up
+                                         # in the compare condition. Same conditions as
+                                         # te_compare_scatter.
+      sample_pca.png   (+ .svg)          # PC1 vs PC2 from log1p counts; condition = colour,
+                                         # assay = marker shape; variance % on axes
+                                         # (default flow only — needs the full counts matrix)
     run_settings.json
     # --- default flow (--rna-fastq) only -----------------------------
     de_table.tsv                       # mRNA pyDESeq2 result in canonical DESeq2 schema

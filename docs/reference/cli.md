@@ -143,7 +143,7 @@ Two mutually exclusive flows. Default is from raw FASTQ; pass `--de-table` to sw
 Requires the `[fastq]` optional-dependency extra: `pip install 'mitoribopy[fastq]'` (pulls in `pydeseq2>=0.4`).
 
 - `--rna-fastq PATH [PATH ...]` (**required**) — RNA-seq FASTQ files or directories.
-- `--ribo-fastq PATH [PATH ...]` — Ribo-seq FASTQ files or directories. When omitted, the run short-circuits after writing `de_table.tsv` (manifest mode `from-fastq-rna-only`).
+- `--ribo-fastq PATH [PATH ...]` — Ribo-seq FASTQ files or directories. When omitted, the run short-circuits after writing `de_table.tsv` and a slim `run_settings.json` (manifest mode `from-fastq-rna-only`); no TE / ΔTE tables, no `rpf_de_table.tsv`, no plots are written. Use this mode to generate a standalone DE table before deciding whether to proceed with TE analysis.
 - `--reference-fasta PATH` (**required**) — transcriptome FASTA. SHA256 recorded in `from_fastq.reference_checksum`.
 - `--bowtie2-index PREFIX` — pre-built bowtie2 index prefix; skips `bowtie2-build`. `--reference-fasta` is still required for hashing.
 - `--workdir DIR` — scratch directory for trim / index / per-sample BAM. Defaults to `<output>/work`.
@@ -160,12 +160,48 @@ PE + UMI is currently `NotImplementedError` — preprocess UMIs into the read na
 ### Conditions
 
 - `--condition-map PATH` — TSV with `sample` and `condition` columns. **Required in the default flow** (drives the pyDESeq2 contrast). In the `--de-table` flow it is optional and enables a replicate-based Ribo log2FC for ΔTE.
-- `--base-sample NAME`, `--compare-sample NAME` — base (reference) and compare (comparison) conditions of the contrast. **Required in the default flow**; optional in the `--de-table` flow. The base condition is the denominator of the log2FC and seeds the labels on every WT-vs-X comparison plot. Aliases for `--condition-a` / `--condition-b` (matching YAML keys: `base_sample:` / `compare_sample:`); mismatch between an alias and the legacy form exits with code 2.
+- `--base-sample NAME`, `--compare-sample NAME` — base (reference) and compare (comparison) conditions of the contrast. **Required in the default flow**; optional in the `--de-table` flow. The base condition is the denominator of the log2FC and seeds the labels on every WT-vs-X comparison plot. Aliases for `--condition-a` / `--condition-b` (matching YAML keys: `base_sample:` / `compare_sample:`); mismatch between an alias and the legacy form exits with code 2. The conditional plots `te_compare_scatter` and `te_log2fc_bar` are emitted only when `--condition-map`, `--base-sample`, and `--compare-sample` are all present (in either flow).
 - `--condition-a NAME`, `--condition-b NAME` — legacy spellings of `--base-sample` / `--compare-sample` (still accepted, identical semantics).
 
 ### Output
 
-- `--output DIR`.
+- `--output DIR` — root for everything below. Created if missing.
+
+Files written under `<output>/`:
+
+**TSV tables (both flows):**
+- `te.tsv` — long-format per-(sample, gene) translation efficiency: `sample`, `gene`, `rpf_count`, `mrna_abundance`, `te`.
+- `delta_te.tsv` — per-gene ΔTE row with `mrna_log2fc`, `rpf_log2fc`, `delta_te_log2`, `padj`, `note`.
+
+**TSV tables (default flow only):**
+- `de_table.tsv` — mRNA pyDESeq2 result (canonical DESeq2 schema: `gene_id`, `baseMean`, `log2FoldChange`, `padj`).
+- `rpf_de_table.tsv` — Ribo-seq pyDESeq2 result (same schema). Skipped with a stderr WARNING when the Ribo subset has fewer than two condition levels.
+- `rna_counts.tsv` — wide gene × sample RNA-seq counts.
+- `rpf_counts.tsv` — long-format Ribo-seq counts (`sample\tgene\tcount`).
+- `rpf_counts_matrix.tsv` — wide gene × sample Ribo-seq counts.
+- `condition_map.augmented.tsv` — original entries + auto-generated `rep1` / `rep2` names. Written only when the auto-pseudo-replicate split fired for at least one condition.
+
+**Plots, under `<output>/plots/`. Every PNG is rendered at 300 dpi under a shared publication style (Okabe-Ito colour-blind-safe palette, sans-serif fonts, white-bbox gene labels with leader lines) and gets a sibling SVG with editable text (`svg.fonttype = none`) at the same stem (`mrna_vs_rpf.png` + `mrna_vs_rpf.svg`, etc.):**
+
+| Plot | Always (both flows) | Conditional | Default flow only |
+|---|---|---|---|
+| `mrna_vs_rpf` | ✓ | | |
+| `delta_te_volcano` | ✓ | | |
+| `ma` | ✓ | | |
+| `de_volcano_mrna` | ✓ | | |
+| `te_bar_by_condition` | ✓ | | |
+| `te_heatmap` | ✓ | | |
+| `te_compare_scatter` | | ✓ — `--condition-map` + `--base-sample` + `--compare-sample` all set | |
+| `te_log2fc_bar` | | ✓ — same as above | |
+| `de_volcano_rpf` | | | ✓ — also skipped when Ribo subset has < 2 condition levels |
+| `sample_pca` | | | ✓ — needs the full sample × gene counts matrix |
+
+**Provenance:**
+- `run_settings.json` — every CLI / config arg, the resolved DE column map, gene-ID match summary, the verified reference checksum, and (default flow only) per-sample alignment stats (kit, adapter, UMI, total / aligned reads). In RNA-only mode (no `--ribo-fastq`) only the slim from-FASTQ block is written.
+
+**Exit codes:**
+- `0` — success.
+- `2` — argparse / argument validation failure: missing required flag, mutually-exclusive flags both set, alias-vs-legacy mismatch on the contrast pair, reference-consistency gate failure, or DE table load error.
 
 ### Alternative flow — bring your own DE table (`--de-table …`)
 

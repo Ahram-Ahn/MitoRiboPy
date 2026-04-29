@@ -728,11 +728,13 @@ def run(argv: Iterable[str]) -> int:
                 "compute TE per sample per gene = (RPF + 0.5) / (mRNA + 0.5)",
                 "compute delta-TE = log2(RPF_fc) - log2(mRNA_fc) with "
                 "replicate-based Ribo log2FC when --condition-map is given",
-                f"emit te.tsv, delta_te.tsv, and plots: mrna_vs_rpf, "
-                f"delta_te_volcano, ma, de_volcano_mrna ({base} vs "
-                f"{compare}), te_bar_by_condition, te_heatmap; "
-                f"plus te_compare_scatter and te_log2fc_bar when "
-                "--condition-map is provided",
+                f"emit te.tsv, delta_te.tsv, and 6 always-on plots "
+                f"(mrna_vs_rpf, delta_te_volcano, ma, de_volcano_mrna "
+                f"({base} vs {compare}), te_bar_by_condition, "
+                f"te_heatmap); plus te_compare_scatter and "
+                "te_log2fc_bar when --condition-map is provided. "
+                "Each PNG is co-emitted as an SVG sidecar at the "
+                "same stem (.png + .svg) for vector / Illustrator use",
             ]
         else:
             actions = [
@@ -753,9 +755,16 @@ def run(argv: Iterable[str]) -> int:
                 f"match DE gene_ids against mt-mRNA registry ({args.organism}) "
                 f"using --gene-id-convention {args.gene_id_convention}",
                 "compute TE + delta-TE; emit te.tsv, delta_te.tsv, and "
-                "9 plots (sample_pca, mrna_vs_rpf, delta_te_volcano, ma, "
-                "de_volcano_mrna, de_volcano_rpf, te_bar_by_condition, "
-                "te_heatmap, te_compare_scatter, te_log2fc_bar)",
+                "10 plots (sample_pca, mrna_vs_rpf, delta_te_volcano, "
+                "ma, de_volcano_mrna, de_volcano_rpf, te_bar_by_condition, "
+                "te_heatmap, te_compare_scatter, te_log2fc_bar). Each "
+                "PNG is co-emitted as an SVG sidecar at the same stem "
+                "(.png + .svg) for vector / Illustrator use; PNGs render "
+                "at 300 dpi with the Okabe-Ito colour-blind-safe palette",
+                "also write the wide / long counts matrices "
+                "(rna_counts.tsv, rpf_counts_matrix.tsv, rpf_counts.tsv) "
+                "and an rpf_de_table.tsv from a second pyDESeq2 fit on "
+                "the Ribo subset",
                 "record FASTA SHA256 + per-sample provenance in run_settings.json",
             ]
         return common.emit_dry_run("rnaseq", actions)

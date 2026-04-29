@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MitoRiboPy rnaseq -- exhaustive shell-script template (rnaseq stage only).
-# Compatible with: MitoRiboPy 0.5.0+
+# Compatible with: MitoRiboPy 0.5.1+
 #
 # `mitoribopy rnaseq` has TWO mutually-exclusive flows:
 #
@@ -163,18 +163,28 @@ echo "MitoRiboPy rnaseq finished (FLOW=${FLOW})."
 echo "Inspect outputs under: ${OUTPUT_DIR}/"
 echo
 echo "Key files to look at first:"
-echo "  ${OUTPUT_DIR}/te.tsv                     # per-(sample,gene) TE"
-echo "  ${OUTPUT_DIR}/delta_te.tsv               # per-gene ΔTE log2 + padj + note"
-echo "  ${OUTPUT_DIR}/run_settings.json          # full provenance + per-sample stats"
-echo "  ${OUTPUT_DIR}/plots/mrna_vs_rpf.png      # log2FC RPF vs mRNA scatter"
-echo "  ${OUTPUT_DIR}/plots/delta_te_volcano.png # ΔTE volcano"
-echo "  ${OUTPUT_DIR}/plots/ma.png               # DESeq2 MA plot"
-echo "  ${OUTPUT_DIR}/plots/te_bar_by_condition.png  # primary biological readout"
-echo "  ${OUTPUT_DIR}/plots/te_heatmap.png       # gene × sample log2(TE) heatmap"
+echo "  ${OUTPUT_DIR}/te.tsv                       # per-(sample,gene) TE"
+echo "  ${OUTPUT_DIR}/delta_te.tsv                 # per-gene ΔTE log2 + padj + note"
+echo "  ${OUTPUT_DIR}/run_settings.json            # full provenance + per-sample stats"
+echo
+echo "Plots — every PNG ships with a sibling .svg (300 dpi PNG + editable-text SVG):"
+echo "  ${OUTPUT_DIR}/plots/mrna_vs_rpf.png        # 4-quadrant log2FC scatter (mRNA vs RPF)"
+echo "  ${OUTPUT_DIR}/plots/delta_te_volcano.png   # ΔTE volcano with stat box"
+echo "  ${OUTPUT_DIR}/plots/ma.png                 # DESeq2 MA plot"
+echo "  ${OUTPUT_DIR}/plots/de_volcano_mrna.png    # mRNA DE volcano (WT-vs-X)"
+echo "  ${OUTPUT_DIR}/plots/te_bar_by_condition.png  # primary readout — bars + replicate dots"
+echo "  ${OUTPUT_DIR}/plots/te_heatmap.png         # gene × sample log2(TE) with condition strip"
+echo "  ${OUTPUT_DIR}/plots/te_compare_scatter.png # base vs compare TE scatter (when --condition-map +"
+echo "                                             # --base-sample + --compare-sample are all set)"
+echo "  ${OUTPUT_DIR}/plots/te_log2fc_bar.png      # sorted log2(TE_compare/TE_base) per gene"
 if [[ "${FLOW}" == "default" ]]; then
-echo "  ${OUTPUT_DIR}/plots/sample_pca.png       # sample PCA (default flow only)"
-echo "  ${OUTPUT_DIR}/de_table.tsv               # pyDESeq2 result (default flow only)"
-echo "  ${OUTPUT_DIR}/rna_counts.tsv             # wide RNA-seq counts (default flow only)"
-echo "  ${OUTPUT_DIR}/rpf_counts.tsv             # long-format Ribo-seq counts (default flow only)"
+echo "  ${OUTPUT_DIR}/plots/sample_pca.png         # sample PCA (default flow only)"
+echo "  ${OUTPUT_DIR}/plots/de_volcano_rpf.png     # Ribo-seq DE volcano (default flow only;"
+echo "                                             # skipped when Ribo subset has < 2 condition levels)"
+echo "  ${OUTPUT_DIR}/de_table.tsv                 # mRNA pyDESeq2 result"
+echo "  ${OUTPUT_DIR}/rpf_de_table.tsv             # Ribo-seq pyDESeq2 result (default flow only)"
+echo "  ${OUTPUT_DIR}/rna_counts.tsv               # wide RNA-seq counts"
+echo "  ${OUTPUT_DIR}/rpf_counts.tsv               # long-format Ribo-seq counts"
+echo "  ${OUTPUT_DIR}/rpf_counts_matrix.tsv        # wide Ribo-seq counts"
 echo "  ${OUTPUT_DIR}/condition_map.augmented.tsv  # rep1/rep2 names (when auto-split fired)"
 fi
