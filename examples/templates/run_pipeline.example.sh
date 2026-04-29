@@ -68,8 +68,10 @@ DE_TABLE="${PROJECT_ROOT}/de.tsv"
 
 # Both flows:
 CONDITION_MAP="${PROJECT_ROOT}/samples.tsv"
-CONDITION_A="control"
-CONDITION_B="knockdown"
+BASE_SAMPLE="control"          # reference condition (denominator of the WT-vs-X
+                               # contrast). Drives the labels on every comparison
+                               # plot. Alias for the legacy CONDITION_A.
+COMPARE_SAMPLE="knockdown"     # comparison condition; alias for CONDITION_B.
 
 # Compute knobs.
 THREADS=8                 # global thread budget for cutadapt + bowtie2.
@@ -259,8 +261,8 @@ if [[ "${RUN_RNASEQ}" == "true" ]]; then
 
     # --- Conditions (REQUIRED in Mode B; required for replicate ΔTE in A) ---
     --condition-map "${CONDITION_MAP}"
-    --condition-a "${CONDITION_A}"
-    --condition-b "${CONDITION_B}"
+    --base-sample "${BASE_SAMPLE}"
+    --compare-sample "${COMPARE_SAMPLE}"
 
     # --- Output ---------------------------------------------------------
     --output "${OUTPUT_DIR}/rnaseq"

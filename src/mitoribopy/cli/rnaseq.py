@@ -49,12 +49,15 @@ from ..rnaseq import (
 )
 from ..rnaseq._types import DTeRow, TeRow
 from ..rnaseq.plots import (
+    plot_de_volcano,
     plot_delta_te_volcano,
     plot_ma,
     plot_mrna_vs_rpf_scatter,
     plot_pca,
     plot_te_bar_grouped,
+    plot_te_compare_scatter,
     plot_te_heatmap,
+    plot_te_log2fc_bar,
 )
 from . import common
 
@@ -194,8 +197,52 @@ def build_parser() -> argparse.ArgumentParser:
             "'single_replicate_no_statistics' note."
         ),
     )
-    conditions.add_argument("--condition-a", default=None, metavar="NAME")
-    conditions.add_argument("--condition-b", default=None, metavar="NAME")
+    conditions.add_argument(
+        "--condition-a",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Reference condition (denominator of the WT-vs-X contrast). "
+            "Used as the baseline in DE / TE comparison plots. "
+            "``--base-sample`` is the preferred spelling (matches the "
+            "rpf config's ``base_sample`` key); both flags resolve to "
+            "the same internal field."
+        ),
+    )
+    conditions.add_argument(
+        "--condition-b",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Comparison condition (numerator of the contrast). "
+            "``--compare-sample`` is the preferred alias."
+        ),
+    )
+    conditions.add_argument(
+        "--base-sample",
+        default=None,
+        metavar="NAME",
+        dest="base_sample",
+        help=(
+            "Reference condition for the contrast and for all per-gene "
+            "comparison plots (mRNA / RPF DE volcanoes, TE compare "
+            "scatter, TE log2FC bar). Alias for ``--condition-a``; "
+            "named to mirror the rpf config's ``base_sample`` key. "
+            "When both ``--base-sample`` and ``--condition-a`` are "
+            "provided they must agree."
+        ),
+    )
+    conditions.add_argument(
+        "--compare-sample",
+        default=None,
+        metavar="NAME",
+        dest="compare_sample",
+        help=(
+            "Comparison condition (alias for ``--condition-b``). When "
+            "both ``--compare-sample`` and ``--condition-b`` are "
+            "provided they must agree."
+        ),
+    )
 
     out = parser.add_argument_group("Output")
     out.add_argument(
@@ -524,10 +571,38 @@ def _run_from_fastq(args, output_dir: Path) -> int:
         contrast_factor="condition",
         contrast_a=args.condition_a,
         contrast_b=args.condition_b,
+        assay="rna",
     )
     de_table = deseq2_to_de_table(results_df)
     de_table_path = output_dir / "de_table.tsv"
     write_de_table_tsv(de_table, de_table_path)
+
+    # Run pyDESeq2 a second time on the Ribo-seq subset so we get a
+    # statistically grounded RPF log2FC + padj. Only attempted when at
+    # least one Ribo sample landed in the metadata; otherwise skipped
+    # silently. ``run_deseq2`` raises ValueError if the subset has
+    # fewer than two condition levels — caught here so the run continues
+    # without an RPF DE table (the fallback plots still work).
+    rpf_de_table_path: Path | None = None
+    if ribo_results:
+        try:
+            rpf_results_df = run_deseq2(
+                counts_df,
+                metadata_df,
+                contrast_factor="condition",
+                contrast_a=args.condition_a,
+                contrast_b=args.condition_b,
+                assay="ribo",
+            )
+        except ValueError as exc:
+            sys.stderr.write(
+                "[mitoribopy rnaseq] WARNING: Skipping Ribo-seq DESeq2 "
+                f"({exc}); RPF volcano plot will be omitted.\n"
+            )
+        else:
+            rpf_de_table = deseq2_to_de_table(rpf_results_df)
+            rpf_de_table_path = output_dir / "rpf_de_table.tsv"
+            write_de_table_tsv(rpf_de_table, rpf_de_table_path)
 
     reference_checksum = compute_reference_checksum(Path(args.reference_fasta))
 
@@ -538,6 +613,9 @@ def _run_from_fastq(args, output_dir: Path) -> int:
     )
     args._from_fastq = True
     args._reference_checksum = reference_checksum
+    args._rpf_de_table_path = (
+        str(rpf_de_table_path) if rpf_de_table_path is not None else None
+    )
     args._fastq_provenance = {
         "mode": "from-fastq" if ribo_results else "from-fastq-rna-only",
         "reference_fasta": str(args.reference_fasta),
@@ -605,6 +683,31 @@ def run(argv: Iterable[str]) -> int:
     args = parser.parse_args(argv_list)
     common.apply_common_arguments(args)
 
+    # --base-sample / --compare-sample are aliases for --condition-a /
+    # --condition-b. Reconcile here so the rest of the run uses a single
+    # canonical pair (args.condition_a / args.condition_b). When both an
+    # alias and the legacy flag are passed they must agree.
+    alias_pairs = (
+        ("base_sample", "condition_a"),
+        ("compare_sample", "condition_b"),
+    )
+    for alias_attr, canonical_attr in alias_pairs:
+        alias_value = getattr(args, alias_attr, None)
+        canonical_value = getattr(args, canonical_attr, None)
+        if alias_value and canonical_value and alias_value != canonical_value:
+            print(
+                f"[mitoribopy rnaseq] ERROR: --{alias_attr.replace('_', '-')}"
+                f"={alias_value!r} conflicts with "
+                f"--{canonical_attr.replace('_', '-')}={canonical_value!r}; "
+                "pick one.",
+                file=sys.stderr,
+            )
+            return 2
+        if alias_value and not canonical_value:
+            setattr(args, canonical_attr, alias_value)
+        elif canonical_value and not alias_value:
+            setattr(args, alias_attr, canonical_value)
+
     # --- Default-flow vs --de-table flow dispatch -----------------------
     # The default flow (from raw FASTQ) is selected unless the user
     # passes --de-table, in which case we run the alternative pre-
@@ -612,6 +715,8 @@ def run(argv: Iterable[str]) -> int:
     # accidentally silently shadow one with the other.
     use_de_table = args.de_table is not None
     if args.dry_run:
+        base = args.condition_a or "<--base-sample>"
+        compare = args.condition_b or "<--compare-sample>"
         if use_de_table:
             actions = [
                 "resolve --de-format (auto-detect from headers) and load DE table",
@@ -623,7 +728,11 @@ def run(argv: Iterable[str]) -> int:
                 "compute TE per sample per gene = (RPF + 0.5) / (mRNA + 0.5)",
                 "compute delta-TE = log2(RPF_fc) - log2(mRNA_fc) with "
                 "replicate-based Ribo log2FC when --condition-map is given",
-                "emit te.tsv, delta_te.tsv, and plots (scatter + volcano + MA + bar + heatmap)",
+                f"emit te.tsv, delta_te.tsv, and plots: mrna_vs_rpf, "
+                f"delta_te_volcano, ma, de_volcano_mrna ({base} vs "
+                f"{compare}), te_bar_by_condition, te_heatmap; "
+                f"plus te_compare_scatter and te_log2fc_bar when "
+                "--condition-map is provided",
             ]
         else:
             actions = [
@@ -635,13 +744,18 @@ def run(argv: Iterable[str]) -> int:
                 "mapped reads per transcript",
                 "auto-split any condition with n=1 into rep1 / rep2 by record "
                 "parity (disable with --no-auto-pseudo-replicate)",
-                "build sample sheet, run pyDESeq2 contrast "
-                f"({args.condition_a or '<--condition-a>'} vs {args.condition_b or '<--condition-b>'})",
-                "serialise pyDESeq2 result to de_table.tsv (DESeq2 schema)",
+                f"build sample sheet, run pyDESeq2 contrast on the RNA "
+                f"subset ({base} vs {compare})",
+                "serialise mRNA pyDESeq2 result to de_table.tsv (DESeq2 schema)",
+                f"run pyDESeq2 a second time on the Ribo subset ({base} "
+                f"vs {compare}) and write rpf_de_table.tsv (skipped if "
+                "the Ribo subset has fewer than two condition levels)",
                 f"match DE gene_ids against mt-mRNA registry ({args.organism}) "
                 f"using --gene-id-convention {args.gene_id_convention}",
-                "compute TE + delta-TE; emit te.tsv, delta_te.tsv, and 6 plots "
-                "(scatter, volcano, MA, TE bar by condition, TE heatmap, sample PCA)",
+                "compute TE + delta-TE; emit te.tsv, delta_te.tsv, and "
+                "9 plots (sample_pca, mrna_vs_rpf, delta_te_volcano, ma, "
+                "de_volcano_mrna, de_volcano_rpf, te_bar_by_condition, "
+                "te_heatmap, te_compare_scatter, te_log2fc_bar)",
                 "record FASTA SHA256 + per-sample provenance in run_settings.json",
             ]
         return common.emit_dry_run("rnaseq", actions)
@@ -681,10 +795,15 @@ def run(argv: Iterable[str]) -> int:
             missing.append("--output")
         if not args.condition_map:
             missing.append("--condition-map")
+        # condition_a / condition_b are populated from --base-sample /
+        # --compare-sample by the alias-reconciliation step above, so
+        # we only need to flag the canonical pair here. Naming the
+        # alias too keeps the error actionable for users who read
+        # docs starting from --base-sample.
         if not args.condition_a:
-            missing.append("--condition-a")
+            missing.append("--condition-a (or --base-sample)")
         if not args.condition_b:
-            missing.append("--condition-b")
+            missing.append("--condition-b (or --compare-sample)")
     if missing:
         flow = "--de-table flow" if use_de_table else "default flow (from raw FASTQ)"
         print(
@@ -802,9 +921,73 @@ def run(argv: Iterable[str]) -> int:
 
     _write_te_table(te_rows, output_dir / "te.tsv")
     _write_delta_te_table(dte_rows, output_dir / "delta_te.tsv")
-    plot_mrna_vs_rpf_scatter(dte_rows, output_dir / "plots" / "mrna_vs_rpf.png")
-    plot_delta_te_volcano(dte_rows, output_dir / "plots" / "delta_te_volcano.png")
-    plot_ma(de_table, output_dir / "plots" / "ma.png")
+
+    contrast_label = (
+        f"{args.condition_a} vs {args.condition_b}"
+        if args.condition_a and args.condition_b
+        else None
+    )
+
+    plot_mrna_vs_rpf_scatter(
+        dte_rows,
+        output_dir / "plots" / "mrna_vs_rpf.png",
+        title=(
+            f"log2FC RPF vs mRNA — {contrast_label}"
+            if contrast_label
+            else "log2FC RPF vs mRNA"
+        ),
+    )
+    plot_delta_te_volcano(
+        dte_rows,
+        output_dir / "plots" / "delta_te_volcano.png",
+        title=(
+            f"Delta-TE (log2) volcano — {contrast_label}"
+            if contrast_label
+            else "Delta-TE (log2) volcano"
+        ),
+    )
+    plot_ma(
+        de_table,
+        output_dir / "plots" / "ma.png",
+        title=(
+            f"MA plot (mRNA DE) — {contrast_label}"
+            if contrast_label
+            else "MA plot (mRNA DE)"
+        ),
+    )
+    plot_de_volcano(
+        de_table,
+        output_dir / "plots" / "de_volcano_mrna.png",
+        contrast_label=contrast_label,
+        title=(
+            f"mRNA DE volcano — {contrast_label}"
+            if contrast_label
+            else "mRNA DE volcano"
+        ),
+    )
+
+    rpf_de_table_path = getattr(args, "_rpf_de_table_path", None)
+    if rpf_de_table_path:
+        try:
+            rpf_de_table = load_de_table(Path(rpf_de_table_path))
+        except (FileNotFoundError, ValueError) as exc:
+            sys.stderr.write(
+                "[mitoribopy rnaseq] WARNING: Could not load Ribo-seq "
+                f"DE table from {rpf_de_table_path!r} ({exc}); skipping "
+                "RPF volcano plot.\n"
+            )
+        else:
+            plot_de_volcano(
+                rpf_de_table,
+                output_dir / "plots" / "de_volcano_rpf.png",
+                contrast_label=contrast_label,
+                title=(
+                    f"Ribo-seq DE volcano — {contrast_label}"
+                    if contrast_label
+                    else "Ribo-seq DE volcano"
+                ),
+            )
+
     plot_te_bar_grouped(
         te_rows, condition_map, output_dir / "plots" / "te_bar_by_condition.png"
     )
@@ -812,10 +995,27 @@ def run(argv: Iterable[str]) -> int:
         te_rows, condition_map, output_dir / "plots" / "te_heatmap.png"
     )
 
+    if condition_map and args.condition_a and args.condition_b:
+        plot_te_compare_scatter(
+            te_rows,
+            condition_map,
+            args.condition_a,
+            args.condition_b,
+            output_dir / "plots" / "te_compare_scatter.png",
+        )
+        plot_te_log2fc_bar(
+            te_rows,
+            condition_map,
+            args.condition_a,
+            args.condition_b,
+            output_dir / "plots" / "te_log2fc_bar.png",
+        )
+
     settings = {
         "subcommand": "rnaseq",
         "mitoribopy_version": __version__,
         "de_table": str(args.de_table),
+        "rpf_de_table": getattr(args, "_rpf_de_table_path", None),
         "de_format_resolved": de_table.format,
         "de_column_map": asdict(de_table.column_map),
         "gene_id_convention": args.gene_id_convention,
@@ -827,6 +1027,8 @@ def run(argv: Iterable[str]) -> int:
         "condition_map_path": args.condition_map,
         "condition_a": args.condition_a,
         "condition_b": args.condition_b,
+        "base_sample": args.condition_a,
+        "compare_sample": args.condition_b,
         "te_row_count": len(te_rows),
         "delta_te_row_count": len(dte_rows),
     }

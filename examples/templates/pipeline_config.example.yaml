@@ -263,8 +263,12 @@ rpf:
 #
 #   # --- Conditions (REQUIRED in default flow; optional in --de-table) ---
 #   condition_map: samples.tsv             # TSV with `sample` and `condition` columns
-#   condition_a: control
-#   condition_b: knockdown
+#   base_sample: control                    # reference condition (denominator of
+#                                           # the WT-vs-X contrast). Alias for the
+#                                           # legacy `condition_a` key.
+#   compare_sample: knockdown               # comparison condition; alias for
+#                                           # `condition_b`. Both alias spellings
+#                                           # and the legacy spellings are accepted.
 #
 #   # --- Default flow keys (from-FASTQ; delete when using --de-table) ---
 #

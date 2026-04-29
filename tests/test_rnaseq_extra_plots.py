@@ -20,10 +20,13 @@ from mitoribopy.rnaseq._types import (
     TeRow,
 )
 from mitoribopy.rnaseq.plots import (
+    plot_de_volcano,
     plot_ma,
     plot_pca,
     plot_te_bar_grouped,
+    plot_te_compare_scatter,
     plot_te_heatmap,
+    plot_te_log2fc_bar,
 )
 
 
@@ -136,4 +139,68 @@ def test_plot_pca_single_sample_falls_back(tmp_path: Path) -> None:
     out = tmp_path / "pca_one.png"
     plot_pca(counts, meta, out)
     # Must still produce a real PNG (placeholder, not a crash).
+    assert _is_png(out)
+
+
+def test_plot_de_volcano_emits_png(tmp_path: Path) -> None:
+    out = tmp_path / "de_volcano.png"
+    plot_de_volcano(_make_de_table(), out, contrast_label="WT vs KO")
+    assert _is_png(out)
+    assert out.stat().st_size > 1000
+
+
+def test_plot_de_volcano_handles_padj_zero(tmp_path: Path) -> None:
+    """A row with ``padj == 0`` (numerical underflow) must be drawn at the
+    largest finite -log10(padj) on the figure, not at infinity."""
+    de = DeTable(
+        format="deseq2",
+        column_map=DE_COLUMN_ALIASES["deseq2"],
+        rows=[
+            {"gene_id": "ND1", "log2fc": 0.4, "padj": 0.01, "basemean": 500.0},
+            {"gene_id": "CO1", "log2fc": -1.2, "padj": 0.0, "basemean": 5000.0},
+            {"gene_id": "ND6", "log2fc": 1.7, "padj": 0.5, "basemean": 50.0},
+        ],
+    )
+    out = tmp_path / "de_volcano_zero.png"
+    plot_de_volcano(de, out, contrast_label="WT vs KO")
+    assert _is_png(out)
+
+
+def test_plot_de_volcano_handles_empty(tmp_path: Path) -> None:
+    de = DeTable(
+        format="deseq2",
+        column_map=DE_COLUMN_ALIASES["deseq2"],
+        rows=[],
+    )
+    out = tmp_path / "de_volcano_empty.png"
+    plot_de_volcano(de, out)
+    assert _is_png(out)
+
+
+def test_plot_te_compare_scatter_emits_png(tmp_path: Path) -> None:
+    out = tmp_path / "te_compare.png"
+    plot_te_compare_scatter(
+        _make_te_rows(), _make_condition_map(), "WT", "KO", out
+    )
+    assert _is_png(out)
+
+
+def test_plot_te_compare_scatter_handles_no_shared_genes(tmp_path: Path) -> None:
+    """Empty cells from a condition with no replicates must not crash."""
+    out = tmp_path / "te_compare_empty.png"
+    plot_te_compare_scatter([], {}, "WT", "KO", out)
+    assert _is_png(out)
+
+
+def test_plot_te_log2fc_bar_emits_png(tmp_path: Path) -> None:
+    out = tmp_path / "te_log2fc.png"
+    plot_te_log2fc_bar(
+        _make_te_rows(), _make_condition_map(), "WT", "KO", out
+    )
+    assert _is_png(out)
+
+
+def test_plot_te_log2fc_bar_handles_empty(tmp_path: Path) -> None:
+    out = tmp_path / "te_log2fc_empty.png"
+    plot_te_log2fc_bar([], {}, "WT", "KO", out)
     assert _is_png(out)

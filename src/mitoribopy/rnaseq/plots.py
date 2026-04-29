@@ -109,6 +109,265 @@ def plot_delta_te_volcano(
     return output_path
 
 
+def plot_de_volcano(
+    de_table: DeTable,
+    output_path: Path,
+    *,
+    padj_threshold: float = 0.05,
+    log2fc_threshold: float = 1.0,
+    contrast_label: str | None = None,
+    title: str | None = None,
+    annotate: bool = True,
+) -> Path:
+    """DE volcano: log2FoldChange (x) vs -log10(padj) (y).
+
+    Points are coloured by significance:
+
+    * **red**  — padj < ``padj_threshold`` AND log2FC ≥  ``log2fc_threshold`` (up)
+    * **blue** — padj < ``padj_threshold`` AND log2FC ≤ -``log2fc_threshold`` (down)
+    * **grey** — everything else
+
+    Threshold guides are drawn at ±``log2fc_threshold`` (vertical) and
+    ``-log10(padj_threshold)`` (horizontal). When ``annotate`` is true,
+    every gene is labelled — fine for the ~13 mt-mRNA universe; pass
+    ``annotate=False`` for whole-transcriptome inputs.
+
+    ``contrast_label`` is a free-form string ("WT vs KO") woven into
+    the default title and the x-axis. Pass ``title`` to override.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    xs_up: list[float] = []
+    ys_up: list[float] = []
+    xs_dn: list[float] = []
+    ys_dn: list[float] = []
+    xs_ns: list[float] = []
+    ys_ns: list[float] = []
+    sig_labels: list[tuple[float, float, str]] = []
+    ns_labels: list[tuple[float, float, str]] = []
+
+    for row in de_table.rows:
+        l2 = row.get("log2fc")
+        padj = row.get("padj")
+        gene = str(row.get("gene_id", ""))
+        if l2 is None:
+            continue
+        # padj == 0 is a numerical underflow from very small p-values;
+        # cap -log10 at the largest finite value seen so the dot is on
+        # the plot rather than at +inf.
+        if padj is None:
+            y = 0.0
+            is_sig = False
+        elif padj <= 0:
+            y = math.inf  # sentinel; will be replaced below
+            is_sig = True
+        else:
+            y = -math.log10(padj)
+            is_sig = padj < padj_threshold
+        is_up = is_sig and l2 >= log2fc_threshold
+        is_dn = is_sig and l2 <= -log2fc_threshold
+
+        if is_up:
+            xs_up.append(l2)
+            ys_up.append(y)
+            sig_labels.append((l2, y, gene))
+        elif is_dn:
+            xs_dn.append(l2)
+            ys_dn.append(y)
+            sig_labels.append((l2, y, gene))
+        else:
+            xs_ns.append(l2)
+            ys_ns.append(y)
+            ns_labels.append((l2, y, gene))
+
+    # Replace +inf y-values (padj==0) with 1.1 × the largest finite y.
+    finite_ys = [y for y in ys_up + ys_dn + ys_ns if math.isfinite(y)]
+    y_cap = (max(finite_ys) if finite_ys else 1.0) * 1.1
+
+    def _cap(ys: list[float]) -> list[float]:
+        return [y if math.isfinite(y) else y_cap for y in ys]
+
+    ys_up = _cap(ys_up)
+    ys_dn = _cap(ys_dn)
+    ys_ns = _cap(ys_ns)
+    sig_labels = [(x, _cap([y])[0], g) for (x, y, g) in sig_labels]
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    if xs_ns:
+        ax.scatter(xs_ns, ys_ns, s=24, alpha=0.55, color="#888888",
+                   label=f"n.s.")
+    if xs_up:
+        ax.scatter(xs_up, ys_up, s=44, alpha=0.9, color="#c0392b",
+                   label=f"up (padj<{padj_threshold}, L2FC≥{log2fc_threshold})")
+    if xs_dn:
+        ax.scatter(xs_dn, ys_dn, s=44, alpha=0.9, color="#2a7ab0",
+                   label=f"down (padj<{padj_threshold}, L2FC≤-{log2fc_threshold})")
+
+    if annotate:
+        for x, y, label in sig_labels + ns_labels:
+            ax.annotate(label, (x, y), fontsize=7, xytext=(3, 3),
+                        textcoords="offset points")
+
+    ax.axhline(-math.log10(padj_threshold), color="grey",
+               linewidth=0.5, linestyle="--")
+    ax.axvline(log2fc_threshold, color="grey", linewidth=0.5, linestyle="--")
+    ax.axvline(-log2fc_threshold, color="grey", linewidth=0.5, linestyle="--")
+    ax.axvline(0, color="grey", linewidth=0.6)
+
+    contrast_suffix = f" — {contrast_label}" if contrast_label else ""
+    ax.set_xlabel(
+        f"log2FoldChange{(' (' + contrast_label + ')') if contrast_label else ''}"
+    )
+    ax.set_ylabel("-log10(padj)")
+    ax.set_title(title or f"DE volcano{contrast_suffix}")
+    ax.grid(True, alpha=0.2)
+    if xs_ns or xs_up or xs_dn:
+        ax.legend(loc="best", fontsize=8, framealpha=0.85)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    return output_path
+
+
+def plot_te_compare_scatter(
+    te_rows: Iterable[TeRow],
+    condition_map: dict[str, str],
+    base: str,
+    compare: str,
+    output_path: Path,
+    *,
+    title: str | None = None,
+) -> Path:
+    """Per-gene mean ``log2(TE)`` scatter: ``base`` (x) vs ``compare`` (y).
+
+    Each gene contributes one point; the identity ``y = x`` line is
+    drawn for reference. Genes off the diagonal mark condition-specific
+    TE differences. Genes missing from either condition are dropped.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    grouped: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for row in te_rows:
+        cond = condition_map.get(row.sample)
+        if cond not in (base, compare) or row.te <= 0:
+            continue
+        grouped[row.gene][cond].append(math.log2(row.te))
+
+    xs: list[float] = []
+    ys: list[float] = []
+    labels: list[str] = []
+    for gene in sorted(grouped):
+        cond_means = grouped[gene]
+        if base not in cond_means or compare not in cond_means:
+            continue
+        xs.append(sum(cond_means[base]) / len(cond_means[base]))
+        ys.append(sum(cond_means[compare]) / len(cond_means[compare]))
+        labels.append(gene)
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    if xs:
+        ax.scatter(xs, ys, s=44, alpha=0.85, color="#2a7ab0")
+        for x, y, label in zip(xs, ys, labels):
+            ax.annotate(label, (x, y), fontsize=7, xytext=(3, 3),
+                        textcoords="offset points")
+        lo = min(xs + ys)
+        hi = max(xs + ys)
+        margin = max(0.1, 0.05 * (hi - lo))
+        ax.plot([lo - margin, hi + margin], [lo - margin, hi + margin],
+                color="grey", linewidth=0.6, linestyle="--",
+                label="identity (y = x)")
+        ax.set_xlim(lo - margin, hi + margin)
+        ax.set_ylim(lo - margin, hi + margin)
+    else:
+        ax.text(0.5, 0.5,
+                f"no genes shared between {base!r} and {compare!r}",
+                ha="center", va="center", transform=ax.transAxes)
+
+    ax.axhline(0, color="grey", linewidth=0.4)
+    ax.axvline(0, color="grey", linewidth=0.4)
+    ax.set_xlabel(f"log2(TE) — {base}")
+    ax.set_ylabel(f"log2(TE) — {compare}")
+    ax.set_title(title or f"Per-gene log2(TE): {base} vs {compare}")
+    ax.grid(True, alpha=0.2)
+    if xs:
+        ax.legend(loc="best", fontsize=8, framealpha=0.85)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    return output_path
+
+
+def plot_te_log2fc_bar(
+    te_rows: Iterable[TeRow],
+    condition_map: dict[str, str],
+    base: str,
+    compare: str,
+    output_path: Path,
+    *,
+    title: str | None = None,
+) -> Path:
+    """Sorted bar plot of ``log2(mean_TE_compare / mean_TE_base)`` per gene.
+
+    Bars above zero: TE up in ``compare`` relative to ``base``; below
+    zero: TE down. Sorted by value so the strongest condition-specific
+    TE movers appear at the extremes.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    grouped: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for row in te_rows:
+        cond = condition_map.get(row.sample)
+        if cond not in (base, compare) or row.te <= 0:
+            continue
+        grouped[row.gene][cond].append(row.te)
+
+    pairs: list[tuple[str, float]] = []
+    for gene in grouped:
+        cond_means = grouped[gene]
+        if base not in cond_means or compare not in cond_means:
+            continue
+        m_base = sum(cond_means[base]) / len(cond_means[base])
+        m_comp = sum(cond_means[compare]) / len(cond_means[compare])
+        if m_base <= 0 or m_comp <= 0:
+            continue
+        pairs.append((gene, math.log2(m_comp / m_base)))
+    pairs.sort(key=lambda gp: gp[1])
+
+    fig, ax = plt.subplots(figsize=(max(5, 0.55 * len(pairs) + 2), 4.0))
+    if not pairs:
+        ax.text(0.5, 0.5,
+                f"no genes shared between {base!r} and {compare!r}",
+                ha="center", va="center", transform=ax.transAxes)
+        ax.axis("off")
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        return output_path
+
+    genes, values = zip(*pairs)
+    colors = ["#c0392b" if v > 0 else "#2a7ab0" for v in values]
+    ax.bar(range(len(genes)), values, color=colors, alpha=0.9,
+           edgecolor="black", linewidth=0.4)
+    ax.axhline(0, color="grey", linewidth=0.6)
+    ax.set_xticks(range(len(genes)))
+    ax.set_xticklabels(genes, rotation=45, ha="right")
+    ax.set_ylabel(f"log2(TE_{compare} / TE_{base})")
+    ax.set_title(
+        title or f"Per-gene log2(TE) fold change: {compare} vs {base}"
+    )
+    ax.grid(True, axis="y", alpha=0.2)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    return output_path
+
+
 def plot_ma(
     de_table: DeTable,
     output_path: Path,

@@ -124,13 +124,15 @@ def run_deseq2(
     contrast_a: str,
     contrast_b: str,
     additional_factors: tuple[str, ...] = (),
+    assay: str = "rna",
 ) -> "pd.DataFrame":
-    """Fit pyDESeq2 on the RNA subset and return the contrast results.
+    """Fit pyDESeq2 on one assay subset and return the contrast results.
 
-    Subsets ``metadata_df`` (and ``counts_df``) to ``assay == "rna"``
-    before fitting. The resulting DataFrame is the verbatim
-    ``DeseqStats.results_df`` (DESeq2 column names: ``baseMean``,
-    ``log2FoldChange``, ``padj``, ...).
+    When ``metadata_df`` has an ``assay`` column, rows are filtered to
+    ``assay == <assay>`` before fitting (default ``"rna"``); pass
+    ``assay="ribo"`` to fit the Ribo-seq side. The resulting DataFrame
+    is the verbatim ``DeseqStats.results_df`` (DESeq2 column names:
+    ``baseMean``, ``log2FoldChange``, ``padj``, ...).
     """
     pd = _import_pandas()
 
@@ -141,27 +143,27 @@ def run_deseq2(
         raise RuntimeError(_FASTQ_EXTRA_HINT) from exc
 
     if "assay" in metadata_df.columns:
-        rna_mask = metadata_df["assay"] == "rna"
-        rna_metadata = metadata_df.loc[rna_mask].drop(columns=["assay"])
-        rna_counts = counts_df.loc[rna_mask]
+        mask = metadata_df["assay"] == assay
+        sub_metadata = metadata_df.loc[mask].drop(columns=["assay"])
+        sub_counts = counts_df.loc[mask]
     else:
-        rna_metadata = metadata_df
-        rna_counts = counts_df
+        sub_metadata = metadata_df
+        sub_counts = counts_df
 
-    if rna_counts.empty:
-        raise ValueError("No RNA-seq samples available for DESeq2.")
+    if sub_counts.empty:
+        raise ValueError(f"No {assay!r} samples available for DESeq2.")
 
-    if rna_metadata[contrast_factor].nunique() < 2:
+    if sub_metadata[contrast_factor].nunique() < 2:
         raise ValueError(
-            f"RNA-seq subset has fewer than two levels of {contrast_factor!r}: "
-            f"{sorted(rna_metadata[contrast_factor].unique().tolist())}"
+            f"{assay!r} subset has fewer than two levels of {contrast_factor!r}: "
+            f"{sorted(sub_metadata[contrast_factor].unique().tolist())}"
         )
 
     design_factors: list[str] = list(additional_factors) + [contrast_factor]
 
     dds = DeseqDataSet(
-        counts=rna_counts,
-        metadata=rna_metadata,
+        counts=sub_counts,
+        metadata=sub_metadata,
         design_factors=design_factors,
     )
     dds.deseq2()

@@ -96,3 +96,85 @@ def test_yaml_config_unknown_keys_warn_but_do_not_crash(
     # the package logger), not a hard error. We exit 2 only because
     # other required args are missing.
     assert exit_code == 2
+
+
+def test_base_sample_alias_satisfies_required_flags(
+    tmp_path: Path, capsys
+) -> None:
+    """``--base-sample`` / ``--compare-sample`` populate ``condition_a``
+    / ``condition_b`` so the missing-flag check no longer trips for the
+    legacy spellings. Adding ``--rna-fastq`` keeps us in the default
+    flow; we expect the run to fail later (no real reference / output)
+    but the missing-args block must NOT mention the condition flags
+    when their aliases supplied the values."""
+    fq = tmp_path / "x.fq.gz"
+    fq.write_bytes(b"")
+    cmap = tmp_path / "conditions.tsv"
+    cmap.write_text("sample\tcondition\nA\tWT\nB\tKO\n")
+    exit_code = cli.main([
+        "rnaseq",
+        "--rna-fastq", str(fq),
+        "--gene-id-convention", "bare",
+        "--condition-map", str(cmap),
+        "--base-sample", "WT",
+        "--compare-sample", "KO",
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    # We still trip on --reference-fasta / --output (those were never
+    # provided), but the alias-satisfied condition flags must NOT be
+    # listed as missing.
+    assert "--reference-fasta" in err
+    assert "--output" in err
+    assert "--condition-a" not in err
+    assert "--condition-b" not in err
+
+
+def test_base_sample_conflicts_with_condition_a(tmp_path: Path, capsys) -> None:
+    """When the alias and the legacy form disagree, exit with code 2 and
+    a clear error pointing at both flags."""
+    fq = tmp_path / "x.fq.gz"
+    fq.write_bytes(b"")
+    cmap = tmp_path / "conditions.tsv"
+    cmap.write_text("sample\tcondition\nA\tWT\nB\tKO\n")
+    exit_code = cli.main([
+        "rnaseq",
+        "--rna-fastq", str(fq),
+        "--gene-id-convention", "bare",
+        "--condition-map", str(cmap),
+        "--condition-a", "WT",
+        "--base-sample", "RESC",
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "--base-sample" in err
+    assert "--condition-a" in err
+
+
+def test_yaml_base_sample_key_satisfies_condition_a(
+    tmp_path: Path, capsys
+) -> None:
+    """``base_sample:`` in YAML must populate ``condition_a`` (via the
+    alias-reconciliation step) so the missing-arg check doesn't fire."""
+    rna = tmp_path / "rna.fq.gz"
+    rna.write_bytes(b"")
+    cmap = tmp_path / "conditions.tsv"
+    cmap.write_text("sample\tcondition\nA\tWT\nB\tKO\n")
+    yaml_path = tmp_path / "rnaseq.yaml"
+    yaml_path.write_text(
+        "gene_id_convention: bare\n"
+        f"condition_map: {cmap}\n"
+        "base_sample: WT\n"
+        "compare_sample: KO\n"
+    )
+    exit_code = cli.main([
+        "rnaseq",
+        "--config", str(yaml_path),
+        "--rna-fastq", str(rna),
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "--reference-fasta" in err
+    assert "--output" in err
+    assert "--condition-a" not in err
+    assert "--condition-b" not in err

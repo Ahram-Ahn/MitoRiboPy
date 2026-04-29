@@ -333,8 +333,14 @@ mitoribopy rpf -s h -f ref.fa --directory bed/ -rpf 29 34 --output results/rpf/
 # Just rnaseq (default flow): raw FASTQ -> pyDESeq2 -> TE / dTE
 mitoribopy rnaseq --rna-fastq rna_seq/ --ribo-fastq ribo_seq/ \
   --reference-fasta ref.fa --gene-id-convention bare \
-  --condition-map samples.tsv --condition-a control --condition-b knockdown \
+  --condition-map samples.tsv \
+  --base-sample control --compare-sample knockdown \
   --output results/rnaseq/
+
+# `--base-sample` / `--compare-sample` are aliases for `--condition-a` /
+# `--condition-b`; pick whichever spelling you prefer (the legacy form
+# still works). The base condition is the reference (denominator) of
+# the WT-vs-X contrast and seeds the labels on every comparison plot.
 
 # Or rnaseq (alternative flow): existing rpf output + an external DE table
 mitoribopy rnaseq --de-table de.tsv --gene-id-convention hgnc \
@@ -618,7 +624,7 @@ pip install 'mitoribopy[fastq]'
 
 **Alternative flow — bring your own DE table.** Pass `--de-table` from a prior external DESeq2 / Xtail / Anota2Seq run together with a prior `mitoribopy rpf` run (`--ribo-dir`). This is the right path for publication-grade DE statistics — run DE on the full transcriptome in R / Python and feed the result here. Enforces a SHA256 reference-consistency gate: Ribo-seq and RNA-seq must hash to the identical transcript set, otherwise the run aborts with a `MISMATCH` banner.
 
-Both flows produce the same `te.tsv` / `delta_te.tsv` / `plots/` shape and emit five common plots (scatter, volcano, MA, TE bar by condition, TE heatmap). The default flow additionally writes intermediate counts matrices, a generated `de_table.tsv`, and a sixth `sample_pca.png` plot (PCA needs the full sample × gene counts matrix that only the default flow has on hand).
+Both flows produce the same `te.tsv` / `delta_te.tsv` / `plots/` shape and emit eight common comparison plots (`mrna_vs_rpf`, `delta_te_volcano`, `ma`, `de_volcano_mrna`, `te_bar_by_condition`, `te_heatmap`, `te_compare_scatter`, `te_log2fc_bar`). The default flow additionally writes intermediate counts matrices, a generated `de_table.tsv`, an `rpf_de_table.tsv` from a second pyDESeq2 fit on the Ribo-seq subset, a `sample_pca.png` plot (PCA needs the full sample × gene counts matrix that only the default flow has on hand), and a `de_volcano_rpf.png` driven by `rpf_de_table.tsv`. The `te_compare_scatter` and `te_log2fc_bar` plots are emitted whenever a `--condition-map` plus `--base-sample` / `--compare-sample` (a.k.a. `--condition-a` / `--condition-b`) are set, in either flow.
 
 #### Inputs (default flow, from raw FASTQ)
 
@@ -671,8 +677,10 @@ In the default flow the `--condition-map` table must list every input sample (RN
 | Flag | Default | Description |
 |---|---|---|
 | `--condition-map PATH` | — | TSV with columns `sample` and `condition`. **Required in the default flow** (drives the pyDESeq2 contrast). In the `--de-table` flow it is optional and enables a replicate-based Ribo log2FC for ΔTE. |
-| `--condition-a NAME` | — | Reference condition (required in the default flow). |
-| `--condition-b NAME` | — | Comparison condition (required in the default flow). |
+| `--base-sample NAME` | — | **Reference condition** (denominator of the contrast; the "baseline" used as the x-axis of every TE / DE comparison plot). Required in the default flow. Alias for `--condition-a` — pick whichever spelling you prefer; the YAML key matches `base_sample` for parity with the `rpf` config block. When both `--base-sample` and `--condition-a` are set they must agree. |
+| `--compare-sample NAME` | — | **Comparison condition** (numerator of the contrast). Required in the default flow. Alias for `--condition-b`; same equality rule applies when both are set. |
+| `--condition-a NAME` | — | Legacy spelling of `--base-sample` (still accepted; identical semantics). |
+| `--condition-b NAME` | — | Legacy spelling of `--compare-sample`. |
 
 Without a condition map in the `--de-table` flow, `mitoribopy rnaseq` computes a point-estimate ΔTE using only the DE table's mRNA log2FC and emits rows with a `single_replicate_no_statistics` note.
 
@@ -812,15 +820,29 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
     delta_te.tsv                       # one row per gene: mrna_log2fc, rpf_log2fc, delta_te_log2,
                                        # padj, note
     plots/
-      mrna_vs_rpf.png                  # four-quadrant log2FC scatter
+      # WT-vs-X comparison plots (titles wear `<base> vs <compare>` from
+      # --base-sample / --compare-sample so reviewers know the contrast at a glance)
+      mrna_vs_rpf.png                  # four-quadrant log2FC scatter (mRNA vs RPF)
       delta_te_volcano.png             # ΔTE (log2) vs -log10(padj)
       ma.png                           # log10(baseMean) vs log2FoldChange, points coloured by padj
+      de_volcano_mrna.png              # mRNA DE volcano (log2FC vs -log10 padj),
+                                       # red = sig up, blue = sig down, grey = n.s.,
+                                       # threshold guides at padj=0.05 and |L2FC|=1
+      de_volcano_rpf.png               # Ribo-seq DE volcano (default flow only;
+                                       # second pyDESeq2 fit on the Ribo subset)
       te_bar_by_condition.png          # log2(TE) per gene, bars grouped by condition + SE error bars
       te_heatmap.png                   # gene × sample log2(TE) heatmap (RdBu, centred at 0)
+      te_compare_scatter.png           # per-gene mean log2(TE) in <base> (x) vs <compare> (y)
+                                       # with identity line; emitted when both flags are set
+      te_log2fc_bar.png                # sorted bar of log2(TE_compare / TE_base) per gene;
+                                       # bars above zero mean TE up in the compare condition
       sample_pca.png                   # PC1 vs PC2 from log1p counts (default flow only)
     run_settings.json
     # --- default flow (--rna-fastq) only -----------------------------
-    de_table.tsv                       # pyDESeq2 result in canonical DESeq2 schema
+    de_table.tsv                       # mRNA pyDESeq2 result in canonical DESeq2 schema
+    rpf_de_table.tsv                   # Ribo-seq pyDESeq2 result (same schema, drives
+                                       # de_volcano_rpf.png; absent when the Ribo subset
+                                       # has fewer than two condition levels)
     rna_counts.tsv                     # wide gene × sample RNA-seq counts
     rpf_counts.tsv                     # long-format Ribo-seq counts (sample\tgene\tcount)
     rpf_counts_matrix.tsv              # wide gene × sample Ribo-seq counts
@@ -1075,13 +1097,17 @@ mitoribopy rnaseq \
   --reference-fasta references/human-mt-mRNA.fasta \
   --gene-id-convention bare              \
   --condition-map samples.tsv            \
-  --condition-a control                  \
-  --condition-b knockdown                \
+  --base-sample control                  \
+  --compare-sample knockdown             \
   --output results/rnaseq/               \
   --align-threads 8
 ```
 
+`--base-sample` is the **reference** condition for the contrast (denominator of log2FC); `--compare-sample` is the **comparison** condition (numerator). Both are required in the default flow. They are aliases for the legacy `--condition-a` / `--condition-b` flags — pick whichever spelling reads better; passing both an alias and the legacy form simultaneously is allowed only when the values agree. The base condition seeds the labels on every WT-vs-X comparison plot (`mrna_vs_rpf`, `delta_te_volcano`, `de_volcano_mrna`, `de_volcano_rpf`, `te_compare_scatter`, `te_log2fc_bar`).
+
 `--rna-fastq` accepts files OR directories; SE vs PE is auto-detected from filename mate tokens (`_R1/_R2`, `_1/_2`, `.1./.2.`, `_R1_001/_R2_001`, `_read1/_read2`). When a condition has only one biological sample, the FASTQ is auto-split into `rep1` / `rep2` by record parity so pyDESeq2 has n≥2 to fit dispersion (loud stderr WARNING per split; pass `--no-auto-pseudo-replicate` to disable).
+
+In the default flow, pyDESeq2 is fit **twice** — once on the RNA subset (writes `de_table.tsv`) and once on the Ribo subset (writes `rpf_de_table.tsv`). The Ribo fit is what powers `de_volcano_rpf.png` and lets reviewers see at a glance whether a gene's TE shift is driven by a footprint-level change, an mRNA-level change, or both. If the Ribo subset has fewer than two condition levels (e.g. you passed `--ribo-fastq` for only one condition) the second fit is skipped with a stderr WARNING and the RPF volcano is omitted.
 
 **Alternative flow — bring your own DE table (`--de-table`).**
 
@@ -1094,8 +1120,8 @@ mitoribopy rnaseq \
   --ribo-dir results/rpf \
   --reference-gtf references/human-mt-mRNA.fasta \
   --condition-map samples.tsv \
-  --condition-a control \
-  --condition-b knockdown \
+  --base-sample control \
+  --compare-sample knockdown \
   --output results/rnaseq/
 ```
 

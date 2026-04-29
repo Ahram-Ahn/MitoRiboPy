@@ -35,7 +35,7 @@ Both R1 + R2 present → paired sample. Lone R1 → SE sample with the stem name
 
 ### Step 3 — Pick a contrast
 
-The default flow uses `--condition-a` and `--condition-b` as the pyDESeq2 contrast. Any conditions in your `--condition-map` that are NOT one of these two are still fitted by DESeq2 (because they contribute to dispersion estimation) but do not appear in the contrast results.
+The default flow uses `--base-sample` (reference / denominator) and `--compare-sample` (comparison / numerator) as the pyDESeq2 contrast. The legacy `--condition-a` / `--condition-b` flags are still accepted as aliases. Any conditions in your `--condition-map` that are NOT one of these two are still fitted by DESeq2 (because they contribute to dispersion estimation) but do not appear in the contrast results.
 
 ### Step 4 — Auto pseudo-replicates for n=1 designs
 
@@ -63,8 +63,8 @@ mitoribopy rnaseq \
   --reference-fasta references/human-mt-mRNA.fasta \
   --gene-id-convention bare              \
   --condition-map samples.tsv            \
-  --condition-a control                  \
-  --condition-b knockdown                \
+  --base-sample control                  \
+  --compare-sample knockdown             \
   --output results/rnaseq                \
   --align-threads 8
 ```
@@ -144,7 +144,7 @@ kd_1        knockdown
 kd_2        knockdown
 ```
 
-Pass it with `--condition-map samples.tsv --condition-a control --condition-b knockdown`. Without this mapping, `mitoribopy rnaseq` computes a point-estimate ΔTE using only the DE table's mRNA log2FC and emits rows with a `single_replicate_no_statistics` note. (The condition map is **required** in the default flow; here it is optional.)
+Pass it with `--condition-map samples.tsv --base-sample control --compare-sample knockdown` (or the legacy `--condition-a` / `--condition-b`; both spellings work). Without this mapping, `mitoribopy rnaseq` computes a point-estimate ΔTE using only the DE table's mRNA log2FC and emits rows with a `single_replicate_no_statistics` note. (The condition map is **required** in the default flow; here it is optional.)
 
 ### Step 5 — Run
 
@@ -155,8 +155,8 @@ mitoribopy rnaseq \
   --ribo-dir results/rpf \
   --reference-gtf references/human_mt_transcriptome.fa \
   --condition-map samples.tsv \
-  --condition-a control \
-  --condition-b knockdown \
+  --base-sample control \
+  --compare-sample knockdown \
   --output results/rnaseq
 ```
 
@@ -169,15 +169,26 @@ results/rnaseq/
   te.tsv                          # one row per (sample, gene): rpf_count, mrna_abundance, te
   delta_te.tsv                    # one row per gene: mrna_log2fc, rpf_log2fc, delta_te_log2, padj, note
   plots/
-    mrna_vs_rpf.png               # four-quadrant log2FC scatter
+    # WT-vs-X comparison plots — titles include `<base> vs <compare>` so
+    # reviewers know the contrast direction at a glance
+    mrna_vs_rpf.png               # four-quadrant log2FC scatter (mRNA vs RPF)
     delta_te_volcano.png          # ΔTE (log2) vs -log10(padj)
     ma.png                        # log10(baseMean) vs log2FoldChange, coloured by padj
+    de_volcano_mrna.png           # mRNA DE volcano: red sig-up / blue sig-down /
+                                  # grey n.s.; threshold guides at padj=0.05, |L2FC|=1
+    de_volcano_rpf.png            # default flow only — Ribo DE volcano from a second
+                                  # pyDESeq2 fit on the Ribo-seq subset
     te_bar_by_condition.png       # log2(TE) per gene, bars grouped by condition + SE
     te_heatmap.png                # gene × sample log2(TE) heatmap (RdBu, centred at 0)
+    te_compare_scatter.png        # per-gene mean log2(TE) in <base> (x) vs <compare> (y)
+                                  # with identity line; needs --condition-map + base/compare
+    te_log2fc_bar.png             # sorted bar of log2(TE_compare / TE_base) per gene
     sample_pca.png                # default flow only — PC1 vs PC2 from log1p counts
   run_settings.json               # full provenance + (default flow) per-sample alignment stats
   # --- default flow only ---
-  de_table.tsv                    # pyDESeq2 result, DESeq2 schema; reloads via load_de_table
+  de_table.tsv                    # mRNA pyDESeq2 result, DESeq2 schema; reloads via load_de_table
+  rpf_de_table.tsv                # Ribo-seq pyDESeq2 result, same schema; drives de_volcano_rpf;
+                                  # absent when the Ribo subset has fewer than two condition levels
   rna_counts.tsv                  # wide gene × sample RNA-seq counts
   rpf_counts.tsv                  # long-format Ribo-seq counts
   rpf_counts_matrix.tsv           # wide gene × sample Ribo-seq counts
@@ -189,8 +200,12 @@ results/rnaseq/
 - **`mrna_vs_rpf.png`** — four-quadrant scatter. Upper right = translation and transcription both up. Upper left = translation up despite mRNA decrease (buffered-up). Lower right = mRNA increase without matching translation (buffered-down). Lower left = both down.
 - **`delta_te_volcano.png`** — genes far from `x=0` with low `padj` are candidates for translation-specific regulation.
 - **`ma.png`** — DESeq2 diagnostic. Look for direction (up / down) as a function of expression level; low-expression high-LFC outliers (e.g. `ND6` in mt-Ribo-seq) often dominate the volcano but should be sanity-checked here.
+- **`de_volcano_mrna.png`** — the WT-vs-X mRNA differential expression volcano. `log2FoldChange` (x) vs `-log10(padj)` (y); points coloured **red** for significant up-regulation, **blue** for significant down, **grey** otherwise. Threshold guides at `padj < 0.05` and `|log2FC| ≥ 1`. Read alongside `delta_te_volcano.png`: if a gene moves in `de_volcano_mrna` but not in `delta_te_volcano`, the change is transcription-driven; the reverse means translation-specific regulation; both moving the same way means co-regulation.
+- **`de_volcano_rpf.png`** *(default flow)* — same shape as the mRNA volcano but driven by a second pyDESeq2 fit on the Ribo-seq subset (`rpf_de_table.tsv`). A reviewer can pair it with the mRNA volcano to localise the layer at which a gene's TE shift is happening: footprint-level change (RPF moves alone), mRNA-level (mRNA moves alone), or both.
 - **`te_bar_by_condition.png`** — the primary biological readout. Bars per (gene, condition) with SE error bars across replicates; `log2(TE)` so y=0 means "no change relative to TE=1". This is usually the figure to put in a presentation.
 - **`te_heatmap.png`** — compact summary; columns are sample-ordered by condition so replicates cluster. Useful for spotting outlier samples or genes that move in the same direction across the entire experiment.
+- **`te_compare_scatter.png`** — per-gene mean `log2(TE)` in the base condition (x-axis) vs the compare condition (y-axis), with the identity line `y = x` drawn for reference. Genes off the diagonal are condition-specific TE movers; the spread tells you how reproducible TE is across replicates. Emitted whenever `--condition-map` plus base / compare conditions are set (both flows).
+- **`te_log2fc_bar.png`** — sorted bar of `log2(TE_compare / TE_base)` per gene. Bars above zero mean TE up in the compare condition, below zero means down. The fastest-readable summary of TE direction across the gene set; great for picking the hits to chase.
 - **`sample_pca.png`** *(default flow)* — PC1 vs PC2 from `log1p` counts. PC1 typically separates RNA from Ribo (different absolute count scales); PC2 typically separates conditions within an assay. Use it as the "did my libraries cluster as expected?" QC.
 
 ---
@@ -209,8 +224,8 @@ rnaseq:
   reference_fasta: input_data/human-mt-mRNA.fasta
   gene_id_convention: bare
   condition_map: samples.tsv
-  condition_a: control
-  condition_b: knockdown
+  base_sample: control                  # alias for condition_a; pick one spelling
+  compare_sample: knockdown             # alias for condition_b
   align_threads: 8
   # bowtie2_index: cache/bt2_cache/transcriptome_5ca397907373   # optional
   # no_auto_pseudo_replicate: false                             # default

@@ -47,8 +47,17 @@ organism: h.sapiens                     # h.sapiens | s.cerevisiae
 
 # --- Conditions (REQUIRED in default flow; optional in --de-table flow) -
 condition_map: samples.tsv              # TSV with columns `sample` and `condition`
-condition_a: control                    # reference condition for the contrast
-condition_b: knockdown                  # comparison condition
+base_sample: control                    # reference condition (denominator of the
+                                        # WT-vs-X contrast). Drives the labels on
+                                        # every comparison plot. Alias for
+                                        # `condition_a` -- pick one spelling.
+compare_sample: knockdown               # comparison condition (numerator). Alias
+                                        # for `condition_b`.
+
+# Legacy spellings still work; uncomment to use them instead of base_sample /
+# compare_sample (they MUST agree if you set both an alias and the legacy form).
+# condition_a: control
+# condition_b: knockdown
 
 # ============================================================================
 # Default flow (from-FASTQ) -- delete this block when using --de-table

@@ -51,9 +51,13 @@ GENE_ID_CONVENTION="hgnc"      # ensembl | refseq | hgnc | mt_prefixed | bare
 ORGANISM="h.sapiens"           # h.sapiens | s.cerevisiae
 
 # Conditions (REQUIRED in default flow; optional / replicate-based ΔTE in --de-table flow).
+# BASE_SAMPLE = reference condition (denominator of the WT-vs-X contrast); seeds the
+# baseline label on every comparison plot. COMPARE_SAMPLE = comparison condition.
+# These map to the canonical --base-sample / --compare-sample CLI flags.
+# `--condition-a` / `--condition-b` are still accepted as legacy aliases.
 CONDITION_MAP="${PROJECT_ROOT}/samples.tsv"
-CONDITION_A="control"
-CONDITION_B="knockdown"
+BASE_SAMPLE="control"
+COMPARE_SAMPLE="knockdown"
 
 
 # ============================================================================
@@ -89,8 +93,8 @@ COMMON_OPTS=(
 
   # --- Conditions --------------------------------------------------------
   --condition-map "${CONDITION_MAP}"
-  --condition-a "${CONDITION_A}"
-  --condition-b "${CONDITION_B}"
+  --base-sample "${BASE_SAMPLE}"
+  --compare-sample "${COMPARE_SAMPLE}"
 
   # --- Shared ------------------------------------------------------------
   --threads "${THREADS}"

@@ -9,6 +9,52 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 (no changes pending)
 
+## [0.5.1] - 2026-04-28
+
+### Added
+- **`mitoribopy rnaseq` gains four WT-vs-X comparison plots.** The
+  default plot set under `<output>/rnaseq/plots/` now includes
+  `de_volcano_mrna.png` (mRNA DE volcano with red / blue / grey
+  significance colouring + threshold guides at `padj<0.05` and
+  `|L2FC|>=1`), `de_volcano_rpf.png` (Ribo-seq DE volcano; default
+  flow only), `te_compare_scatter.png` (per-gene mean log2(TE) in
+  the base condition vs the compare condition with the identity
+  line), and `te_log2fc_bar.png` (sorted bar of
+  `log2(TE_compare/TE_base)` per gene). Plot titles include the
+  contrast label (`<base> vs <compare>`) when both conditions are
+  set. The `te_compare_scatter` and `te_log2fc_bar` plots also
+  emit in the `--de-table` (alternative) flow whenever a
+  condition map plus base / compare conditions are provided.
+- **Second pyDESeq2 fit on the Ribo-seq subset (default flow).**
+  The default flow now runs pyDESeq2 twice — once on the RNA
+  subset (writes the existing `de_table.tsv`) and once on the
+  Ribo-seq subset (writes the new `rpf_de_table.tsv`). The Ribo
+  fit feeds `de_volcano_rpf.png`. When the Ribo subset has fewer
+  than two condition levels (e.g. only one `--ribo-fastq`
+  condition), the second fit is skipped with a stderr WARNING and
+  the RPF volcano is omitted; the rest of the run is unaffected.
+- **`--base-sample` / `--compare-sample` CLI aliases for
+  `--condition-a` / `--condition-b`** (with matching YAML keys
+  `base_sample:` / `compare_sample:`). The new spelling mirrors
+  the rpf config's `base_sample` key so the contrast reference
+  reads the same across both stages. The legacy `--condition-a` /
+  `--condition-b` flags keep working unchanged. Passing both an
+  alias and the legacy form simultaneously is allowed only when
+  the values agree (a mismatch exits with code 2 and a clear
+  error). `run_settings.json` records both `condition_a` /
+  `condition_b` and `base_sample` / `compare_sample` so downstream
+  tooling can pick either field.
+
+### Changed
+- `run_deseq2(...)` now takes an `assay` keyword (default
+  `"rna"`); pass `assay="ribo"` to fit the Ribo-seq subset. The
+  default behaviour is unchanged for existing callers.
+- README, release notes, and the four template files
+  (`rnaseq_config.example.yaml`, `pipeline_config.example.yaml`,
+  `run_rnaseq.example.sh`, `run_pipeline.example.sh`) were
+  updated to use the new `--base-sample` / `--compare-sample`
+  spelling and document the new plots and `rpf_de_table.tsv`.
+
 ## [0.5.0] - 2026-04-27
 
 ### Added

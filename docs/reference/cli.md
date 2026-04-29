@@ -160,7 +160,8 @@ PE + UMI is currently `NotImplementedError` — preprocess UMIs into the read na
 ### Conditions
 
 - `--condition-map PATH` — TSV with `sample` and `condition` columns. **Required in the default flow** (drives the pyDESeq2 contrast). In the `--de-table` flow it is optional and enables a replicate-based Ribo log2FC for ΔTE.
-- `--condition-a NAME`, `--condition-b NAME` — required in the default flow; optional in the `--de-table` flow.
+- `--base-sample NAME`, `--compare-sample NAME` — base (reference) and compare (comparison) conditions of the contrast. **Required in the default flow**; optional in the `--de-table` flow. The base condition is the denominator of the log2FC and seeds the labels on every WT-vs-X comparison plot. Aliases for `--condition-a` / `--condition-b` (matching YAML keys: `base_sample:` / `compare_sample:`); mismatch between an alias and the legacy form exits with code 2.
+- `--condition-a NAME`, `--condition-b NAME` — legacy spellings of `--base-sample` / `--compare-sample` (still accepted, identical semantics).
 
 ### Output
 
