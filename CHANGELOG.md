@@ -49,6 +49,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `run_deseq2(...)` now takes an `assay` keyword (default
   `"rna"`); pass `assay="ribo"` to fit the Ribo-seq subset. The
   default behaviour is unchanged for existing callers.
+- **Publication-style refresh of every rnaseq plot.** Every
+  figure now renders under a shared rc-context: Okabe-Ito
+  colour-blind-safe palette (up = vermillion, down = blue,
+  n.s. = light grey, consistent across volcanos / MA / TE),
+  sans-serif fonts (Arial / Helvetica fallback), top + right
+  spines hidden, minor ticks visible, 300 dpi PNG output with
+  an editable-text SVG sidecar (`svg.fonttype = none`) for
+  every figure. Gene labels on the volcanos and scatters wear
+  white-bbox tags with thin leader lines; a small greedy
+  8-direction label placer (no `adjustText` dependency)
+  prefers above-the-point positions and avoids overlap. Stat
+  boxes on the volcanos report `genes plotted / up / down /
+  n.s.`; the TE compare scatter adds Pearson r. The
+  `te_bar_by_condition` plot now overlays every replicate as
+  a black dot jittered along x within its bar's footprint.
+  The `te_heatmap` gains a colour strip above the columns
+  spelling the condition assignment, with auto-contrast
+  cell annotations. The `mrna_vs_rpf` four-quadrant scatter
+  carries faint "co-regulated up / buffered up / co-regulated
+  down / buffered down" captions. The `te_log2fc_bar`
+  prints the numeric log2FC at each bar's tip.
 - README, release notes, and the four template files
   (`rnaseq_config.example.yaml`, `pipeline_config.example.yaml`,
   `run_rnaseq.example.sh`, `run_pipeline.example.sh`) were
