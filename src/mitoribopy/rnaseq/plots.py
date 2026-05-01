@@ -108,6 +108,7 @@ def _save_figure(
     output_path: Path,
     *,
     formats: Sequence[str] = ("png", "svg"),
+    metadata: dict | None = None,
 ) -> Path:
     """Save *fig* to *output_path* (whose suffix decides the primary
     format) and a sibling for every other entry in *formats*.
@@ -116,6 +117,11 @@ def _save_figure(
     caller asked for. SVG sidecars (when emitted) get the same stem
     with the ``.svg`` suffix so downstream LaTeX / Markdown can pick
     whichever format they prefer without renaming.
+
+    When *metadata* is supplied, also write a ``.metadata.json`` sidecar
+    next to the plot so :mod:`mitoribopy.plotting.figure_validator` can
+    mechanically validate the contract (point counts, label policy,
+    palette, etc.).
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,6 +137,30 @@ def _save_figure(
         sidecar = output_path.with_suffix(f".{fmt}")
         fig.savefig(sidecar, format=fmt)
     plt.close(fig)
+
+    if metadata is not None:
+        # Local import keeps figure_validator out of the matplotlib
+        # render-time import graph.
+        from ..plotting.figure_validator import write_plot_metadata
+
+        write_plot_metadata(
+            output_path,
+            stage=metadata.get("stage", "rnaseq"),
+            plot_type=metadata.get("plot_type", ""),
+            source_data=metadata.get("source_data"),
+            n_points_expected=metadata.get("n_points_expected"),
+            n_points_drawn=metadata.get("n_points_drawn"),
+            n_labels=metadata.get("n_labels"),
+            labels_drawn=metadata.get("labels_drawn"),
+            label_policy=metadata.get("label_policy"),
+            label_overlap_count=metadata.get("label_overlap_count"),
+            label_outside_axes_count=metadata.get("label_outside_axes_count"),
+            palette=metadata.get("palette", "Okabe-Ito"),
+            formats=metadata.get("formats", list(formats)),
+            dpi=metadata.get("dpi", 300),
+            min_font_size=metadata.get("min_font_size"),
+            extra=metadata.get("extra"),
+        )
     return output_path
 
 
@@ -503,7 +533,21 @@ def plot_delta_te_volcano(
         if legend_handles:
             ax.legend(legend_handles, legend_labels,
                       loc="lower left", fontsize=8)
-        return _save_figure(fig, output_path)
+        return _save_figure(
+            fig,
+            output_path,
+            metadata={
+                "stage": "rnaseq",
+                "plot_type": "delta_te_volcano",
+                "source_data": "rnaseq/delta_te.tsv",
+                "n_points_expected": len(rows),
+                "n_points_drawn": len(xs_up) + len(xs_dn) + len(xs_ns),
+                "n_labels": len(all_labels),
+                "labels_drawn": len(all_labels),
+                "label_policy": "all_genes" if len(rows) <= 20 else "top_by_significance",
+                "min_font_size": 8,
+            },
+        )
 
 
 def plot_de_volcano(
@@ -655,7 +699,26 @@ def plot_de_volcano(
         if legend_handles:
             ax.legend(legend_handles, legend_labels,
                       loc="lower left", fontsize=8)
-        return _save_figure(fig, output_path)
+        n_total = len(xs_up) + len(xs_dn) + len(xs_ns)
+        return _save_figure(
+            fig,
+            output_path,
+            metadata={
+                "stage": "rnaseq",
+                "plot_type": "de_volcano",
+                "source_data": "rnaseq/de_table.tsv",
+                "n_points_expected": len(rows),
+                "n_points_drawn": n_total,
+                "n_labels": len(labels) if annotate else 0,
+                "labels_drawn": len(labels) if annotate else 0,
+                "label_policy": (
+                    "all_genes" if (annotate and len(rows) <= 20)
+                    else "top_by_significance" if annotate
+                    else "none"
+                ),
+                "min_font_size": 8,
+            },
+        )
 
 
 def plot_te_compare_scatter(

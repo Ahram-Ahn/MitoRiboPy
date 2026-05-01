@@ -233,6 +233,28 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
         description="Human-readable run summary linking to the major outputs.",
         recommended_for="reviewer-spot-check",
     ),
+    OutputDescriptor(
+        output_type="figure_qc",
+        stage="all",
+        relative_path="figure_qc.tsv",
+        description=(
+            "Per-plot mechanical QC (point-count, label overlap, SVG "
+            "editability, PNG dpi, sidecar coverage). Written by "
+            "`mitoribopy validate-figures`."
+        ),
+        recommended_for="reviewer-spot-check",
+        schema_key="figure_qc.tsv",
+    ),
+    OutputDescriptor(
+        output_type="progress_jsonl",
+        stage="all",
+        relative_path="progress.jsonl",
+        description=(
+            "Machine-readable stream of typed progress events emitted "
+            "during the run (one JSON object per line)."
+        ),
+        recommended_for="downstream-scripting",
+    ),
 )
 
 

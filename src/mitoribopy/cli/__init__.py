@@ -30,6 +30,7 @@ from . import rnaseq as _rnaseq
 from . import rpf as _rpf
 from . import summarize as _summarize
 from . import validate_config as _validate_config
+from . import validate_figures as _validate_figures
 from . import validate_reference as _validate_reference
 
 __all__ = ["main", "run_pipeline_cli"]
@@ -61,6 +62,7 @@ _SUBCOMMANDS: dict[str, Callable[[Iterable[str]], int]] = {
     "migrate-config": _migrate_config.run,
     "validate-config": _validate_config.run,
     "validate-reference": _validate_reference.run,
+    "validate-figures": _validate_figures.run,
     "summarize": _summarize.run,
     "benchmark": _benchmark.run,
 }
@@ -74,6 +76,7 @@ _SUBCOMMAND_SUMMARIES: list[tuple[str, str]] = [
     ("migrate-config", _migrate_config.MIGRATE_CONFIG_HELP),
     ("validate-config", _validate_config.VALIDATE_CONFIG_HELP),
     ("validate-reference", _validate_reference.VALIDATE_REFERENCE_HELP),
+    ("validate-figures", _validate_figures.VALIDATE_FIGURES_HELP),
     ("summarize", _summarize.SUMMARIZE_SUBCOMMAND_HELP),
     ("benchmark", _benchmark.BENCHMARK_SUBCOMMAND_HELP),
 ]
@@ -110,7 +113,10 @@ def _normalize_args(argv: Iterable[str]) -> list[str]:
 
 
 def _print_top_help() -> None:
-    rows = "\n".join(f"  {name:<7}{summary}" for name, summary in _SUBCOMMAND_SUMMARIES)
+    name_w = max(len(name) for name, _ in _SUBCOMMAND_SUMMARIES) + 2
+    rows = "\n".join(
+        f"  {name:<{name_w}}{summary}" for name, summary in _SUBCOMMAND_SUMMARIES
+    )
     print(_TOP_HELP.format(rows=rows))
 
 

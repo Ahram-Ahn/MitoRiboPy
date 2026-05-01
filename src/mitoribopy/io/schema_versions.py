@@ -40,6 +40,7 @@ OUTPUT_SCHEMA_VERSIONS: dict[str, str] = {
     "summary_qc.tsv":     "1.0",
     "warnings.tsv":       "2.0",  # P5.8: column rename to assessment §8 spec
     "outputs_index.tsv":  "1.0",
+    "figure_qc.tsv":      "1.0",  # refactor-4: per-plot QC (overlap / point counts / SVG)
 }
 
 
