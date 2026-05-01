@@ -57,6 +57,33 @@ _LOGGER_NAME = "mitoribopy"
 _FILE_HANDLER_NAME = "mitoribopy-file"
 
 
+# Canonical stage tags used by the §10 stage-prefixed logger contract.
+# Values are intentionally lowercase to match the spec; existing
+# UPPERCASE call-sites (e.g. ``log_info("ALIGN", ...)``) continue to
+# work — the logger does not normalise the tag.
+STAGE_ALIGN = "align"
+STAGE_RPF = "rpf"
+STAGE_RNASEQ = "rnaseq"
+STAGE_ALL = "all"
+STAGE_CONFIG = "config"
+STAGE_SAMPLE_SHEET = "sample-sheet"
+STAGE_RESUME = "resume"
+STAGE_SUMMARY = "summary"
+STAGE_QC = "qc"
+
+CANONICAL_STAGES: tuple[str, ...] = (
+    STAGE_ALIGN,
+    STAGE_RPF,
+    STAGE_RNASEQ,
+    STAGE_ALL,
+    STAGE_CONFIG,
+    STAGE_SAMPLE_SHEET,
+    STAGE_RESUME,
+    STAGE_SUMMARY,
+    STAGE_QC,
+)
+
+
 def _build_logger() -> logging.Logger:
     logger = logging.getLogger(_LOGGER_NAME)
     if logger.handlers:
