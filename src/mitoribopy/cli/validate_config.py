@@ -196,6 +196,18 @@ def _check_rnaseq_mode(cfg: dict, errors: list[str]) -> None:
     rnaseq = cfg.get("rnaseq")
     if not isinstance(rnaseq, dict):
         return
+    # The orchestrator's `_apply_top_level_samples` (cli/all_.py) wires a
+    # top-level `samples:` block into `rnaseq.sample_sheet` before mode
+    # resolution runs at execute time. Mirror that wiring here so the
+    # validator does not falsely reject a `from_fastq` config whose RNA
+    # inputs come exclusively from the unified sample sheet.
+    if cfg.get("samples") and not (
+        rnaseq.get("sample_sheet")
+        or rnaseq.get("sample-sheet")
+        or rnaseq.get("rna_fastq")
+        or rnaseq.get("rna-fastq")
+    ):
+        rnaseq = {**rnaseq, "sample_sheet": "<from-top-level-samples>"}
     _, err = _resolve_rnaseq_mode_from_config(rnaseq)
     if err is not None:
         errors.append(f"rnaseq: {err}")
