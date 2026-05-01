@@ -700,6 +700,26 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
         # Audit the offset row applied to each sample for reviewers.
         _write_per_sample_offset_audit(context)
 
+        # Periodicity + frame + strand QC. Cheap (one pass over the
+        # filtered BED with the per-sample offsets we just selected) and
+        # the only routine output that lets a reviewer judge whether the
+        # offset choices yielded a periodic profile, which is the
+        # primary defensibility argument for any Ribo-seq run.
+        from ..analysis.periodicity import run_periodicity_qc
+
+        sample_names = [Path(s).name for s in context.sample_dirs]
+        qc_dir = context.base_output_dir / "qc"
+        run_periodicity_qc(
+            bed_df=context.filtered_bed_df,
+            annotation_df=context.annotation_df,
+            samples=sample_names,
+            selected_offsets_by_sample=context.selected_offsets_by_sample or None,
+            selected_offsets_combined=context.selected_offsets_df,
+            offset_type=str(context.args.offset_type),
+            offset_site=str(context.args.offset_site),
+            output_dir=qc_dir,
+        )
+
         run_translation_profile_analysis(
             sample_dirs=context.sample_dirs,
             selected_offsets_df=context.selected_offsets_df,
