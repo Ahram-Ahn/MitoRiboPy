@@ -21,9 +21,6 @@ import sys
 from typing import Callable, Iterable
 
 from .. import __version__
-# Re-export ``run_pipeline_cli`` for monkeypatching in tests that existed
-# before the subcommand refactor.
-from ..pipeline.runner import run_pipeline_cli  # noqa: F401 (re-export)
 
 from . import align as _align
 from . import all_ as _all
@@ -31,6 +28,24 @@ from . import rnaseq as _rnaseq
 from . import rpf as _rpf
 
 __all__ = ["main", "run_pipeline_cli"]
+
+
+def __getattr__(name: str):
+    """Lazy attribute access for the back-compat ``run_pipeline_cli``
+    re-export.
+
+    Eagerly importing ``mitoribopy.pipeline.runner`` at module-init
+    time creates a cli<->pipeline circular when callers import
+    ``mitoribopy.pipeline.context`` (or any other pipeline submodule)
+    before they ever reach the ``cli`` package. Deferring the import
+    until the attribute is actually accessed keeps the convenience
+    while letting pipeline-only callers (tests, scripts) avoid the
+    cli load.
+    """
+    if name == "run_pipeline_cli":
+        from ..pipeline.runner import run_pipeline_cli as _impl
+        return _impl
+    raise AttributeError(f"module 'mitoribopy.cli' has no attribute {name!r}")
 
 
 _SUBCOMMANDS: dict[str, Callable[[Iterable[str]], int]] = {

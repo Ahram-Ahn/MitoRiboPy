@@ -212,10 +212,24 @@ def _apply_rpf_count_filter(
     read-length set is consistent between samples (per-sample offset
     selection still varies within that shared set).
     """
+    # Snapshot the user-requested range up-front so the metadata
+    # sidecar can record both "what they asked for" and "what survived".
+    context.requested_rpf_range = sorted(int(x) for x in context.rpf_range)
+
     frac = float(getattr(context.args, "rpf_min_count_frac", 0.0) or 0.0)
-    if frac <= 0:
-        return  # disabled
     df = context.filtered_bed_df
+    if df is not None and not df.empty and "read_length" in df.columns:
+        counts = df["read_length"].value_counts()
+        # Always record observed counts so the metadata sidecar carries
+        # them whether or not the auto-filter kicks in.
+        context.observed_counts_by_length = {
+            int(k): int(v) for k, v in counts.items()
+        }
+
+    if frac <= 0:
+        context.read_length_filter_threshold_rule = "disabled"
+        context.read_length_filter_threshold_value = 0.0
+        return  # disabled
     if df is None or df.empty or "read_length" not in df.columns:
         return
     counts = df["read_length"].value_counts()
@@ -223,10 +237,13 @@ def _apply_rpf_count_filter(
         return
     max_count = int(counts.max())
     threshold = max_count * frac
+    context.read_length_filter_threshold_rule = "dominant_fraction"
+    context.read_length_filter_threshold_value = float(frac)
     kept = sorted(int(rl) for rl, c in counts.items() if c >= threshold)
     if not kept:
         return  # belt-and-braces; should never trigger because the max bin clears its own threshold
     dropped = sorted(set(int(x) for x in context.rpf_range) - set(kept))
+    context.dropped_lengths = dropped
     if not dropped:
         return  # nothing pruned; current range is already tight
     emit_status(
@@ -270,6 +287,10 @@ def filter_bed_inputs(context: PipelineContext, emit_status: StatusWriter) -> bo
     write_rpf_counts_table(
         filtered_bed_df=context.filtered_bed_df,
         output_path=context.base_output_dir / "rpf_counts.tsv",
+    )
+    write_rpf_counts_metadata(
+        context=context,
+        output_path=context.base_output_dir / "rpf_counts.metadata.json",
     )
 
     # Emit run_settings.json with reference_checksum so the Phase 5
@@ -328,6 +349,118 @@ def write_rpf_run_settings(context: PipelineContext) -> Path | None:
         json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8"
     )
     return out_path
+
+
+def write_rpf_counts_metadata(
+    *,
+    context: PipelineContext,
+    output_path,
+) -> Path:
+    """Write the rpf_counts.tsv provenance sidecar.
+
+    Documents the read-length filtering decision, the offset mode the
+    counts were produced under, and the reference state — every field a
+    reviewer of a TE / ΔTE table needs to defend the upstream counts.
+
+    Schema (v1.0.0)::
+
+        {
+          "schema_version": "1.0.0",
+          "mitoribopy_version": "...",
+          "subcommand": "rpf",
+          "counts_path": "rpf_counts.tsv",
+          "n_rows": int,            # rows in the counts table
+          "n_samples": int,
+          "n_genes": int,
+          "total_reads": int,       # sum of count column
+          "read_length_filter": {
+            "requested_rpf_range": [29, 30, 31, 32, 33, 34],
+            "observed_counts_by_length": {"30": 12345, ...},
+            "retained_lengths":  [29, 30, 31, 32],
+            "dropped_lengths":   [33, 34],
+            "threshold_rule":    "dominant_fraction" | "disabled",
+            "threshold_value":   0.20
+          },
+          "offset_mode": "per_sample" | "combined",
+          "offset_type": "5",
+          "offset_site": "p",
+          "footprint_class": "monosome",
+          "strain": "h.sapiens",
+          "reference_fasta": "...",
+          "reference_checksum": "<sha256>" | None
+        }
+
+    Always written regardless of whether the auto-filter pruned
+    anything, so a downstream tool can read the sidecar and trust that
+    every field is present.
+    """
+    import hashlib
+    import json
+
+    from .. import __version__
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    df = context.filtered_bed_df
+    if df is None or df.empty:
+        n_rows = 0
+        n_samples = 0
+        n_genes = 0
+        total_reads = 0
+    else:
+        grouped = df.groupby(["sample_name", "chrom"]).size()
+        n_rows = int(len(grouped))
+        n_samples = int(df["sample_name"].nunique())
+        n_genes = int(df["chrom"].nunique())
+        total_reads = int(len(df))
+
+    fasta_path = Path(context.args.fasta) if getattr(context.args, "fasta", None) else None
+    reference_checksum: str | None = None
+    if fasta_path and fasta_path.is_file():
+        digest = hashlib.sha256()
+        with fasta_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                digest.update(chunk)
+        reference_checksum = digest.hexdigest()
+
+    offset_mode = str(getattr(context.args, "offset_mode", "per_sample"))
+
+    metadata = {
+        "schema_version": "1.0.0",
+        "mitoribopy_version": __version__,
+        "subcommand": "rpf",
+        "counts_path": "rpf_counts.tsv",
+        "n_rows": n_rows,
+        "n_samples": n_samples,
+        "n_genes": n_genes,
+        "total_reads": total_reads,
+        "read_length_filter": {
+            "requested_rpf_range": list(context.requested_rpf_range)
+            or list(context.rpf_range),
+            "observed_counts_by_length": {
+                str(k): int(v) for k, v in sorted(
+                    context.observed_counts_by_length.items()
+                )
+            },
+            "retained_lengths": sorted(int(x) for x in context.rpf_range),
+            "dropped_lengths": list(context.dropped_lengths),
+            "threshold_rule": context.read_length_filter_threshold_rule,
+            "threshold_value": context.read_length_filter_threshold_value,
+        },
+        "offset_mode": offset_mode,
+        "offset_type": str(getattr(context.args, "offset_type", "5")),
+        "offset_site": str(getattr(context.args, "offset_site", "p")),
+        "footprint_class": str(getattr(context.args, "footprint_class", "")),
+        "strain": str(getattr(context.args, "strain", "")),
+        "reference_fasta": str(fasta_path) if fasta_path else None,
+        "reference_checksum": reference_checksum,
+    }
+
+    output_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return output_path
 
 
 def write_rpf_counts_table(

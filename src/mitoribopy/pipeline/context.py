@@ -60,4 +60,13 @@ class PipelineContext:
     # `--offset_mode combined` is active (downstream then uses
     # `selected_offsets_df` for every sample).
     selected_offsets_by_sample: dict[str, pd.DataFrame] = field(default_factory=dict)
+    # Read-length filter bookkeeping populated by `_apply_rpf_count_filter`.
+    # These fields drive the rpf_counts.metadata.json sidecar so a
+    # reviewer can audit which read lengths actually fed the counts and
+    # why the others got dropped.
+    requested_rpf_range: list[int] = field(default_factory=list)
+    observed_counts_by_length: dict[int, int] = field(default_factory=dict)
+    dropped_lengths: list[int] = field(default_factory=list)
+    read_length_filter_threshold_rule: str | None = None
+    read_length_filter_threshold_value: float | None = None
     extra: dict[str, Any] = field(default_factory=dict)
