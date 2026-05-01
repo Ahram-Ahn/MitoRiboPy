@@ -816,6 +816,7 @@ End-to-end orchestrator: align + rpf + (optional) rnaseq. Reads one YAML/JSON/TO
 | `--manifest PATH` | `run_manifest.json` | Manifest filename (relative to `--output`). |
 | `--show-stage-help STAGE` | — | Print the full help for one stage (`align`, `rpf`, or `rnaseq`) and exit. Useful because `--help` shows only orchestrator flags. |
 | `--print-config-template` | — | Print a commented YAML template covering every stage and exit. |
+| `--print-canonical-config` | — | Load `--config`, apply every auto-wiring + sample-sheet expansion that `mitoribopy all` would normally apply, then print the resulting **canonical config** to stdout (YAML if PyYAML is available, JSON otherwise) and exit. The same blob is embedded in `run_manifest.json` under `config_canonical` on real runs, so this is the right way to preview "what is `mitoribopy all` actually going to run with?" before committing to a full pipeline. |
 
 #### Auto-wiring
 
@@ -1371,7 +1372,7 @@ Reservoir-samples `--n` FASTQ records (4 lines each); gzip is auto-detected on e
 
 - **`<output>/<stage>/mitoribopy.log`** — every stage writes a persistent log file alongside the same lines printed to the terminal.
 - **Per-stage `run_settings.json`** — every stage writes its own settings JSON (resolved kit, dedup strategy, MAPQ threshold, reference checksum, tool versions, …).
-- **`<output>/run_manifest.json`** — `mitoribopy all` composes per-stage settings into a top-level manifest. The `reference_checksum` from the rpf stage is promoted to the top level so a downstream `rnaseq` run can verify it without drilling into the rpf section.
+- **`<output>/run_manifest.json`** — `mitoribopy all` composes per-stage settings into a top-level manifest. Schema version 1.0.0 carries: `schema_version`, `mitoribopy_version`, `git_commit` (best-effort, `null` outside a repo), `command` (the original argv), `config_source` + `config_source_sha256` (hash of the YAML the user wrote), `config_canonical` (the merged + auto-wired config that actually drove the run), `sample_sheet` + `sample_sheet_sha256` when applicable, a `stages: { align: {status, runtime_seconds}, rpf: {...}, rnaseq: {...} }` map (status is `completed` / `skipped` / `not_configured`; skipped stages carry a `reason`), the per-stage `run_settings.json` payloads, a flat `tools: {python, mitoribopy, cutadapt, ...}` map lifted from those payloads, and a `warnings` placeholder. The `reference_checksum` from the rpf stage is promoted to the top level so a downstream `rnaseq` run can verify it without drilling into the rpf section. Pin to a manifest layout by reading `schema_version` first.
 - **`<output>/align/kit_resolution.tsv`** — per-sample kit + dedup decisions.
 
 ---

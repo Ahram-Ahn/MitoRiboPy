@@ -331,8 +331,13 @@ def test_all_runs_align_then_rpf_then_rnaseq(tmp_path, monkeypatch) -> None:
 
     manifest = json.loads((tmp_path / "results" / "run_manifest.json").read_text())
     assert manifest["subcommand"] == "all"
-    assert manifest["stages_run"] == ["align", "rpf", "rnaseq"]
-    assert manifest["stages_skipped"] == []
+    # Schema-v1 stages block:
+    assert manifest["schema_version"] == "1.0.0"
+    assert manifest["stages"]["align"]["status"] == "completed"
+    assert manifest["stages"]["rpf"]["status"] == "completed"
+    assert manifest["stages"]["rnaseq"]["status"] == "completed"
+    # Per-stage runtime is recorded for completed stages.
+    assert "runtime_seconds" in manifest["stages"]["align"]
     assert manifest["rpf"]["reference_checksum"] == "abc123"
     # Reference checksum promoted to top level for easy consumption.
     assert manifest["reference_checksum"] == "abc123"
@@ -379,8 +384,9 @@ def test_all_resume_skips_stages_with_existing_outputs(tmp_path, monkeypatch) ->
     assert "rpf" in calls
 
     manifest = json.loads((results / "run_manifest.json").read_text())
-    assert "align" in manifest["stages_skipped"]
-    assert "rpf" in manifest["stages_run"]
+    assert manifest["stages"]["align"]["status"] == "skipped"
+    assert "resume" in manifest["stages"]["align"]["reason"]
+    assert manifest["stages"]["rpf"]["status"] == "completed"
 
 
 def test_all_propagates_nonzero_exit_from_align(tmp_path, monkeypatch, capsys) -> None:
@@ -437,7 +443,7 @@ def test_all_skips_rnaseq_when_de_table_absent(tmp_path, monkeypatch) -> None:
     assert exit_code == 0
     assert "rnaseq" not in calls
     manifest = json.loads((results / "run_manifest.json").read_text())
-    assert "rnaseq" in manifest["stages_skipped"]
+    assert manifest["stages"]["rnaseq"]["status"] == "skipped"
 
 
 def test_all_respects_skip_rpf_flag(tmp_path, monkeypatch) -> None:
@@ -539,7 +545,7 @@ def test_all_runs_rnaseq_in_from_fastq_mode(tmp_path, monkeypatch) -> None:
     assert "--ribo-dir" not in rnaseq_argv
 
     manifest = json.loads((results / "run_manifest.json").read_text())
-    assert "rnaseq" in manifest["stages_run"]
+    assert manifest["stages"]["rnaseq"]["status"] == "completed"
 
 
 def test_all_rejects_rnaseq_with_both_de_table_and_rna_fastq(
@@ -562,6 +568,199 @@ def test_all_rejects_rnaseq_with_both_de_table_and_rna_fastq(
     assert exit_code == 2
     err = capsys.readouterr().err
     assert "mutually exclusive" in err
+
+
+def test_manifest_carries_schema_v1_metadata(tmp_path, monkeypatch) -> None:
+    """run_manifest.json v1.0.0 must record schema_version, command,
+    config_source + sha256, config_canonical, git_commit, tools, and
+    a stages map with per-stage status + runtime."""
+    def fake_align(argv):
+        out = Path(tmp_path / "results" / "align")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "read_counts.tsv").write_text("sample\n")
+        (out / "run_settings.json").write_text(
+            '{"subcommand":"align","cutadapt_version":"4.9"}'
+        )
+        return 0
+
+    def fake_rpf(argv):
+        out = Path(tmp_path / "results" / "rpf")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "rpf_counts.tsv").write_text("sample\tgene\tcount\n")
+        (out / "run_settings.json").write_text(
+            '{"subcommand":"rpf","reference_checksum":"abc123"}'
+        )
+        return 0
+
+    from mitoribopy.cli import align as align_cli
+    from mitoribopy.cli import rpf as rpf_cli
+    monkeypatch.setattr(align_cli, "run", fake_align)
+    monkeypatch.setattr(rpf_cli, "run", fake_rpf)
+
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "align:\n  kit_preset: truseq_smallrna\n"
+        "rpf:\n  strain: h\n"
+    )
+    results = tmp_path / "results"
+    exit_code = cli.main([
+        "all", "--config", str(cfg), "--output", str(results),
+    ])
+    assert exit_code == 0
+
+    manifest = json.loads((results / "run_manifest.json").read_text())
+    assert manifest["schema_version"] == "1.0.0"
+    assert manifest["command"].startswith("mitoribopy all --config")
+    assert manifest["config_source"] == str(cfg)
+    # Hash of the YAML the user wrote (stable for unchanged inputs).
+    assert manifest["config_source_sha256"] is not None
+    assert len(manifest["config_source_sha256"]) == 64
+    # No sample sheet was set; both fields stay null but present.
+    assert manifest["sample_sheet"] is None
+    assert manifest["sample_sheet_sha256"] is None
+    # The merged + auto-wired config is embedded so a reviewer can see
+    # what was actually executed.
+    assert manifest["config_canonical"]["align"]["output"] == str(results / "align")
+    assert manifest["config_canonical"]["rpf"]["output"] == str(results / "rpf")
+    # Stages reshape (align + rpf completed; rnaseq not configured).
+    assert manifest["stages"]["align"]["status"] == "completed"
+    assert manifest["stages"]["rpf"]["status"] == "completed"
+    assert manifest["stages"]["rnaseq"]["status"] == "not_configured"
+    assert "runtime_seconds" in manifest["stages"]["align"]
+    # tools map lifts cutadapt_version from align's run_settings.json
+    # and always carries python + mitoribopy.
+    tools = manifest["tools"]
+    assert tools["cutadapt"] == "4.9"
+    assert "python" in tools and "mitoribopy" in tools
+    # Reference checksum is still promoted to the top level.
+    assert manifest["reference_checksum"] == "abc123"
+    # Warnings is a placeholder list.
+    assert manifest["warnings"] == []
+
+
+def test_manifest_distinguishes_skipped_vs_not_configured(
+    tmp_path, monkeypatch
+) -> None:
+    """A stage actively skipped (--skip-<stage>) shows status='skipped'
+    with a reason; a stage with no config section shows
+    status='not_configured' and carries no reason."""
+    from mitoribopy.cli import align as align_cli
+    from mitoribopy.cli import rpf as rpf_cli
+
+    def fake_align(argv):
+        out = Path(tmp_path / "results" / "align")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "read_counts.tsv").write_text("sample\n")
+        (out / "run_settings.json").write_text("{}")
+        return 0
+
+    def fake_rpf(argv):
+        # Should NOT run because we --skip-rpf below.
+        raise AssertionError("rpf must be skipped")
+
+    monkeypatch.setattr(align_cli, "run", fake_align)
+    monkeypatch.setattr(rpf_cli, "run", fake_rpf)
+
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "align:\n  kit_preset: truseq_smallrna\n"
+        "rpf:\n  strain: h\n"
+        # rnaseq section absent -> not_configured.
+    )
+    results = tmp_path / "results"
+    exit_code = cli.main([
+        "all", "--config", str(cfg), "--output", str(results),
+        "--skip-rpf",
+    ])
+    assert exit_code == 0
+
+    manifest = json.loads((results / "run_manifest.json").read_text())
+    # rpf was actively skipped via --skip-rpf -> skipped + reason.
+    assert manifest["stages"]["rpf"]["status"] == "skipped"
+    assert manifest["stages"]["rpf"]["reason"] == "--skip-rpf flag set"
+    # rnaseq has no config section -> not_configured + no reason field.
+    assert manifest["stages"]["rnaseq"]["status"] == "not_configured"
+    assert "reason" not in manifest["stages"]["rnaseq"]
+
+
+def test_manifest_records_sample_sheet_sha256(tmp_path, monkeypatch) -> None:
+    """When a top-level sample sheet drives the run, both its path and
+    its SHA256 land in the manifest so a reviewer can verify the inputs
+    have not changed since the run."""
+    from mitoribopy.cli import align as align_cli
+    from mitoribopy.cli import rpf as rpf_cli
+    monkeypatch.setattr(
+        align_cli, "run",
+        lambda argv: (
+            Path(tmp_path / "results" / "align").mkdir(parents=True, exist_ok=True),
+            (tmp_path / "results" / "align" / "read_counts.tsv").write_text("x"),
+            (tmp_path / "results" / "align" / "run_settings.json").write_text("{}"),
+        ) and 0,
+    )
+    monkeypatch.setattr(
+        rpf_cli, "run",
+        lambda argv: (
+            Path(tmp_path / "results" / "rpf").mkdir(parents=True, exist_ok=True),
+            (tmp_path / "results" / "rpf" / "rpf_counts.tsv").write_text("x"),
+            (tmp_path / "results" / "rpf" / "run_settings.json").write_text("{}"),
+        ) and 0,
+    )
+
+    sheet = tmp_path / "samples.tsv"
+    sheet.write_text(
+        "sample_id\tassay\tcondition\tfastq_1\n"
+        "WT_Ribo_1\tribo\tWT\tribo/WT.fq.gz\n"
+        "WT_RNA_1\trna\tWT\trna/WT.fq.gz\n"
+    )
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        f"samples:\n  table: {sheet}\n"
+        "align:\n  kit_preset: auto\n"
+        "rpf:\n  strain: h\n"
+    )
+    results = tmp_path / "results"
+    exit_code = cli.main([
+        "all", "--config", str(cfg), "--output", str(results),
+    ])
+    assert exit_code == 0
+
+    manifest = json.loads((results / "run_manifest.json").read_text())
+    assert manifest["sample_sheet"] == str(sheet)
+    assert manifest["sample_sheet_sha256"] is not None
+    assert len(manifest["sample_sheet_sha256"]) == 64
+
+
+def test_print_canonical_config_outputs_merged_yaml(tmp_path, capsys) -> None:
+    """--print-canonical-config must emit the same blob the manifest
+    would embed under config_canonical, without running any stage."""
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "align:\n  kit_preset: truseq_smallrna\n"
+        "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
+    )
+    exit_code = cli.main([
+        "all",
+        "--config", str(cfg),
+        "--output", str(tmp_path / "results"),
+        "--print-canonical-config",
+    ])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    # The auto-wired stage outputs must appear in the printed canonical
+    # form (proves --print-canonical-config ran the auto-wiring step,
+    # not just dumped the input verbatim).
+    assert "align" in out and "rpf" in out
+    assert str(tmp_path / "results" / "align") in out
+    assert str(tmp_path / "results" / "rpf") in out
+
+
+def test_print_canonical_config_requires_config_path(tmp_path, capsys) -> None:
+    exit_code = cli.main([
+        "all", "--print-canonical-config",
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "--config" in err
 
 
 def test_all_top_level_samples_drives_align_and_rnaseq(

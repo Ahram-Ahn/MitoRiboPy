@@ -29,13 +29,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import platform
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Iterable
 
 from .. import __version__
 from ..cli.common import load_config_file
 from . import common
+
+
+# Bumped whenever the run_manifest.json layout changes in a way that
+# breaks downstream consumers (added fields are minor; renamed or
+# removed fields are major). Read it from your own scripts to gate on a
+# compatible manifest shape.
+MANIFEST_SCHEMA_VERSION = "1.0.0"
 
 
 ALL_SUBCOMMAND_HELP = (
@@ -136,6 +146,22 @@ def build_parser() -> argparse.ArgumentParser:
             "(align / rpf / rnaseq) with sensible defaults, then exit. "
             "Pipe this into a file to start a new project: "
             "'mitoribopy all --print-config-template > pipeline_config.yaml'."
+        ),
+    )
+    parser.add_argument(
+        "--print-canonical-config",
+        action="store_true",
+        default=False,
+        help=(
+            "Load --config, apply every auto-wiring + sample-sheet "
+            "expansion that 'mitoribopy all' would normally apply, then "
+            "print the resulting canonical config to stdout (YAML if "
+            "PyYAML is available, JSON otherwise) and exit. Useful for "
+            "diffing your input config against what was actually "
+            "executed: 'mitoribopy all --print-canonical-config "
+            "--config pipeline_config.yaml --output results/'. The same "
+            "blob is embedded in run_manifest.json under "
+            "'config_canonical' on real runs."
         ),
     )
     return parser
@@ -651,6 +677,110 @@ def _read_stage_settings(stage_dir: Path) -> dict | None:
         return None
 
 
+def _git_commit() -> str | None:
+    """Best-effort current git commit — never raises.
+
+    Returns ``None`` when not in a repo, when git is missing, or when
+    the call fails for any reason. Intentionally cheap; we never want
+    a manifest write to fail because git is misconfigured.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    sha = out.stdout.strip()
+    return sha or None
+
+
+def _yaml_dump(payload: dict) -> str:
+    """YAML dump if PyYAML is available, JSON fallback otherwise.
+
+    The fallback is intentional: `--print-canonical-config` needs to
+    work in lean install environments where PyYAML is not installed.
+    JSON is a strict subset of YAML so the output remains valid YAML.
+    """
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except ImportError:
+        return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    return yaml.safe_dump(
+        payload, sort_keys=True, default_flow_style=False, allow_unicode=True
+    )
+
+
+def _build_stages_block(
+    stages_run: list[str],
+    stages_skipped: list[str],
+    runtimes: dict[str, float],
+    skip_reasons: dict[str, str],
+) -> dict[str, dict]:
+    """Reshape parallel run/skipped lists into a {stage: {status, ...}} map.
+
+    Status values:
+    * ``completed`` — the stage executed successfully.
+    * ``skipped``   — the stage was not configured or was skipped via
+                      --skip-* / --resume; ``reason`` carries the trigger.
+    """
+    out: dict[str, dict] = {}
+    for stage in ("align", "rpf", "rnaseq"):
+        if stage in stages_run:
+            out[stage] = {"status": "completed"}
+            if stage in runtimes:
+                out[stage]["runtime_seconds"] = round(runtimes[stage], 3)
+        elif stage in stages_skipped:
+            entry: dict = {"status": "skipped"}
+            reason = skip_reasons.get(stage)
+            if reason:
+                entry["reason"] = reason
+            out[stage] = entry
+        else:
+            out[stage] = {"status": "not_configured"}
+    return out
+
+
+def _lift_tool_versions(
+    align: dict | None, rpf: dict | None, rnaseq: dict | None
+) -> dict[str, str]:
+    """Pull tool versions out of per-stage run_settings.json files.
+
+    Stages already record (varying subsets of) their tool versions in
+    their own run_settings; this just lifts whatever's there into a
+    flat top-level map. Missing keys stay missing — we don't probe.
+    """
+    out: dict[str, str] = {}
+    out["python"] = platform.python_version()
+    out["mitoribopy"] = __version__
+    for settings in (align, rpf, rnaseq):
+        if not isinstance(settings, dict):
+            continue
+        tools = settings.get("tools")
+        if isinstance(tools, dict):
+            for k, v in tools.items():
+                if v is not None and k not in out:
+                    out[k] = str(v)
+        # Some stages stash individual tool versions at the top level.
+        for legacy_key in (
+            "cutadapt_version",
+            "bowtie2_version",
+            "umi_tools_version",
+            "pysam_version",
+            "pydeseq2_version",
+        ):
+            v = settings.get(legacy_key)
+            if v is not None:
+                tool_name = legacy_key.removesuffix("_version")
+                out.setdefault(tool_name, str(v))
+    return out
+
+
 def _write_manifest(
     output_dir: Path,
     manifest_name: str,
@@ -660,18 +790,70 @@ def _write_manifest(
     align_settings: dict | None,
     rpf_settings: dict | None,
     rnaseq_settings: dict | None,
+    config_canonical: dict,
+    config_source_path: str | None,
+    sample_sheet_path: str | None,
+    command_argv: list[str],
+    runtimes: dict[str, float],
+    skip_reasons: dict[str, str],
 ) -> Path:
+    """Write the v1.0.0 ``run_manifest.json`` for an ``all`` run.
+
+    Layout (top-level keys):
+    * ``schema_version``       — version of THIS layout (see
+                                 :data:`MANIFEST_SCHEMA_VERSION`).
+    * ``mitoribopy_version``
+    * ``git_commit``           — current commit when run inside a repo,
+                                 ``null`` otherwise.
+    * ``command``              — the original argv joined with spaces.
+    * ``config_source``        — path to the user-supplied YAML.
+    * ``config_source_sha256`` — SHA256 of that file as the user wrote
+                                 it (useful for "is this the same input
+                                 I used last time?" diffs).
+    * ``config_canonical``     — the merged + auto-wired config that
+                                 actually drove the run.
+    * ``sample_sheet``         — path to the unified sheet, when set.
+    * ``sample_sheet_sha256``  — its SHA256.
+    * ``reference_checksum``   — promoted from rpf settings (legacy
+                                 field; the rnaseq subcommand reads
+                                 this directly).
+    * ``stages``               — ``{align: {...}, rpf: {...}, rnaseq: {...}}``
+                                 with ``status`` + optional
+                                 ``runtime_seconds`` / ``reason``.
+    * ``align`` / ``rpf`` / ``rnaseq``
+                              — full per-stage run_settings.json
+                                copies (kept as-is for back-compat).
+    * ``tools``                — flat ``{tool: version}`` map lifted
+                                 from per-stage settings.
+    * ``warnings``             — placeholder for future structured
+                                 warnings; always an empty list in v1.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    manifest = {
+    manifest: dict = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "subcommand": "all",
         "mitoribopy_version": __version__,
-        "stages_run": stages_run,
-        "stages_skipped": stages_skipped,
+        "git_commit": _git_commit(),
+        "command": "mitoribopy all " + " ".join(command_argv),
+        "config_source": config_source_path,
+        "config_source_sha256": (
+            _sha256_of(Path(config_source_path)) if config_source_path else None
+        ),
+        "config_canonical": config_canonical,
+        "sample_sheet": sample_sheet_path,
+        "sample_sheet_sha256": (
+            _sha256_of(Path(sample_sheet_path)) if sample_sheet_path else None
+        ),
+        "stages": _build_stages_block(
+            stages_run, stages_skipped, runtimes, skip_reasons
+        ),
         "align": align_settings,
         "rpf": rpf_settings,
         "rnaseq": rnaseq_settings,
+        "tools": _lift_tool_versions(align_settings, rpf_settings, rnaseq_settings),
+        "warnings": [],
     }
 
     # Promote rpf's reference_checksum so future rnaseq invocations
@@ -768,6 +950,43 @@ def run(argv: Iterable[str]) -> int:
 
     if args.print_config_template:
         _print_config_template()
+        return 0
+
+    if args.print_canonical_config:
+        if not args.config:
+            print(
+                "[mitoribopy all] ERROR: --print-canonical-config "
+                "requires --config <path>.",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            cfg = load_config_file(args.config)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"[mitoribopy all] ERROR: {exc}", file=sys.stderr)
+            return 2
+        run_root = Path(args.output) if args.output else Path("results")
+        rc = _apply_top_level_samples(cfg, run_root=run_root)
+        if rc != 0:
+            return rc
+        rnaseq_section = cfg.get("rnaseq", {}) or {}
+        _auto_wire_paths(
+            cfg,
+            run_root=run_root,
+            has_align=bool(cfg.get("align")) and not args.skip_align,
+            has_rpf=bool(cfg.get("rpf")) and not args.skip_rpf,
+            has_rnaseq=bool(cfg.get("rnaseq")) and not args.skip_rnaseq,
+            has_de_table=bool(
+                rnaseq_section.get("de_table") or rnaseq_section.get("de-table")
+            ),
+            has_fastq_mode=bool(
+                rnaseq_section.get("rna_fastq")
+                or rnaseq_section.get("rna-fastq")
+                or rnaseq_section.get("sample_sheet")
+                or rnaseq_section.get("sample-sheet")
+            ),
+        )
+        sys.stdout.write(_yaml_dump(cfg))
         return 0
 
     if args.show_stage_help:
@@ -895,6 +1114,8 @@ def run(argv: Iterable[str]) -> int:
 
     stages_run: list[str] = []
     stages_skipped: list[str] = []
+    runtimes: dict[str, float] = {}
+    skip_reasons: dict[str, str] = {}
 
     # Import subcommand entry points here to avoid a circular import at
     # module load time.
@@ -906,6 +1127,7 @@ def run(argv: Iterable[str]) -> int:
     if has_align:
         if args.resume and _should_skip_align(run_root):
             stages_skipped.append("align")
+            skip_reasons["align"] = "resume: read_counts.tsv already exists"
         else:
             align_cfg = _normalize_align_inputs(config["align"], run_root=run_root)
             if args.resume:
@@ -920,7 +1142,9 @@ def run(argv: Iterable[str]) -> int:
                 flag_style="hyphen",
                 repeat_flags={"fastq"},
             )
+            t0 = time.monotonic()
             rc = align_cli.run(align_argv)
+            runtimes["align"] = time.monotonic() - t0
             if rc != 0:
                 print(
                     f"[mitoribopy all] align stage failed with exit code {rc}.",
@@ -929,19 +1153,26 @@ def run(argv: Iterable[str]) -> int:
                 return rc
             stages_run.append("align")
     else:
-        stages_skipped.append("align")
+        if args.skip_align:
+            stages_skipped.append("align")
+            skip_reasons["align"] = "--skip-align flag set"
+        # Otherwise: no align section -> stage is "not_configured"
+        # in the manifest (we leave it out of stages_skipped).
 
     # --- rpf ------------------------------------------------------------
     if has_rpf:
         if args.resume and _should_skip_rpf(run_root):
             stages_skipped.append("rpf")
+            skip_reasons["rpf"] = "resume: rpf_counts.tsv already exists"
         else:
             rpf_argv = _dict_to_argv(
                 config["rpf"],
                 flag_style="underscore",
                 flag_overrides={"rpf": "-rpf"},
             )
+            t0 = time.monotonic()
             rc = rpf_cli.run(rpf_argv)
+            runtimes["rpf"] = time.monotonic() - t0
             if rc != 0:
                 print(
                     f"[mitoribopy all] rpf stage failed with exit code {rc}.",
@@ -950,7 +1181,10 @@ def run(argv: Iterable[str]) -> int:
                 return rc
             stages_run.append("rpf")
     else:
-        stages_skipped.append("rpf")
+        if args.skip_rpf:
+            stages_skipped.append("rpf")
+            skip_reasons["rpf"] = "--skip-rpf flag set"
+        # Otherwise: no rpf section -> not_configured.
 
     # --- rnaseq (optional) ---------------------------------------------
     # Run when either flow is configured: from-FASTQ (rna_fastq +
@@ -959,9 +1193,12 @@ def run(argv: Iterable[str]) -> int:
     if has_rnaseq and (has_de_table or has_fastq_mode):
         if args.resume and _should_skip_rnaseq(run_root):
             stages_skipped.append("rnaseq")
+            skip_reasons["rnaseq"] = "resume: delta_te.tsv already exists"
         else:
             rnaseq_argv = _dict_to_argv(config["rnaseq"], flag_style="hyphen")
+            t0 = time.monotonic()
             rc = rnaseq_cli.run(rnaseq_argv)
+            runtimes["rnaseq"] = time.monotonic() - t0
             if rc != 0:
                 print(
                     f"[mitoribopy all] rnaseq stage failed with exit code {rc}.",
@@ -970,9 +1207,28 @@ def run(argv: Iterable[str]) -> int:
                 return rc
             stages_run.append("rnaseq")
     else:
-        stages_skipped.append("rnaseq")
+        if args.skip_rnaseq:
+            stages_skipped.append("rnaseq")
+            skip_reasons["rnaseq"] = "--skip-rnaseq flag set"
+        elif has_rnaseq:
+            # The rnaseq section was declared but neither flow's inputs
+            # were supplied — treat as actively skipped (with a reason)
+            # so users can see why their rnaseq config did not fire.
+            stages_skipped.append("rnaseq")
+            skip_reasons["rnaseq"] = (
+                "rnaseq section present but neither --de-table nor "
+                "--rna-fastq / sample_sheet input was configured"
+            )
+        # Otherwise: no rnaseq section at all -> not_configured.
 
     # --- manifest -------------------------------------------------------
+    sample_sheet_path = None
+    samples_block = config.get("samples")
+    if isinstance(samples_block, str):
+        sample_sheet_path = samples_block
+    elif isinstance(samples_block, dict):
+        sample_sheet_path = samples_block.get("table") or samples_block.get("path")
+
     _write_manifest(
         output_dir=run_root,
         manifest_name=args.manifest,
@@ -981,5 +1237,11 @@ def run(argv: Iterable[str]) -> int:
         align_settings=_read_stage_settings(run_root / "align"),
         rpf_settings=_read_stage_settings(run_root / "rpf"),
         rnaseq_settings=_read_stage_settings(run_root / "rnaseq"),
+        config_canonical=config,
+        config_source_path=args.config,
+        sample_sheet_path=sample_sheet_path,
+        command_argv=list(argv),
+        runtimes=runtimes,
+        skip_reasons=skip_reasons,
     )
     return 0
