@@ -71,11 +71,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "read_coverage_raw": True,
     "read_coverage_rpm": True,
     "igv_export": False,
-    "use_rna_seq": False,
-    "rna_seq_dir": None,
-    "rna_order": None,
-    "rna_out_dir": "rna_seq_results",
-    "do_rna_ribo_ratio": False,
     "bam_mapq": 10,
     "footprint_class": "monosome",
 }

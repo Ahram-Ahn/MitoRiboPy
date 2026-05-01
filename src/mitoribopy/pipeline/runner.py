@@ -648,40 +648,6 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
             "<output>/igv_tracks/<sample>/, suitable for opening in IGV."
         ),
     )
-    optional_group.add_argument(
-        "--use_rna_seq",
-        action="store_true",
-        default=defaults["use_rna_seq"],
-        help=(
-            "[DEPRECATED in v0.3.0; removed in v0.4.0] Run the legacy\n"
-            "RNA-seq ratio module. Use the dedicated 'mitoribopy rnaseq'\n"
-            "subcommand instead for DE-based TE and delta-TE analysis\n"
-            "with a SHA256 reference-consistency gate."
-        ),
-    )
-    optional_group.add_argument(
-        "--rna_seq_dir",
-        default=defaults["rna_seq_dir"],
-        help="Directory containing RNA-seq BED files.",
-    )
-    optional_group.add_argument(
-        "--rna_order",
-        nargs="+",
-        default=defaults["rna_order"],
-        help="RNA-seq sample order for paired outputs and plots.",
-    )
-    optional_group.add_argument(
-        "--rna_out_dir",
-        default=defaults["rna_out_dir"],
-        help="RNA-seq output directory name.",
-    )
-    optional_group.add_argument(
-        "--do_rna_ribo_ratio",
-        action="store_true",
-        default=defaults["do_rna_ribo_ratio"],
-        help="Merge Ribo-seq and RNA-seq outputs into ratios.",
-    )
-
     return parser
 
 
@@ -748,8 +714,6 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
         args.cor_mask_percentile <= 0 or args.cor_mask_percentile >= 1
     ):
         parser.error("--cor_mask_percentile must be in (0, 1)")
-    if args.use_rna_seq and (not args.rna_seq_dir or not args.rna_order):
-        parser.error("--use_rna_seq requires both --rna_seq_dir and --rna_order")
     # Canonicalise the deprecated short strain aliases (h, y) to their
     # full species names so the rest of the pipeline only sees the
     # canonical form. Emit one DEPRECATED line so the user knows to
@@ -908,16 +872,7 @@ def run_pipeline(
 
 def run_pipeline_cli(argv: Iterable[str] | None = None) -> int:
     """Parse arguments and run the standalone package-native pipeline."""
-    import sys as _sys
-
     args = parse_pipeline_args(argv)
-    if getattr(args, "use_rna_seq", False):
-        _sys.stderr.write(
-            "[mitoribopy rpf] DEPRECATION: --use_rna_seq is deprecated in "
-            "v0.3.0 and will be removed in v0.4.0. Use 'mitoribopy rnaseq' "
-            "instead - it enforces a SHA256 reference-consistency gate and "
-            "runs on DE output (DESeq2 / Xtail / Anota2Seq).\n"
-        )
     log_path = configure_file_logging(Path(args.output) / "mitoribopy.log")
     log_message(f"[PIPELINE] Log file: {log_path}")
     configure_plot_defaults()

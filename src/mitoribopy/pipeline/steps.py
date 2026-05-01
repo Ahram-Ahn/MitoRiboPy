@@ -13,7 +13,6 @@ from ..analysis import (
     create_csv_for_offset_enrichment,
     determine_p_site_offsets,
     run_codon_correlation,
-    run_rna_seq_analysis,
     run_translation_profile_analysis,
 )
 from ..config import resolve_rpf_range
@@ -826,23 +825,6 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
                     "generated upstream; skipping codon correlation."
                 )
                 skipped_modules.append("codon correlation")
-
-    if context.args.use_rna_seq:
-        rna_out_dir = context.base_output_dir / context.args.rna_out_dir
-        rna_out_dir.mkdir(parents=True, exist_ok=True)
-        run_rna_seq_analysis(
-            rna_seq_dir=context.args.rna_seq_dir,
-            rna_order=context.args.rna_order,
-            annotation_df=context.annotation_df,
-            fasta_file=context.args.fasta,
-            output_dir=str(rna_out_dir),
-            translation_profile_dir=str(context.base_output_dir),
-            do_merge_with_ribo=context.args.do_rna_ribo_ratio,
-            ribo_order=context.args.order_samples,
-        )
-        ran_modules.append("RNA-seq integration")
-    else:
-        skipped_modules.append("RNA-seq integration")
 
     summary_parts: list[str] = []
     if ran_modules:
