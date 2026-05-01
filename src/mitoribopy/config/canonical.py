@@ -115,10 +115,13 @@ def canonicalize_config(raw_config: dict[str, Any]) -> CanonicalConfig:
     ]
 
     # Heuristic: a sectioned config has at least one of align/rpf/rnaseq
-    # at the top. Otherwise the keys are flat (per-stage config) and we
-    # don't run section-level checks here.
+    # at the top AS A DICT. Flat per-stage templates can also use those
+    # names as scalar keys (e.g. ``rpf: [29, 34]`` for the RPF length
+    # window in a per-stage rpf config) — those are NOT section
+    # wrappers and must NOT trigger the unknown-section check.
     is_sectioned = any(
-        k in canonical for k in ("align", "rpf", "rnaseq")
+        isinstance(canonical.get(k), dict)
+        for k in ("align", "rpf", "rnaseq")
     )
     if is_sectioned:
         unknown = sorted(
