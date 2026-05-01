@@ -149,7 +149,11 @@ def test_write_read_counts_table_writes_header_and_rows_in_order(tmp_path) -> No
     result = write_read_counts_table(rows, output)
 
     assert result == output
-    lines = output.read_text().splitlines()
+    # P1.12: every TSV writer prepends a `# schema_version: X.Y` line
+    # before the column header so consumers can detect schema drift.
+    raw = output.read_text().splitlines()
+    assert raw[0].startswith("# schema_version:")
+    lines = [line for line in raw if not line.startswith("#")]
     assert lines[0].split("\t") == list(read_counts_columns())
     assert lines[1].split("\t")[0] == "A"
     assert lines[2].split("\t")[0] == "B"
@@ -161,8 +165,12 @@ def test_write_read_counts_table_creates_parent_directory(tmp_path) -> None:
     write_read_counts_table([], output)
 
     assert output.exists()
-    # Empty rows list still writes a header-only file.
-    assert output.read_text().splitlines() == ["\t".join(read_counts_columns())]
+    # Empty rows list still writes a header-only file (plus the
+    # P1.12 schema-version comment line).
+    raw = output.read_text().splitlines()
+    assert raw[0].startswith("# schema_version:")
+    lines = [line for line in raw if not line.startswith("#")]
+    assert lines == ["\t".join(read_counts_columns())]
 
 
 def test_format_row_produces_tab_separated_values() -> None:

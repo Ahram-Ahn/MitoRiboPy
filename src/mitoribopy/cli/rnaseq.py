@@ -73,6 +73,111 @@ RNASEQ_SUBCOMMAND_HELP = (
 )
 
 
+# Explicit mode names. de_table is the publication-grade flow (external
+# full-transcriptome DE table); from_fastq is the in-tree exploratory
+# flow (mt-only pyDESeq2). 'none' means the rnaseq stage is configured
+# but no inputs were supplied -- typically used by `mitoribopy all` to
+# record "stage section present, intentionally inert".
+RNASEQ_MODES: tuple[str, ...] = ("de_table", "from_fastq", "none")
+
+
+def _normalize_mode(value: str | None) -> str | None:
+    """Accept hyphenated forms (`from-fastq`) and normalize to underscore form."""
+    if value is None:
+        return None
+    return value.replace("-", "_").lower()
+
+
+def _resolve_rnaseq_mode(args) -> tuple[str | None, str | None]:
+    """Resolve the rnaseq mode from --rnaseq-mode + supplied inputs.
+
+    Returns ``(mode, error_message)``. If ``error_message`` is set, the
+    caller should print it and exit 2. The mode strings are members of
+    :data:`RNASEQ_MODES`.
+
+    Inference rule when --rnaseq-mode is unset:
+
+    * ``de_table`` if ``--de-table`` is set
+    * ``from_fastq`` if ``--rna-fastq`` or ``--sample-sheet`` is set
+    * ``none`` otherwise
+
+    When --rnaseq-mode IS set, the supplied inputs must match the chosen
+    mode; mismatches return a clear error.
+    """
+    requested = _normalize_mode(getattr(args, "rnaseq_mode", None))
+    has_de_table = bool(args.de_table)
+    has_fastq_inputs = bool(args.rna_fastq) or bool(args.sample_sheet)
+    inferred = (
+        "de_table" if has_de_table
+        else "from_fastq" if has_fastq_inputs
+        else "none"
+    )
+
+    if requested is None:
+        # Ambiguous: user supplied inputs for BOTH flows without picking
+        # one. The two paths are mutually exclusive — fail loudly so
+        # users see exactly which flag pair conflicts.
+        if has_de_table and has_fastq_inputs:
+            return None, (
+                "rnaseq inputs are ambiguous: --de-table (publication "
+                "flow) and --rna-fastq / --sample-sheet (exploratory "
+                "flow) are mutually exclusive. Pick one, or set "
+                "--rnaseq-mode={de_table|from_fastq} to disambiguate."
+            )
+        return inferred, None
+
+    if requested not in RNASEQ_MODES:
+        return None, (
+            f"--rnaseq-mode={requested!r} is not a valid mode; "
+            f"choose one of {list(RNASEQ_MODES)}."
+        )
+
+    # Reject mismatched mode + inputs.
+    if requested == "de_table" and has_fastq_inputs:
+        return None, (
+            "--rnaseq-mode=de_table conflicts with --rna-fastq / "
+            "--sample-sheet inputs (the de_table flow consumes a "
+            "pre-computed external DE table, not raw FASTQs). Drop the "
+            "FASTQ inputs or switch to --rnaseq-mode=from_fastq."
+        )
+    if requested == "from_fastq" and has_de_table:
+        return None, (
+            "--rnaseq-mode=from_fastq conflicts with --de-table (the "
+            "from-FASTQ flow runs pyDESeq2 itself; --de-table belongs "
+            "to the de_table flow). Drop --de-table or switch to "
+            "--rnaseq-mode=de_table."
+        )
+    if requested == "de_table" and not has_de_table:
+        return None, (
+            "--rnaseq-mode=de_table requires --de-table <path>."
+        )
+    if requested == "from_fastq" and not has_fastq_inputs:
+        return None, (
+            "--rnaseq-mode=from_fastq requires either --rna-fastq or "
+            "--sample-sheet."
+        )
+
+    return requested, None
+
+
+def _emit_exploratory_mode_banner() -> None:
+    """One-line stderr note when from_fastq mode is active.
+
+    Distinct from the pseudo-replicate banner, which fires only when
+    n=1 conditions are split. This banner fires for *every* from_fastq
+    run because the in-tree mt-only pyDESeq2 path is exploratory by
+    construction; publication-grade DE should run externally on the
+    full transcriptome and feed back via --de-table.
+    """
+    sys.stderr.write(
+        "[mitoribopy rnaseq] NOTE: rnaseq mode = from_fastq (exploratory). "
+        "This runs pyDESeq2 on the mt-mRNA subset only; for "
+        "publication-grade DE, run DESeq2 / Xtail / Anota2Seq externally "
+        "on the full transcriptome and re-run with mode=de_table + "
+        "--de-table <path>.\n"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mitoribopy rnaseq",
@@ -80,6 +185,25 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=common.MitoRiboPyHelpFormatter,
     )
     common.add_common_arguments(parser)
+
+    # ----- Mode (explicit; recommended) ------------------------------------
+    parser.add_argument(
+        "--rnaseq-mode",
+        dest="rnaseq_mode",
+        choices=list(RNASEQ_MODES),
+        default=None,
+        metavar="MODE",
+        help=(
+            "Explicit rnaseq stage mode. Recommended over relying on "
+            "input-presence inference. Modes:\n"
+            "  de_table   PUBLICATION: consume external DE table + prior "
+            "rpf run (--de-table + --ribo-dir).\n"
+            "  from_fastq EXPLORATORY: run cutadapt + bowtie2 + pyDESeq2 "
+            "on the mt-mRNA subset (--rna-fastq or --sample-sheet).\n"
+            "  none       stage configured but inert (no inputs).\n"
+            "When omitted, the mode is inferred from supplied inputs."
+        ),
+    )
 
     # ----- Default flow: from raw FASTQ ------------------------------------
     fastq = parser.add_argument_group("Inputs (from raw FASTQ — default flow)")
@@ -157,6 +281,29 @@ def build_parser() -> argparse.ArgumentParser:
             "Threads passed to cutadapt and bowtie2. Separate from "
             "--threads (which caps BLAS / pyDESeq2 thread pools)."
         ),
+    )
+    fastq.add_argument(
+        "--recount-ribo-fastq",
+        dest="recount_ribo_fastq",
+        action="store_true",
+        default=False,
+        help=(
+            "When 'mitoribopy all' has just produced rpf_counts.tsv from "
+            "the rpf stage, the rnaseq from-FASTQ flow defaults to "
+            "REUSING those counts instead of re-aligning the Ribo FASTQs "
+            "(rpf already did the work; re-running cutadapt + bowtie2 + "
+            "counting is duplicate effort and a source of subtle "
+            "inconsistencies between the two stages' counts). Pass "
+            "--recount-ribo-fastq to force a second pass over the Ribo "
+            "FASTQs from inside the rnaseq stage."
+        ),
+    )
+    fastq.add_argument(
+        "--upstream-rpf-counts",
+        dest="upstream_rpf_counts",
+        default=None,
+        metavar="PATH",
+        help=argparse.SUPPRESS,  # internal; set by `mitoribopy all` orchestrator
     )
     fastq.add_argument(
         "--allow-pseudo-replicates-for-demo-not-publication",
@@ -395,8 +542,11 @@ def _load_condition_map(path: Path | None) -> dict[str, str]:
 
 
 def _write_te_table(rows: Iterable[TeRow], path: Path) -> None:
+    from ..io.schema_versions import schema_header_line
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
+        handle.write(schema_header_line("te.tsv"))
         handle.write("sample\tgene\trpf_count\tmrna_abundance\tte\n")
         for row in rows:
             handle.write(
@@ -406,8 +556,11 @@ def _write_te_table(rows: Iterable[TeRow], path: Path) -> None:
 
 
 def _write_delta_te_table(rows: Iterable[DTeRow], path: Path) -> None:
+    from ..io.schema_versions import schema_header_line
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
+        handle.write(schema_header_line("delta_te.tsv"))
         handle.write("gene\tmrna_log2fc\trpf_log2fc\tdelta_te_log2\tpadj\tnote\n")
         for row in rows:
             handle.write(
@@ -550,6 +703,58 @@ def _provenance_entry(result) -> dict:
     }
 
 
+def _synth_ribo_results_from_upstream_counts(
+    counts_path: Path,
+) -> "list":
+    """Synthesise per-sample Ribo `SampleAlignmentResult`s from rpf counts.
+
+    When `mitoribopy all` has already produced `rpf_counts.tsv`, the
+    rnaseq stage can build a counts matrix without re-aligning the
+    Ribo FASTQs. The synthesised results carry only what the
+    downstream `build_sample_sheet` + `run_deseq2(assay='ribo')` and
+    `_provenance_entry` callers actually read: `sample`, `counts`,
+    `paired`, `total_reads`, `aligned_reads`, `resolved_kit`. The BAM
+    path is a sentinel (no BAM exists for these samples in the rnaseq
+    workdir).
+    """
+    from ..align._types import ResolvedKit
+    from ..rnaseq.alignment import SampleAlignmentResult
+    from ..rnaseq.counts import load_ribo_counts
+
+    # load_ribo_counts returns {gene: {sample: count}}; pivot to
+    # {sample: {gene: count}} so we can build per-sample counts dicts.
+    by_gene = load_ribo_counts(counts_path)
+    by_sample: dict[str, dict[str, int]] = {}
+    for gene, sample_counts in by_gene.items():
+        for sample, n in sample_counts.items():
+            by_sample.setdefault(sample, {})[gene] = int(n)
+
+    sentinel_kit = ResolvedKit(
+        kit="upstream-rpf-counts",
+        adapter=None,
+        umi_length=0,
+        umi_position="5p",
+    )
+    sentinel_bam = Path(str(counts_path))
+
+    results: list = []
+    for sample in sorted(by_sample):
+        per_sample = by_sample[sample]
+        total = sum(per_sample.values())
+        results.append(
+            SampleAlignmentResult(
+                sample=sample,
+                bam_path=sentinel_bam,
+                counts=per_sample,
+                paired=False,
+                total_reads=total,
+                aligned_reads=total,
+                resolved_kit=sentinel_kit,
+            )
+        )
+    return results
+
+
 def _run_from_fastq(args, output_dir: Path) -> int:
     """Trim / align / count / DESeq2 from raw FASTQs.
 
@@ -563,6 +768,12 @@ def _run_from_fastq(args, output_dir: Path) -> int:
     provided; for an RNA-only run it short-circuits after writing
     ``de_table.tsv`` + ``run_settings.json`` and returns ``-1`` to
     signal "stop here".
+
+    Reuse path (P0.2): when ``args.upstream_rpf_counts`` is set
+    (typically by ``mitoribopy all`` after the rpf stage just wrote
+    ``rpf_counts.tsv``) AND ``args.recount_ribo_fastq`` is False, the
+    Ribo side is built from the upstream counts file instead of
+    re-running cutadapt + bowtie2 + counting on the Ribo FASTQs.
     """
     from ..rnaseq.alignment import (
         SampleAlignmentResult,
@@ -585,7 +796,23 @@ def _run_from_fastq(args, output_dir: Path) -> int:
 
     rna_paths = enumerate_fastqs(args.rna_fastq)
     rna_samples = detect_samples(rna_paths)
-    if args.ribo_fastq:
+
+    upstream_rpf_counts = getattr(args, "upstream_rpf_counts", None)
+    recount = bool(getattr(args, "recount_ribo_fastq", False))
+    reuse_upstream_rpf = bool(upstream_rpf_counts) and not recount
+
+    if reuse_upstream_rpf:
+        # The orchestrator (`mitoribopy all`) handed us the rpf stage's
+        # rpf_counts.tsv. Skip Ribo FASTQ enumeration entirely; downstream
+        # we will build a synthetic ribo_results list from the counts
+        # file. The pseudo-replicate logic still runs only on rna_samples.
+        ribo_samples = []
+        sys.stderr.write(
+            "[mitoribopy rnaseq] reusing upstream rpf counts "
+            f"({upstream_rpf_counts}); skipping Ribo-FASTQ re-alignment. "
+            "Pass --recount-ribo-fastq to force a second pass.\n"
+        )
+    elif args.ribo_fastq:
         ribo_paths = enumerate_fastqs(args.ribo_fastq)
         ribo_samples = detect_samples(ribo_paths)
     else:
@@ -679,19 +906,32 @@ def _run_from_fastq(args, output_dir: Path) -> int:
         )
 
     ribo_results: list[SampleAlignmentResult] = []
-    for s in ribo_samples:
-        ribo_results.append(
-            align_sample(
-                s,
-                bt2_index=bt2_index,
-                workdir=workdir / "ribo",
-                threads=args.align_threads,
-            )
+    if reuse_upstream_rpf:
+        # Build a synthetic ribo_results from rpf_counts.tsv. The
+        # second pyDESeq2 fit (assay='ribo') still runs, just on the
+        # rpf-stage counts instead of a fresh re-alignment.
+        ribo_results = _synth_ribo_results_from_upstream_counts(
+            Path(upstream_rpf_counts)
         )
+    else:
+        for s in ribo_samples:
+            ribo_results.append(
+                align_sample(
+                    s,
+                    bt2_index=bt2_index,
+                    workdir=workdir / "ribo",
+                    threads=args.align_threads,
+                )
+            )
 
     if rna_results:
         write_counts_matrix(rna_results, output_dir / "rna_counts.tsv")
-    if ribo_results:
+    if ribo_results and not reuse_upstream_rpf:
+        # In the normal (non-reuse) path we materialise rpf_counts.tsv
+        # under the rnaseq output dir so downstream consumers find it
+        # at a stable location. In the reuse path the upstream file is
+        # already on disk under <run_root>/rpf/rpf_counts.tsv and we
+        # point args.ribo_counts at it directly below.
         write_counts_matrix(ribo_results, output_dir / "rpf_counts_matrix.tsv")
         write_long_counts(ribo_results, output_dir / "rpf_counts.tsv")
 
@@ -744,9 +984,12 @@ def _run_from_fastq(args, output_dir: Path) -> int:
 
     args.de_table = str(de_table_path)
     args.de_format = "deseq2"
-    args.ribo_counts = (
-        str(output_dir / "rpf_counts.tsv") if ribo_results else None
-    )
+    if reuse_upstream_rpf:
+        args.ribo_counts = str(upstream_rpf_counts)
+    elif ribo_results:
+        args.ribo_counts = str(output_dir / "rpf_counts.tsv")
+    else:
+        args.ribo_counts = None
     args._from_fastq = True
     args._reference_checksum = reference_checksum
     args._rpf_de_table_path = (
@@ -754,10 +997,19 @@ def _run_from_fastq(args, output_dir: Path) -> int:
     )
     args._pseudo_replicate_mode = pseudo_replicate_mode
     args._pseudo_replicate_conditions = list(pseudo_conditions) if pseudo_replicate_mode else []
+    if reuse_upstream_rpf:
+        provenance_mode = "from-fastq-rna-with-upstream-rpf-counts"
+    elif ribo_results:
+        provenance_mode = "from-fastq"
+    else:
+        provenance_mode = "from-fastq-rna-only"
     args._fastq_provenance = {
-        "mode": "from-fastq" if ribo_results else "from-fastq-rna-only",
+        "mode": provenance_mode,
         "reference_fasta": str(args.reference_fasta),
         "bowtie2_index": str(bt2_index),
+        "upstream_rpf_counts": (
+            str(upstream_rpf_counts) if reuse_upstream_rpf else None
+        ),
         "rna_samples": [_provenance_entry(r) for r in rna_results],
         "ribo_samples": [_provenance_entry(r) for r in ribo_results],
         "pseudo_replicate_mode": pseudo_replicate_mode,
@@ -771,6 +1023,7 @@ def _run_from_fastq(args, output_dir: Path) -> int:
         slim_settings = {
             "subcommand": "rnaseq",
             "mitoribopy_version": __version__,
+            "rnaseq_mode": getattr(args, "_rnaseq_mode", "from_fastq"),
             "from_fastq": args._fastq_provenance,
             "reference_checksum": reference_checksum,
             "de_table": args.de_table,
@@ -803,23 +1056,37 @@ def _apply_sample_sheet(args) -> int:
     failure, unknown fields). The caller is expected to propagate the
     return code.
     """
-    from ..sample_sheet import SampleSheetError, load_sample_sheet
+    from ..sample_sheet import (
+        SampleSheetError,
+        check_sheet_conflicts,
+        format_sheet_conflict_error,
+        load_sample_sheet,
+    )
 
-    conflicts: list[str] = []
-    if args.rna_fastq:
-        conflicts.append("--rna-fastq")
-    if args.ribo_fastq:
-        conflicts.append("--ribo-fastq")
-    if args.condition_map:
-        conflicts.append("--condition-map")
-    if args.de_table:
-        conflicts.append("--de-table")
-    if conflicts:
+    # Single source of truth: every per-flag input the sheet shadows
+    # gets reported via the shared formatter so the wording matches
+    # what `mitoribopy all` emits for the equivalent YAML conflict.
+    args_as_dict = {
+        "rna_fastq": args.rna_fastq,
+        "ribo_fastq": args.ribo_fastq,
+        "condition_map": args.condition_map,
+        "de_table": args.de_table,
+        "ribo_dir": getattr(args, "ribo_dir", None),
+        "ribo_counts": getattr(args, "ribo_counts", None),
+    }
+    conflict_keys = check_sheet_conflicts(
+        args_as_dict,
+        conflict_keys=tuple(args_as_dict.keys()),
+    )
+    if conflict_keys:
+        flag_names = [f"--{k.replace('_', '-')}" for k in conflict_keys]
         sys.stderr.write(
-            "[mitoribopy rnaseq] ERROR: --sample-sheet is mutually "
-            "exclusive with " + ", ".join(conflicts) + ". The sample "
-            "sheet already declares the FASTQs and the sample → "
-            "condition mapping; pick one input style.\n"
+            format_sheet_conflict_error(
+                "mitoribopy rnaseq",
+                flag_names,
+                sheet_label="--sample-sheet",
+            )
+            + "\n"
         )
         return 2
 
@@ -938,8 +1205,17 @@ def run(argv: Iterable[str]) -> int:
     # The default flow (from raw FASTQ) is selected unless the user
     # passes --de-table, in which case we run the alternative pre-
     # computed-DE flow. Passing both is a hard error so users do not
-    # accidentally silently shadow one with the other.
-    use_de_table = args.de_table is not None
+    # accidentally silently shadow one with the other. The explicit
+    # --rnaseq-mode flag (when set) overrides inference and is the
+    # documented public contract; inference remains for back-compat.
+    mode, mode_error = _resolve_rnaseq_mode(args)
+    if mode_error is not None:
+        print(f"[mitoribopy rnaseq] ERROR: {mode_error}", file=sys.stderr)
+        return 2
+    args._rnaseq_mode = mode
+    use_de_table = mode == "de_table"
+    if mode == "from_fastq":
+        _emit_exploratory_mode_banner()
     if args.dry_run:
         base = args.condition_a or "<--base-sample>"
         compare = args.condition_b or "<--compare-sample>"
@@ -1251,6 +1527,7 @@ def run(argv: Iterable[str]) -> int:
     settings = {
         "subcommand": "rnaseq",
         "mitoribopy_version": __version__,
+        "rnaseq_mode": getattr(args, "_rnaseq_mode", None),
         "de_table": str(args.de_table),
         "rpf_de_table": getattr(args, "_rpf_de_table_path", None),
         "de_format_resolved": de_table.format,

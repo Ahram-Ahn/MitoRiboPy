@@ -8,7 +8,7 @@ Mitochondrial ribosome profiling (mt-Ribo-seq) analysis, end to end.
 
 MitoRiboPy is a Python package + CLI for analysing mt-Ribo-seq data from raw FASTQ all the way through translation-efficiency integration with paired RNA-seq. Every per-sample decision (kit, dedup, offsets) is independent, so mixed-library batches just work.
 
-The package is built around four subcommands:
+The package is built around four pipeline subcommands plus four utility subcommands:
 
 | Subcommand | What it does |
 |---|---|
@@ -16,6 +16,29 @@ The package is built around four subcommands:
 | `mitoribopy rpf` | BED/BAM → offsets, translation profile, codon usage, coverage plots |
 | `mitoribopy rnaseq` | Translation efficiency from paired RNA-seq + Ribo-seq. **Default flow:** pass `--rna-fastq` + `--ribo-fastq` + `--reference-fasta` and the subcommand runs trimming → bowtie2 → counting → pyDESeq2 → TE / ΔTE / plots end-to-end (requires the `[fastq]` extra: `pip install 'mitoribopy[fastq]'`). **Alternative:** pass `--de-table` from an external DESeq2 / Xtail / Anota2Seq run + a prior rpf run; this path is mutually exclusive with `--rna-fastq` and enforces a SHA256 reference-consistency gate. |
 | `mitoribopy all` | End-to-end orchestrator that runs align + rpf + (optional) rnaseq from one YAML config and writes a composed `run_manifest.json` |
+| `mitoribopy validate-config` | Pre-flight check: parse + canonicalise legacy keys + check paths + validate `rnaseq.mode` against supplied inputs. Exit 0 / 2. Use before launching long-running cluster jobs. |
+| `mitoribopy migrate-config` | Rewrite legacy YAML keys to canonical names (e.g. `merge_density:` → `codon_density_window:`, `strain: h` → `strain: h.sapiens`). Pipe stdout to a new file or pass `--in-place`. |
+| `mitoribopy summarize` | Regenerate `SUMMARY.md` and `summary_qc.tsv` from a finished run by reading `run_manifest.json` and per-stage outputs. Auto-invoked by `mitoribopy all` after every run. |
+| `mitoribopy benchmark` | Time + RSS + disk-measure a `mitoribopy all` invocation. `--subsample N` reservoir-samples each FASTQ for fast tuning runs; outputs `benchmark.tsv` + `benchmark_summary.md`. |
+
+### Which command should I use?
+
+| Situation | Command |
+|---|---|
+| I have raw mt-Ribo-seq FASTQ and want everything | `mitoribopy all --config pipeline_config.yaml --output results/` |
+| I only want adapter trimming + alignment | `mitoribopy align --config align_config.yaml ...` |
+| I already have BED / BAM files | `mitoribopy rpf --config rpf_config.yaml ...` |
+| I have full-transcriptome RNA-seq DE results + RPF counts (publication route) | `mitoribopy rnaseq --rnaseq-mode de_table --de-table de.tsv --ribo-dir runs/full/rpf` |
+| I want a quick exploratory mt-only RNA/Ribo TE run | `mitoribopy rnaseq --rnaseq-mode from_fastq --rna-fastq rna/ --ribo-fastq ribo/` |
+| I have a non-human / non-yeast organism | `mitoribopy rpf --strain custom --annotation_file ... --codon_tables_file ...` |
+| I want to check my config without running anything | `mitoribopy validate-config pipeline_config.yaml` |
+| I want to inspect what `all` would actually do | `mitoribopy all --print-canonical-config --config ... --output ...` |
+| I want to estimate cluster time / memory / disk | `mitoribopy benchmark --config ... --output bench/ --subsample 200000` |
+| My config uses old key names (e.g. `merge_density:`, `strain: h`) | `mitoribopy migrate-config old.yaml > new.yaml` |
+| I want to (re-)render the summary of an old run | `mitoribopy summarize runs/full/` |
+| I want to safely resume a partially completed run | `mitoribopy all --config ... --output runs/full/ --resume` |
+
+The `mitoribopy all --resume` skip is **hash-validated** against the prior run's `run_manifest.json`: edits to the config / sample sheet / reference FASTA cause the affected stage(s) to re-run rather than silently re-using stale outputs. Pass `--force-resume` (or set `MITORIBOPY_FORCE_RESUME=1`) to bypass the guard for known-safe edits.
 
 ---
 

@@ -19,12 +19,14 @@
 #
 # Note: for the end-to-end orchestrator (`mitoribopy all --config ...`)
 # you want pipeline_config.example.yaml instead, which uses the
-# three-section align: / rpf: / rnaseq: shape.
+# three-section align: / rpf: / rnaseq: shape AND a unified
+# `samples:` block as the recommended single source of truth for
+# multi-stage runs.
 
 # --- Inputs / outputs --------------------------------------------------
 # These are usually passed on the command line because they vary per
 # run; uncomment if you want them pinned in the config.
-# fastq_dir: input_data/seq            # directory of FASTQ files
+# fastq_dir: input_data/seq            # legacy alias for the directory form of `fastq:`
 # fastq:                               # OR a list of explicit paths
 #   - input_data/seq/sampleA.fq.gz
 #   - input_data/seq/sampleB.fq.gz

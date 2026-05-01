@@ -97,7 +97,10 @@ def test_write_counts_matrix_zero_fills(tmp_path: Path) -> None:
     out = tmp_path / "wide.tsv"
     write_counts_matrix([a, b], out)
 
-    rows = out.read_text().splitlines()
+    raw = out.read_text().splitlines()
+    # P1.12: schema-version comment line precedes the column header.
+    assert raw[0].startswith("# schema_version:")
+    rows = [r for r in raw if not r.startswith("#")]
     assert rows[0] == "gene\tA\tB"
     body = {r.split("\t")[0]: r.split("\t")[1:] for r in rows[1:]}
     assert body["g1"] == ["5", "0"]

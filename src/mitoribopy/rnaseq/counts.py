@@ -28,7 +28,10 @@ def load_ribo_counts(path: Path) -> dict[str, dict[str, int]]:
 
     counts: dict[str, dict[str, int]] = {}
     with path.open("r", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
+        # P1.12: rpf_counts.tsv may carry a leading `# schema_version: X.Y`
+        # line; strip every comment-prefixed line before csv parsing.
+        non_comment = (line for line in handle if not line.startswith("#"))
+        reader = csv.DictReader(non_comment, delimiter="\t")
         missing = [col for col in ("sample", "gene", "count") if col not in (reader.fieldnames or [])]
         if missing:
             raise ValueError(

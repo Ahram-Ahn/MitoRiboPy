@@ -68,10 +68,17 @@ class SampleResolution:
     detection_match_rate: float
     detection_ambiguous: bool
     source: str  # "detected", "user_fallback", "explicit_off", "explicit_strict"
+    # P1.11: provenance tag for the resolved UMI length. One of:
+    # "declared"       – sample-sheet row supplied umi_length explicitly
+    # "preset_default" – kit preset's umi_length was used
+    # "inferred"       – entropy detector landed the value (rnaseq path)
+    # "none"           – umi_length resolved to 0 (no UMI in the library)
+    umi_source: str = "preset_default"
 
 
 # The column order is what gets written to ``kit_resolution.tsv``. Keep
 # it stable so downstream tooling can rely on positional access.
+# Bump OUTPUT_SCHEMA_VERSIONS["kit_resolution.tsv"] when changing this.
 _KIT_RESOLUTION_COLUMNS: tuple[str, ...] = (
     "sample",
     "fastq",
@@ -84,7 +91,36 @@ _KIT_RESOLUTION_COLUMNS: tuple[str, ...] = (
     "detection_match_rate",
     "detection_ambiguous",
     "source",
+    "umi_source",  # P1.11
 )
+
+
+def _classify_umi_source(
+    *,
+    user_supplied_umi_length: int | None,
+    override_supplied_umi_length: int | None,
+    resolved_umi_length: int,
+) -> str:
+    """Classify how the resolved UMI length was decided.
+
+    P1.11: this label rides into ``kit_resolution.tsv`` so a reviewer
+    can see at a glance whether each sample's UMI handling came from a
+    declaration in the sample sheet, a kit preset's default, an
+    inferred (entropy-based) value, or no UMI at all.
+
+    The align stage today never *infers* UMIs (only the rnaseq from-
+    FASTQ path does, via ``mitoribopy.rnaseq.umi_detect``); the
+    ``"inferred"`` value is reserved for that path and surfaced via
+    the same column on aggregated outputs.
+    """
+    if resolved_umi_length == 0:
+        return "none"
+    if (
+        override_supplied_umi_length is not None
+        or user_supplied_umi_length is not None
+    ):
+        return "declared"
+    return "preset_default"
 
 
 def _label_source(base_source: str, override_applied: bool) -> str:
@@ -136,6 +172,11 @@ def _resolve_one(
     :class:`SampleResolution` (set to ``per_sample_override``).
     """
     override_applied = False
+    # Capture the user-supplied umi_length BEFORE the override merge so
+    # _classify_umi_source can tell "declared by sample sheet override"
+    # apart from "inherited from the kit preset's default".
+    user_umi_length_before_override = umi_length
+    override_umi_length: int | None = None
     if override is not None:
         if override.kit_preset is not None:
             kit_preset = resolve_kit_alias(override.kit_preset)
@@ -145,6 +186,7 @@ def _resolve_one(
             override_applied = True
         if override.umi_length is not None:
             umi_length = override.umi_length
+            override_umi_length = override.umi_length
             override_applied = True
         if override.umi_position is not None:
             umi_position = override.umi_position
@@ -180,6 +222,11 @@ def _resolve_one(
             detection_match_rate=0.0,
             detection_ambiguous=False,
             source=_label_source("explicit_off", override_applied),
+            umi_source=_classify_umi_source(
+                user_supplied_umi_length=user_umi_length_before_override,
+                override_supplied_umi_length=override_umi_length,
+                resolved_umi_length=kit.umi_length,
+            ),
         )
 
     # auto / strict modes: scan the FASTQ.
@@ -217,6 +264,11 @@ def _resolve_one(
             detection_match_rate=0.0,
             detection_ambiguous=False,
             source=_label_source("user_fallback", override_applied),
+            umi_source=_classify_umi_source(
+                user_supplied_umi_length=user_umi_length_before_override,
+                override_supplied_umi_length=override_umi_length,
+                resolved_umi_length=kit.umi_length,
+            ),
         )
 
     detected = detection.preset_name
@@ -287,6 +339,11 @@ def _resolve_one(
         detection_match_rate=detection.match_rate,
         detection_ambiguous=detection.ambiguous,
         source=_label_source(source, override_applied),
+        umi_source=_classify_umi_source(
+            user_supplied_umi_length=user_umi_length_before_override,
+            override_supplied_umi_length=override_umi_length,
+            resolved_umi_length=kit.umi_length,
+        ),
     )
 
 
@@ -535,9 +592,12 @@ def write_kit_resolution_tsv(
     The file is the spine the README troubleshooting section points to
     when explaining why a particular sample picked the kit it did.
     """
+    from ..io.schema_versions import schema_header_line
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
+        handle.write(schema_header_line("kit_resolution.tsv"))
         handle.write("\t".join(_KIT_RESOLUTION_COLUMNS) + "\n")
         for resolution in resolutions:
             row = {
@@ -552,6 +612,7 @@ def write_kit_resolution_tsv(
                 "detection_match_rate": f"{resolution.detection_match_rate:.4f}",
                 "detection_ambiguous": "true" if resolution.detection_ambiguous else "false",
                 "source": resolution.source,
+                "umi_source": getattr(resolution, "umi_source", "preset_default"),
             }
             handle.write(
                 "\t".join(str(row[col]) for col in _KIT_RESOLUTION_COLUMNS) + "\n"

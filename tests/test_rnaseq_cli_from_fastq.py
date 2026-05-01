@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mitoribopy import cli
 
 
@@ -352,8 +354,49 @@ def test_sample_sheet_rejects_combination_with_per_flag_inputs(
     ])
     assert exit_code == 2
     err = capsys.readouterr().err
-    assert "mutually exclusive" in err
+    # Shared formatter wording (mitoribopy.sample_sheet.format_sheet_conflict_error):
+    assert "--sample-sheet" in err
+    assert "supersedes" in err
     assert "--rna-fastq" in err
+
+
+@pytest.mark.parametrize(
+    "extra_flags,expected_flag",
+    [
+        (["--ribo-fastq", "ribo.fq.gz"], "--ribo-fastq"),
+        (["--condition-map", "cmap.tsv"], "--condition-map"),
+        (["--de-table", "de.tsv"], "--de-table"),
+        (["--ribo-dir", "rpf/"], "--ribo-dir"),
+        (["--ribo-counts", "rpf/rpf_counts.tsv"], "--ribo-counts"),
+    ],
+)
+def test_sample_sheet_rejects_each_per_flag_input(
+    tmp_path: Path, capsys, extra_flags: list[str], expected_flag: str
+) -> None:
+    """Every per-flag input that the sheet supersedes must trigger the
+    shared conflict guard with the offending flag named in stderr."""
+    sheet = _write_sheet(
+        tmp_path / "samples.tsv",
+        "sample_id\tassay\tcondition\tfastq_1\n"
+        "WT_R1\trna\tWT\trna1.fq.gz\n"
+        "KO_R1\trna\tKO\trna2.fq.gz\n",
+    )
+    exit_code = cli.main(
+        [
+            "rnaseq",
+            "--sample-sheet", str(sheet),
+            "--reference-fasta", "ref.fa",
+            "--gene-id-convention", "bare",
+            "--output", str(tmp_path / "out"),
+            "--condition-a", "WT",
+            "--condition-b", "KO",
+            *extra_flags,
+        ]
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert expected_flag in err
+    assert "supersedes" in err
 
 
 def test_sample_sheet_derives_rna_ribo_fastq_and_condition_map(

@@ -133,15 +133,20 @@ def test_rnaseq_end_to_end_produces_te_and_delta_te(tmp_path) -> None:
     assert (out_dir / "plots" / "delta_te_volcano.png").is_file()
     assert (out_dir / "run_settings.json").is_file()
 
-    # TE table has a row per (sample, gene) present in both counts and DE
-    te_lines = (out_dir / "te.tsv").read_text().splitlines()
+    # TE table has a row per (sample, gene) present in both counts and DE.
+    # P1.12: a `# schema_version: X.Y` comment line precedes the column header.
+    raw_te = (out_dir / "te.tsv").read_text().splitlines()
+    assert raw_te[0].startswith("# schema_version:")
+    te_lines = [line for line in raw_te if not line.startswith("#")]
     assert te_lines[0].split("\t") == [
         "sample", "gene", "rpf_count", "mrna_abundance", "te"
     ]
     assert len(te_lines) - 1 >= 6  # 4 ND1 rows + 2 CO1 rows
 
     # delta_te table has per-gene rows with replicate-based RPF log2FC
-    dte_lines = (out_dir / "delta_te.tsv").read_text().splitlines()
+    raw_dte = (out_dir / "delta_te.tsv").read_text().splitlines()
+    assert raw_dte[0].startswith("# schema_version:")
+    dte_lines = [line for line in raw_dte if not line.startswith("#")]
     header = dte_lines[0].split("\t")
     nd1_row = [l.split("\t") for l in dte_lines[1:] if l.startswith("MT-ND1")][0]
     nd1 = dict(zip(header, nd1_row))

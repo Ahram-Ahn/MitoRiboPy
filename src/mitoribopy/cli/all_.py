@@ -39,13 +39,18 @@ from typing import Iterable
 from .. import __version__
 from ..cli.common import load_config_file
 from . import common
+from ._resume_guard import (
+    force_resume_requested,
+    load_prior_manifest,
+    validate_resume,
+)
 
 
 # Bumped whenever the run_manifest.json layout changes in a way that
 # breaks downstream consumers (added fields are minor; renamed or
 # removed fields are major). Read it from your own scripts to gate on a
 # compatible manifest shape.
-MANIFEST_SCHEMA_VERSION = "1.0.0"
+MANIFEST_SCHEMA_VERSION = "1.1.0"  # 1.1: + output_schemas, + warnings (real)
 
 
 ALL_SUBCOMMAND_HELP = (
@@ -100,7 +105,24 @@ def build_parser() -> argparse.ArgumentParser:
             "Skip stages whose expected output already exists: align "
             "is skipped when <output>/align/read_counts.tsv is present; "
             "rpf when <output>/rpf/rpf_counts.tsv is present; rnaseq "
-            "when <output>/rnaseq/delta_te.tsv is present."
+            "when <output>/rnaseq/delta_te.tsv is present. The skip "
+            "decision is gated by a hash check against the prior "
+            "run_manifest.json (config_source_sha256, sample_sheet_sha256, "
+            "reference_checksum, mitoribopy_version, schema_version); "
+            "edits to any of those fields force the affected stage(s) "
+            "to re-run unless --force-resume is also set."
+        ),
+    )
+    parser.add_argument(
+        "--force-resume",
+        action="store_true",
+        default=False,
+        help=(
+            "Like --resume, but bypass the hash guard. Use only when "
+            "you know the stage outputs are still valid for the new "
+            "config (e.g. you edited a comment-only line). Also "
+            "honoured via the MITORIBOPY_FORCE_RESUME=1 environment "
+            "variable for CI scripts that cannot easily change argv."
         ),
     )
     parser.add_argument(
@@ -392,7 +414,12 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
         )
         return 2
 
-    from ..sample_sheet import SampleSheetError, load_sample_sheet
+    from ..sample_sheet import (
+        SampleSheetError,
+        check_sheet_conflicts,
+        format_sheet_conflict_error,
+        load_sample_sheet,
+    )
 
     try:
         sheet = load_sample_sheet(sheet_path)
@@ -413,21 +440,18 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
     # places.
     ribo_rows = sheet.by_assay("ribo")
     if ribo_rows:
-        if align_cfg.get("fastq") or align_cfg.get("fastq_dir"):
+        align_conflicts = check_sheet_conflicts(
+            align_cfg,
+            conflict_keys=(
+                "fastq", "fastq_dir", "samples", "sample_overrides",
+            ),
+        )
+        if align_conflicts:
             print(
-                "[mitoribopy all] ERROR: top-level 'samples:' is set, "
-                "but 'align.fastq' / 'align.fastq_dir' is also declared. "
-                "Drop one — either let the sample sheet drive align "
-                "inputs, or remove the 'samples:' block.",
-                file=sys.stderr,
-            )
-            return 2
-        if align_cfg.get("samples") or align_cfg.get("sample_overrides"):
-            print(
-                "[mitoribopy all] ERROR: top-level 'samples:' is set, "
-                "but 'align.samples' / 'align.sample_overrides' is also "
-                "declared. The unified sheet supersedes per-stage "
-                "overrides; drop one.",
+                format_sheet_conflict_error(
+                    "mitoribopy all/align",
+                    [f"align.{k}" for k in align_conflicts],
+                ),
                 file=sys.stderr,
             )
             return 2
@@ -465,19 +489,19 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
     # rejects mixing the sheet with --rna-fastq / --condition-map / etc.
     # We just hand the path through.
     if rnaseq_explicit:
-        rnaseq_conflicts = [
-            key for key in (
+        rnaseq_conflicts = check_sheet_conflicts(
+            rnaseq_cfg,
+            conflict_keys=(
                 "rna_fastq", "rna-fastq", "ribo_fastq", "ribo-fastq",
                 "condition_map", "condition-map",
-            )
-            if rnaseq_cfg.get(key)
-        ]
+            ),
+        )
         if rnaseq_conflicts and rnaseq_cfg.get("sample_sheet") is None:
             print(
-                "[mitoribopy all] ERROR: top-level 'samples:' is set, but "
-                "'rnaseq' section also declares "
-                + ", ".join(repr(c) for c in rnaseq_conflicts)
-                + ". The unified sheet supersedes per-stage inputs; drop one.",
+                format_sheet_conflict_error(
+                    "mitoribopy all/rnaseq",
+                    [f"rnaseq.{k}" for k in rnaseq_conflicts],
+                ),
                 file=sys.stderr,
             )
             return 2
@@ -497,6 +521,21 @@ _CONFIG_TEMPLATE = """\
 #
 # Use 'mitoribopy all --show-stage-help {align,rpf,rnaseq}' for the
 # full flag list with defaults.
+
+# ---- samples (RECOMMENDED — single source of truth) -----------------------
+# A unified per-project TSV declaring every sample's identity, assay,
+# condition, FASTQ paths, and (optionally) per-sample kit / UMI /
+# strandedness overrides. When this is set, you should NOT also set
+# 'align.fastq' / 'align.fastq_dir' / 'align.samples' /
+# 'rnaseq.rna_fastq' / 'rnaseq.condition_map' — the sheet supersedes
+# those per-stage inputs and a conflict is a hard error.
+#
+# Required columns: sample_id, assay (ribo|rna), condition, fastq_1
+# Optional columns: replicate, fastq_2, kit_preset, adapter, umi_length,
+#                   umi_position, strandedness, dedup_strategy, exclude, notes
+#
+# samples:
+#   table: samples.tsv
 
 # ---- align -----------------------------------------------------------------
 align:
@@ -528,9 +567,12 @@ align:
                                           #   behaviour when detection fails
 
   # Inputs / reference indexes (bowtie2 prefixes built by bowtie2-build).
+  # NOTE: when the top-level `samples:` block is set, `fastq:` and
+  # `fastq_dir:` MUST be unset — the sheet declares per-sample FASTQs.
+  # The keys below are for legacy / standalone runs without a sheet.
   # `fastq` accepts either a directory string OR an explicit list of paths.
   # Picked up patterns: *.fq, *.fq.gz, *.fastq, *.fastq.gz.
-  fastq: input_data/              # directory shortcut (recommended)
+  fastq: input_data/              # legacy: only when not using top-level samples:
   # fastq:                        # OR list of explicit paths:
   #   - /path/to/sample_A.fq.gz
   #   - /path/to/sample_B.fq.gz
@@ -554,10 +596,13 @@ align:
   # all samples and remain serial there.
   # max_parallel_samples: 1
 
-  # Per-sample overrides (mixed-UMI batches). Use this when each FASTQ
-  # has a different UMI length / position / kit. The 'name' field must
-  # match the FASTQ basename with .fq[.gz] / .fastq[.gz] stripped.
-  # Any unset override field falls through to the globals above.
+  # Per-sample overrides (mixed-UMI batches). Use this ONLY when not
+  # using the top-level `samples:` block; the unified sheet's
+  # umi_length / umi_position / kit_preset / dedup_strategy columns
+  # are the recommended way to declare per-sample overrides.
+  # The 'name' field must match the FASTQ basename with .fq[.gz] /
+  # .fastq[.gz] stripped. Any unset override field falls through to
+  # the globals above.
   # samples:
   #   - name: sampleA
   #     kit_preset: illumina_truseq_umi
@@ -630,8 +675,28 @@ rpf:
 # Uncomment ONE of the two mutually exclusive flows below to enable the
 # translation-efficiency stage. Both produce te.tsv, delta_te.tsv, and plots.
 #
-# Default flow: from raw FASTQ (rna_fastq + reference_fasta).
+# `rnaseq_mode` (RECOMMENDED): set explicitly to one of:
+#   de_table   PUBLICATION: external DE table + prior rpf run.
+#   from_fastq EXPLORATORY: in-tree pyDESeq2 on the mt-mRNA subset only.
+#   none       stage section present but inert (no inputs).
+# When omitted, the mode is inferred from supplied inputs.
+#
+# Publication-grade flow (mode=de_table): bring your own DE table.
 # rnaseq:
+#   rnaseq_mode: de_table
+#   de_table: /path/to/de_table.tsv
+#   gene_id_convention: hgnc
+#   reference_gtf: /path/to/reference.fa       # must match align's --mt-index source
+#   condition_map: /path/to/conditions.tsv
+#   condition_a: control
+#   condition_b: knockdown
+#
+# Exploratory flow (mode=from_fastq): from raw FASTQ (rna_fastq + reference_fasta).
+# Recommended only for tutorials / smoke tests; for publication-grade DE,
+# run DESeq2 / Xtail / Anota2Seq externally on the full transcriptome and
+# come back via mode=de_table above.
+# rnaseq:
+#   rnaseq_mode: from_fastq
 #   rna_fastq: /path/to/rnaseq/                # dir or list of FASTQs
 #   ribo_fastq: /path/to/riboseq/              # optional; reuses align/ when omitted
 #   reference_fasta: /path/to/transcriptome.fa # auto-wired from rpf.fasta if unset
@@ -639,15 +704,6 @@ rpf:
 #   condition_a: control
 #   condition_b: knockdown
 #   gene_id_convention: hgnc                   # hgnc | ensembl | refseq | bare
-#
-# Alternative flow: bring your own DE table.
-# rnaseq:
-#   de_table: /path/to/de_table.tsv
-#   gene_id_convention: hgnc
-#   reference_gtf: /path/to/reference.fa       # must match align's --mt-index source
-#   condition_map: /path/to/conditions.tsv
-#   condition_a: control
-#   condition_b: knockdown
 """
 
 
@@ -831,6 +887,13 @@ def _write_manifest(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    from ..io.schema_versions import OUTPUT_SCHEMA_VERSIONS
+    from ..io.warnings_log import collected as _collected_warnings
+    from ..io.warnings_log import flush_tsv as _flush_warnings_tsv
+
+    structured_warnings = [w.as_dict() for w in _collected_warnings()]
+    _flush_warnings_tsv(output_dir / "warnings.tsv")
+
     manifest: dict = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "subcommand": "all",
@@ -853,7 +916,14 @@ def _write_manifest(
         "rpf": rpf_settings,
         "rnaseq": rnaseq_settings,
         "tools": _lift_tool_versions(align_settings, rpf_settings, rnaseq_settings),
-        "warnings": [],
+        # P1.12: schema versions for every advertised output TSV. A
+        # downstream script can `jq .output_schemas.te_tsv` and gate on
+        # a compatible major version.
+        "output_schemas": dict(OUTPUT_SCHEMA_VERSIONS),
+        # P1.11: structured warnings collected by mitoribopy.io.warnings_log
+        # during the run; mirrored to <output>/warnings.tsv for diff-friendly
+        # consumption.
+        "warnings": structured_warnings,
     }
 
     # Promote rpf's reference_checksum so future rnaseq invocations
@@ -872,6 +942,76 @@ def _write_manifest(
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
+
+
+def _resolve_rnaseq_mode_from_config(rnaseq_section: dict) -> tuple[str, str | None]:
+    """Resolve the rnaseq stage mode from a YAML rnaseq section.
+
+    Mirrors :func:`mitoribopy.cli.rnaseq._resolve_rnaseq_mode` but
+    operates on a config dict instead of an argparse Namespace, so the
+    orchestrator can resolve the mode BEFORE dispatching to the rnaseq
+    subcommand.
+
+    Returns ``(mode, error_message)``; the caller exits 2 when
+    ``error_message`` is set.
+    """
+    from .rnaseq import RNASEQ_MODES, _normalize_mode
+
+    requested = _normalize_mode(
+        rnaseq_section.get("rnaseq_mode")
+        or rnaseq_section.get("rnaseq-mode")
+        or rnaseq_section.get("mode")
+    )
+    has_de_table = bool(
+        rnaseq_section.get("de_table") or rnaseq_section.get("de-table")
+    )
+    has_fastq_inputs = bool(
+        rnaseq_section.get("rna_fastq")
+        or rnaseq_section.get("rna-fastq")
+        or rnaseq_section.get("sample_sheet")
+        or rnaseq_section.get("sample-sheet")
+    )
+    inferred = (
+        "de_table" if has_de_table
+        else "from_fastq" if has_fastq_inputs
+        else "none"
+    )
+
+    if requested is None:
+        # Ambiguous: user supplied inputs for BOTH flows without picking
+        # one. Fail loudly with the historical "mutually exclusive"
+        # phrasing so existing scripts that grep for that string keep
+        # working.
+        if has_de_table and has_fastq_inputs:
+            return inferred, (
+                "rnaseq section has both 'de_table' and 'rna_fastq' / "
+                "'sample_sheet'; the two flows are mutually exclusive. "
+                "Drop one, or set rnaseq.mode={de_table|from_fastq} to "
+                "disambiguate."
+            )
+        return inferred, None
+    if requested not in RNASEQ_MODES:
+        return inferred, (
+            f"rnaseq.mode={requested!r} is not a valid mode; "
+            f"choose one of {list(RNASEQ_MODES)}."
+        )
+    if requested == "de_table" and has_fastq_inputs:
+        return requested, (
+            "rnaseq.mode=de_table conflicts with rna_fastq / sample_sheet "
+            "inputs; drop the FASTQ inputs or switch to mode=from_fastq."
+        )
+    if requested == "from_fastq" and has_de_table:
+        return requested, (
+            "rnaseq.mode=from_fastq conflicts with de_table input; drop "
+            "de_table or switch to mode=de_table."
+        )
+    if requested == "de_table" and not has_de_table:
+        return requested, "rnaseq.mode=de_table requires de_table: <path>."
+    if requested == "from_fastq" and not has_fastq_inputs:
+        return requested, (
+            "rnaseq.mode=from_fastq requires either rna_fastq or sample_sheet."
+        )
+    return requested, None
 
 
 def _auto_wire_paths(
@@ -928,6 +1068,23 @@ def _auto_wire_paths(
             rpf_fasta = config.get("rpf", {}).get("fasta") if has_rpf else None
             if rpf_fasta and not user_reference:
                 rnaseq_cfg["reference_fasta"] = rpf_fasta
+            # P0.2: when rpf will run as part of this `all` invocation,
+            # default the rnaseq from-FASTQ stage to REUSE the rpf
+            # stage's rpf_counts.tsv instead of independently re-aligning
+            # the Ribo FASTQs. Users override by setting
+            # `rnaseq.recount_ribo_fastq: true` in the config or by
+            # passing --recount-ribo-fastq at the rnaseq subcommand
+            # level. The wiring is a no-op when the user explicitly
+            # set --recount-ribo-fastq to True.
+            recount = bool(
+                rnaseq_cfg.get("recount_ribo_fastq")
+                or rnaseq_cfg.get("recount-ribo-fastq")
+            )
+            if has_rpf and not recount:
+                rnaseq_cfg.setdefault(
+                    "upstream_rpf_counts",
+                    str(run_root / "rpf" / "rpf_counts.tsv"),
+                )
 
 
 def _should_skip_align(output: Path) -> bool:
@@ -970,21 +1127,20 @@ def run(argv: Iterable[str]) -> int:
         if rc != 0:
             return rc
         rnaseq_section = cfg.get("rnaseq", {}) or {}
+        rnaseq_mode, mode_err = _resolve_rnaseq_mode_from_config(rnaseq_section)
+        if mode_err is not None:
+            print(f"[mitoribopy all] ERROR: {mode_err}", file=sys.stderr)
+            return 2
+        if cfg.get("rnaseq") is not None:
+            cfg["rnaseq"]["rnaseq_mode"] = rnaseq_mode
         _auto_wire_paths(
             cfg,
             run_root=run_root,
             has_align=bool(cfg.get("align")) and not args.skip_align,
             has_rpf=bool(cfg.get("rpf")) and not args.skip_rpf,
             has_rnaseq=bool(cfg.get("rnaseq")) and not args.skip_rnaseq,
-            has_de_table=bool(
-                rnaseq_section.get("de_table") or rnaseq_section.get("de-table")
-            ),
-            has_fastq_mode=bool(
-                rnaseq_section.get("rna_fastq")
-                or rnaseq_section.get("rna-fastq")
-                or rnaseq_section.get("sample_sheet")
-                or rnaseq_section.get("sample-sheet")
-            ),
+            has_de_table=rnaseq_mode == "de_table",
+            has_fastq_mode=rnaseq_mode == "from_fastq",
         )
         sys.stdout.write(_yaml_dump(cfg))
         return 0
@@ -1049,22 +1205,17 @@ def run(argv: Iterable[str]) -> int:
     has_rpf = bool(config.get("rpf")) and not args.skip_rpf
     has_rnaseq = bool(config.get("rnaseq")) and not args.skip_rnaseq
     rnaseq_section = config.get("rnaseq", {}) if has_rnaseq else {}
-    has_de_table = has_rnaseq and bool(
-        rnaseq_section.get("de_table") or rnaseq_section.get("de-table")
-    )
-    has_fastq_mode = has_rnaseq and bool(
-        rnaseq_section.get("rna_fastq")
-        or rnaseq_section.get("rna-fastq")
-        or rnaseq_section.get("sample_sheet")
-        or rnaseq_section.get("sample-sheet")
-    )
-    if has_de_table and has_fastq_mode:
-        print(
-            "[mitoribopy all] ERROR: rnaseq section has both 'de_table' and "
-            "'rna_fastq'; the two flows are mutually exclusive. Drop one.",
-            file=sys.stderr,
-        )
+    rnaseq_mode, mode_err = _resolve_rnaseq_mode_from_config(rnaseq_section)
+    if mode_err is not None:
+        print(f"[mitoribopy all] ERROR: {mode_err}", file=sys.stderr)
         return 2
+    has_de_table = has_rnaseq and rnaseq_mode == "de_table"
+    has_fastq_mode = has_rnaseq and rnaseq_mode == "from_fastq"
+    # Pin the resolved mode in the config so the downstream rnaseq
+    # subcommand sees an explicit --rnaseq-mode flag and the manifest's
+    # config_canonical blob records the resolved value.
+    if has_rnaseq:
+        config["rnaseq"]["rnaseq_mode"] = rnaseq_mode
 
     _auto_wire_paths(
         config,
@@ -1117,6 +1268,61 @@ def run(argv: Iterable[str]) -> int:
     runtimes: dict[str, float] = {}
     skip_reasons: dict[str, str] = {}
 
+    # Resume hash guard.
+    #
+    # Only consulted when --resume is set. We compare the prior run's
+    # recorded hashes (config_source_sha256, sample_sheet_sha256,
+    # reference_checksum, mitoribopy_version, schema_version) against
+    # the current values; on mismatch we refuse to skip the affected
+    # stages so users do not re-use stale outputs that encode different
+    # decisions. --force-resume bypasses the check, as does the
+    # MITORIBOPY_FORCE_RESUME=1 env var.
+    sample_sheet_for_guard: str | None = None
+    samples_block = config.get("samples")
+    if isinstance(samples_block, str):
+        sample_sheet_for_guard = samples_block
+    elif isinstance(samples_block, dict):
+        sample_sheet_for_guard = samples_block.get("table") or samples_block.get("path")
+    rpf_fasta_for_guard = config.get("rpf", {}).get("fasta") if has_rpf else None
+
+    force_resume = force_resume_requested(cli_flag=args.force_resume)
+    resume_active = args.resume or args.force_resume
+    resume_report = None
+    if resume_active:
+        prior_manifest = load_prior_manifest(run_root, args.manifest)
+        resume_report = validate_resume(
+            prior_manifest=prior_manifest,
+            config_path=args.config,
+            sample_sheet_path=sample_sheet_for_guard,
+            reference_fasta=rpf_fasta_for_guard,
+            mitoribopy_version=__version__,
+            manifest_schema_version=MANIFEST_SCHEMA_VERSION,
+        )
+        if not resume_report.ok and not force_resume:
+            # Hard fail at the orchestrator level: we will not silently
+            # produce a half-fresh, half-stale run. The error names
+            # every field that drifted so the user can fix or override.
+            print(
+                "[mitoribopy all] ERROR: --resume cannot proceed: "
+                + resume_report.render(),
+                file=sys.stderr,
+            )
+            print(
+                "[mitoribopy all] HINT: re-run without --resume to "
+                "produce a fresh result, or pass --force-resume to "
+                "bypass the hash guard (use only when you know the "
+                "stale outputs are still valid).",
+                file=sys.stderr,
+            )
+            return 2
+        if not resume_report.ok and force_resume:
+            sys.stderr.write(
+                "[mitoribopy all] WARNING: --force-resume bypassing "
+                "hash guard despite drift:\n"
+                + resume_report.render()
+                + "\n"
+            )
+
     # Import subcommand entry points here to avoid a circular import at
     # module load time.
     from . import align as align_cli
@@ -1125,12 +1331,12 @@ def run(argv: Iterable[str]) -> int:
 
     # --- align ----------------------------------------------------------
     if has_align:
-        if args.resume and _should_skip_align(run_root):
+        if resume_active and _should_skip_align(run_root):
             stages_skipped.append("align")
             skip_reasons["align"] = "resume: read_counts.tsv already exists"
         else:
             align_cfg = _normalize_align_inputs(config["align"], run_root=run_root)
-            if args.resume:
+            if resume_active:
                 # Propagate the orchestrator's --resume into the align
                 # CLI so it skips per-sample work that already completed
                 # (read_counts.tsv is missing -- we are running the
@@ -1161,7 +1367,7 @@ def run(argv: Iterable[str]) -> int:
 
     # --- rpf ------------------------------------------------------------
     if has_rpf:
-        if args.resume and _should_skip_rpf(run_root):
+        if resume_active and _should_skip_rpf(run_root):
             stages_skipped.append("rpf")
             skip_reasons["rpf"] = "resume: rpf_counts.tsv already exists"
         else:
@@ -1191,7 +1397,7 @@ def run(argv: Iterable[str]) -> int:
     # reference_fasta) or external DE table (de_table). The two are
     # mutually exclusive and validated above.
     if has_rnaseq and (has_de_table or has_fastq_mode):
-        if args.resume and _should_skip_rnaseq(run_root):
+        if resume_active and _should_skip_rnaseq(run_root):
             stages_skipped.append("rnaseq")
             skip_reasons["rnaseq"] = "resume: delta_te.tsv already exists"
         else:
@@ -1244,4 +1450,16 @@ def run(argv: Iterable[str]) -> int:
         runtimes=runtimes,
         skip_reasons=skip_reasons,
     )
+
+    # P1.6 + P1.8: emit SUMMARY.md and summary_qc.tsv automatically so
+    # users always get a one-glance view of the run. Failures here are
+    # non-fatal (the manifest is the source of truth); we only log.
+    try:
+        from . import summarize as _summarize_cli
+
+        _summarize_cli.run([str(run_root), "--manifest", args.manifest])
+    except Exception as exc:  # pragma: no cover - belt-and-braces
+        sys.stderr.write(
+            f"[mitoribopy all] WARNING: SUMMARY.md generation failed: {exc}\n"
+        )
     return 0

@@ -24,8 +24,12 @@ from .. import __version__
 
 from . import align as _align
 from . import all_ as _all
+from . import benchmark as _benchmark
+from . import migrate_config as _migrate_config
 from . import rnaseq as _rnaseq
 from . import rpf as _rpf
+from . import summarize as _summarize
+from . import validate_config as _validate_config
 
 __all__ = ["main", "run_pipeline_cli"]
 
@@ -53,6 +57,10 @@ _SUBCOMMANDS: dict[str, Callable[[Iterable[str]], int]] = {
     "rpf": _rpf.run,
     "rnaseq": _rnaseq.run,
     "all": _all.run,
+    "migrate-config": _migrate_config.run,
+    "validate-config": _validate_config.run,
+    "summarize": _summarize.run,
+    "benchmark": _benchmark.run,
 }
 
 
@@ -61,6 +69,10 @@ _SUBCOMMAND_SUMMARIES: list[tuple[str, str]] = [
     ("rpf", _rpf.RPF_SUBCOMMAND_HELP),
     ("rnaseq", _rnaseq.RNASEQ_SUBCOMMAND_HELP),
     ("all", _all.ALL_SUBCOMMAND_HELP),
+    ("migrate-config", _migrate_config.MIGRATE_CONFIG_HELP),
+    ("validate-config", _validate_config.VALIDATE_CONFIG_HELP),
+    ("summarize", _summarize.SUMMARIZE_SUBCOMMAND_HELP),
+    ("benchmark", _benchmark.BENCHMARK_SUBCOMMAND_HELP),
 ]
 
 
@@ -132,7 +144,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     sys.stderr.write(
         f"mitoribopy: error: unknown subcommand '{first}'. "
-        "Known subcommands: align, rpf, rnaseq, all. "
+        "Known subcommands: " + ", ".join(_SUBCOMMANDS) + ". "
         "Try 'mitoribopy --help'.\n"
     )
     return 2

@@ -17,6 +17,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Iterable
 
+from ..io.schema_versions import schema_header_line
 from ._types import (
     AlignResult,
     ContamResult,
@@ -99,6 +100,7 @@ def write_read_counts_table(
 
     cols = read_counts_columns()
     with output_path.open("w", encoding="utf-8") as handle:
+        handle.write(schema_header_line("read_counts.tsv"))
         handle.write("\t".join(cols) + "\n")
         for row in rows:
             handle.write(format_row(row) + "\n")

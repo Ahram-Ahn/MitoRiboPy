@@ -279,7 +279,10 @@ def test_write_kit_resolution_tsv_writes_header_and_one_row_per_sample(tmp_path)
     )
     out = tmp_path / "kit_resolution.tsv"
     write_kit_resolution_tsv(resolutions, out)
-    lines = out.read_text().splitlines()
+    raw = out.read_text().splitlines()
+    # P1.12: schema-version comment line precedes the column header.
+    assert raw[0].startswith("# schema_version:")
+    lines = [line for line in raw if not line.startswith("#")]
     assert lines[0].startswith("sample\tfastq\tapplied_kit")
     assert "illumina_smallrna" in lines[1]
     assert "skip" in lines[1]

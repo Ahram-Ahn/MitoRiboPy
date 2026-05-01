@@ -9,6 +9,8 @@ import pytest
 from mitoribopy.sample_sheet import (
     SampleSheet,
     SampleSheetError,
+    check_sheet_conflicts,
+    format_sheet_conflict_error,
     load_sample_sheet,
 )
 
@@ -220,6 +222,46 @@ def test_header_only_file_is_an_error(tmp_path: Path) -> None:
     )
     with pytest.raises(SampleSheetError, match="no data rows"):
         load_sample_sheet(sheet)
+
+
+def test_check_sheet_conflicts_returns_truthy_keys() -> None:
+    cfg = {
+        "fastq": ["a.fq.gz"],
+        "fastq_dir": None,
+        "samples": "",
+        "sample_overrides": "overrides.tsv",
+    }
+    conflicts = check_sheet_conflicts(
+        cfg,
+        conflict_keys=("fastq", "fastq_dir", "samples", "sample_overrides"),
+    )
+    assert conflicts == ["fastq", "sample_overrides"]
+
+
+def test_check_sheet_conflicts_empty_dict() -> None:
+    assert check_sheet_conflicts({}, conflict_keys=("a", "b")) == []
+
+
+def test_format_sheet_conflict_error_contains_stage_and_keys() -> None:
+    msg = format_sheet_conflict_error(
+        "mitoribopy all/align", ["align.fastq", "align.fastq_dir"]
+    )
+    assert "mitoribopy all/align" in msg
+    assert "samples:" in msg
+    assert "align.fastq" in msg
+    assert "align.fastq_dir" in msg
+    assert "supersedes" in msg
+
+
+def test_format_sheet_conflict_error_custom_sheet_label() -> None:
+    msg = format_sheet_conflict_error(
+        "mitoribopy rnaseq",
+        ["--rna-fastq", "--de-table"],
+        sheet_label="--sample-sheet",
+    )
+    assert "'--sample-sheet'" in msg
+    assert "--rna-fastq" in msg
+    assert "--de-table" in msg
 
 
 def test_fastq_paths_helper_yields_r1_then_r2(tmp_path: Path) -> None:

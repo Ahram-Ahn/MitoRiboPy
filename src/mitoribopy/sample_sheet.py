@@ -65,8 +65,46 @@ __all__ = [
     "SampleRow",
     "SampleSheet",
     "SampleSheetError",
+    "check_sheet_conflicts",
+    "format_sheet_conflict_error",
     "load_sample_sheet",
 ]
+
+
+def check_sheet_conflicts(
+    stage_cfg: dict,
+    *,
+    conflict_keys: Iterable[str],
+) -> list[str]:
+    """Return the list of conflict_keys present (with truthy values) in stage_cfg.
+
+    Used by the orchestrator and per-stage CLIs to detect when a user
+    declared the unified sample sheet AND a per-stage input that the
+    sheet supersedes (e.g. ``samples:`` + ``align.fastq_dir:``). The
+    caller decides how to format the error.
+    """
+    return [k for k in conflict_keys if stage_cfg.get(k)]
+
+
+def format_sheet_conflict_error(
+    stage_label: str,
+    conflicts: list[str],
+    *,
+    sheet_label: str = "samples:",
+) -> str:
+    """Render a uniform error string for sheet-vs-per-stage conflicts.
+
+    Used by the orchestrator (``mitoribopy all``) and standalone
+    ``mitoribopy rnaseq`` so users see the same wording regardless of
+    entry point.
+    """
+    return (
+        f"[{stage_label}] ERROR: '{sheet_label}' is set, but the following "
+        f"per-stage input(s) are also declared and would be shadowed: "
+        + ", ".join(repr(c) for c in conflicts)
+        + ". The unified sample sheet supersedes per-stage inputs; drop "
+        "either the sheet or the conflicting flag(s)."
+    )
 
 
 Assay = Literal["ribo", "rna"]

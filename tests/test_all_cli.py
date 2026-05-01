@@ -332,7 +332,7 @@ def test_all_runs_align_then_rpf_then_rnaseq(tmp_path, monkeypatch) -> None:
     manifest = json.loads((tmp_path / "results" / "run_manifest.json").read_text())
     assert manifest["subcommand"] == "all"
     # Schema-v1 stages block:
-    assert manifest["schema_version"] == "1.0.0"
+    assert manifest["schema_version"] == "1.1.0"
     assert manifest["stages"]["align"]["status"] == "completed"
     assert manifest["stages"]["rpf"]["status"] == "completed"
     assert manifest["stages"]["rnaseq"]["status"] == "completed"
@@ -609,7 +609,7 @@ def test_manifest_carries_schema_v1_metadata(tmp_path, monkeypatch) -> None:
     assert exit_code == 0
 
     manifest = json.loads((results / "run_manifest.json").read_text())
-    assert manifest["schema_version"] == "1.0.0"
+    assert manifest["schema_version"] == "1.1.0"
     assert manifest["command"].startswith("mitoribopy all --config")
     assert manifest["config_source"] == str(cfg)
     # Hash of the YAML the user wrote (stable for unchanged inputs).

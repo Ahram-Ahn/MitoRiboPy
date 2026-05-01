@@ -217,6 +217,8 @@ def write_counts_matrix(
     path: Path,
 ) -> None:
     """Write a wide gene-by-sample TSV with zero-fill for missing genes."""
+    from ..io.schema_versions import OUTPUT_SCHEMA_VERSIONS, schema_header_line
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -226,7 +228,12 @@ def write_counts_matrix(
         genes.update(r.counts.keys())
     sorted_genes = sorted(genes)
 
+    # Pick the schema version that matches this file's basename when
+    # we know it; the rnaseq from-FASTQ path emits both rna_counts.tsv
+    # and rpf_counts_matrix.tsv with this same writer.
+    name = path.name if path.name in OUTPUT_SCHEMA_VERSIONS else "rna_counts.tsv"
     with path.open("w", encoding="utf-8") as handle:
+        handle.write(schema_header_line(name))
         handle.write("gene\t" + "\t".join(samples) + "\n")
         for gene in sorted_genes:
             row = [gene]
@@ -244,9 +251,12 @@ def write_long_counts(
     Compatible with :func:`mitoribopy.rnaseq.counts.load_ribo_counts` so
     the existing TE / delta-TE path can consume it unchanged.
     """
+    from ..io.schema_versions import schema_header_line
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
+        handle.write(schema_header_line("rpf_counts.tsv"))
         handle.write("sample\tgene\tcount\n")
         for r in results:
             for gene in sorted(r.counts.keys()):
@@ -384,13 +394,23 @@ def align_sample(
     seed: int = 42,
     detect_umis: bool = True,
     runner=subprocess.run,
+    declared_umi_length: int | None = None,
 ) -> SampleAlignmentResult:
     """Trim + align one sample, return counts + provenance.
 
     SE path reuses :func:`mitoribopy.align.trim.run_cutadapt`. PE path
     runs cutadapt + bowtie2 directly with paired flags. PE + UMI raises
     :class:`NotImplementedError`.
+
+    When ``declared_umi_length`` is set (typically from a sample-sheet
+    row), the entropy detector is still consulted but the *resolved*
+    UMI length comes from the declaration. When the entropy detector
+    suggests a UMI but the sample sheet did NOT declare one, a P1.11
+    structured warning is recorded so the user is never surprised by
+    a silent inference.
     """
+    from ..io.warnings_log import record as _record_warning
+
     workdir = Path(workdir)
     sample_dir = workdir / sample.sample
     sample_dir.mkdir(parents=True, exist_ok=True)
@@ -400,9 +420,33 @@ def align_sample(
     # trip the NotImplementedError below for PE reads that just happen
     # to look uniform.
     effective_detect_umis = detect_umis and not sample.paired
-    resolved, _detection, _umi = resolve_sample_kit(
+    resolved, _detection, umi = resolve_sample_kit(
         sample, detect_umis=effective_detect_umis
     )
+
+    # P1.11: warn-on-inferred-no-declaration. The entropy detector
+    # found a UMI but the sample sheet did not declare one. We do NOT
+    # reject the run; the inferred value still drives dedup, but the
+    # user gets a structured warning so they can add explicit metadata
+    # (umi_length / umi_position / dedup_strategy) for reproducibility.
+    if (
+        umi.length > 0
+        and declared_umi_length is None
+        and not sample.paired
+    ):
+        _record_warning(
+            "RNASEQ",
+            (
+                f"sample {sample.sample!r}: UMI length {umi.length} was "
+                "inferred from R1 entropy; the sample sheet did not "
+                "declare umi_length / umi_position. Add the umi_length "
+                "and umi_position columns for this sample in your "
+                "sample sheet to make the run reproducible. The "
+                "inferred value is still applied to this run."
+            ),
+            sample=sample.sample,
+            code="UMI_INFERRED_NO_DECLARATION",
+        )
 
     bam_out = sample_dir / f"{sample.sample}.bam"
 

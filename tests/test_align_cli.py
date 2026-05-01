@@ -442,7 +442,9 @@ def test_end_to_end_orchestration_produces_expected_outputs(
     # Provenance files:
     counts_path = out_dir / "read_counts.tsv"
     assert counts_path.exists()
-    counts_lines = counts_path.read_text().splitlines()
+    raw_counts = counts_path.read_text().splitlines()
+    assert raw_counts[0].startswith("# schema_version:")  # P1.12
+    counts_lines = [line for line in raw_counts if not line.startswith("#")]
     assert counts_lines[0].split("\t")[0] == "sample"
     # Samples sorted by name.
     assert counts_lines[1].split("\t")[0] == "sampleA"
@@ -470,10 +472,13 @@ def test_end_to_end_orchestration_produces_expected_outputs(
     # The per-sample TSV is the human-friendly view of the same data.
     kit_tsv = out_dir / "kit_resolution.tsv"
     assert kit_tsv.exists()
-    header = kit_tsv.read_text().splitlines()[0].split("\t")
+    raw = kit_tsv.read_text().splitlines()
+    assert raw[0].startswith("# schema_version:")  # P1.12
+    header = [line for line in raw if not line.startswith("#")][0].split("\t")
     assert header[0] == "sample"
     assert "applied_kit" in header
     assert "dedup_strategy" in header
+    assert "umi_source" in header  # P1.11
 
 
 def test_end_to_end_uses_explicit_fastq_list(
@@ -623,7 +628,8 @@ def test_align_parallel_completes_all_samples(
         assert (out_dir / "bed" / f"{name}.bed").exists(), f"missing bed/{name}.bed"
         assert (out_dir / "aligned" / f"{name}.mapq.bam").exists()
 
-    counts_lines = (out_dir / "read_counts.tsv").read_text().splitlines()
+    raw_counts = (out_dir / "read_counts.tsv").read_text().splitlines()
+    counts_lines = [line for line in raw_counts if not line.startswith("#")]
     # Header + one row per sample, sorted by sample name.
     assert counts_lines[0].split("\t")[0] == "sample"
     sample_col = [line.split("\t")[0] for line in counts_lines[1:]]
