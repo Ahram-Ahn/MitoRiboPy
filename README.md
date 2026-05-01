@@ -25,7 +25,10 @@ The package is built around four subcommands:
 2. [Pipeline overview](#pipeline-overview)
 3. [Installation](#installation)
 4. [Quick start](#quick-start)
-5. [Input files](#input-files)
+5. [Inputs you need to prepare](#inputs-you-need-to-prepare)
+   - [What each module requires](#what-each-module-requires)
+   - [Sample sheet (unified per-project TSV)](#sample-sheet-unified-per-project-tsv)
+   - [Input files (file-by-file reference)](#input-files-file-by-file-reference)
 6. [How to run — YAML vs shell wrapper](#how-to-run--yaml-vs-shell-wrapper)
 7. [Strain presets and footprint classes](#strain-presets-and-footprint-classes)
 8. [Subcommand reference](#subcommand-reference)
@@ -217,7 +220,103 @@ See [Output overview](#output-overview) for the full directory tree.
 
 ---
 
-## Input files
+## Inputs you need to prepare
+
+This section answers "what do I need on disk before I run anything?". Read [What each module requires](#what-each-module-requires) first to scope your prep work, then see [Sample sheet](#sample-sheet-unified-per-project-tsv) for the recommended single-source-of-truth file format, and [Input files](#input-files-file-by-file-reference) for per-file specifics.
+
+### What each module requires
+
+Each subcommand in the pipeline consumes its own slice of the inputs below. **Required** rows must be present or the run aborts. **Optional** rows have sensible defaults but commonly need overriding.
+
+#### `mitoribopy align` — RNase-trimmed FASTQs → BED + read counts
+
+| Kind | Item | Required? | Notes |
+|---|---|---|---|
+| File | Ribo-seq FASTQs (`*.fq[.gz]` / `*.fastq[.gz]`) | **required** | Provide via `--fastq <files>` (repeatable) or `--fastq-dir <dir>`. |
+| File | mt-transcriptome bowtie2 index prefix | **required** | Built once with `bowtie2-build`. Pass via `--mt-index <prefix>`. |
+| File | rRNA / tRNA contaminant bowtie2 index prefix | **required** | Used to subtract contaminants. Pass via `--contam-index <prefix>`. |
+| File | **Sample sheet** (`samples.tsv`) | optional | One row per Ribo-seq FASTQ; documents per-sample kit / UMI / strandedness. Strongly recommended for mixed-kit batches. See [Sample sheet](#sample-sheet-unified-per-project-tsv). |
+| Option | `--kit-preset` | optional (`auto` default) | Library-prep kit; `auto` detects per FASTQ. Override per sample in the sample sheet. |
+| Option | `--library-strandedness {forward,reverse,unstranded}` | optional (`forward` default) | dUTP-stranded libraries should set `reverse`. |
+
+#### `mitoribopy rpf` — BED + reference FASTA → P-site / A-site analysis
+
+| Kind | Item | Required? | Notes |
+|---|---|---|---|
+| File | Ribo-seq BEDs (or BAMs) | **required** | When run after `align`, auto-wired from `<align>/bed/`. Standalone runs use `--directory <dir>`. |
+| File | mt-transcriptome FASTA | **required** | One record per mt-mRNA. Pass via `--fasta <path>`. |
+| File | Annotation CSV | optional (built-in for h.sapiens / s.cerevisiae) | Required only for custom organisms. See [Custom organisms](#custom-organisms) for the full schema. |
+| File | Codon-table JSON | optional (NCBI codes 1–33 bundled) | Pick one via `--codon_table_name`; supply your own only for non-NCBI codes. |
+| File | Read-count table (`read_counts.tsv`) | optional (RPM normalization) | Auto-wired from `align/read_counts.tsv` when run via `mitoribopy all`. |
+| Option | `-rpf <min> <max>` | optional (footprint-class default) | Read-length window. Defaults: monosome 28–34 (human), 37–41 (yeast). |
+| Option | `--strain {h.sapiens, s.cerevisiae, custom}` | **required** | Drives the built-in annotation + codon table; `custom` requires the two files above. |
+
+#### `mitoribopy rnaseq` — TE / ΔTE from RNA-seq + Ribo-seq (two flows)
+
+**Default flow (from raw FASTQ):**
+
+| Kind | Item | Required? | Notes |
+|---|---|---|---|
+| File | RNA-seq FASTQs | **required** | Via `--rna-fastq <files/dirs>` OR derived from a sample sheet. |
+| File | Ribo-seq FASTQs | optional | Via `--ribo-fastq` OR sample sheet. When omitted the run short-circuits after writing the RNA DE table. |
+| File | Transcriptome FASTA | **required** | Via `--reference-fasta <path>`. SHA256 recorded in the manifest. |
+| File | Sample sheet OR condition map | **required (one of)** | `--sample-sheet samples.tsv` (recommended) **OR** `--condition-map conditions.tsv` (legacy two-column form). Pairs RNA and Ribo by `sample_id`, never by index. |
+| Option | `--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}` | **required** | Identifier scheme used in the FASTA / DE table. No default. |
+| Option | `--base-sample` / `--compare-sample` | **required** | Reference vs comparison condition for the contrast (also accepted as `--condition-a` / `--condition-b`). |
+| Option | `--allow-pseudo-replicates-for-demo-not-publication` | opt-in | Required to proceed when any condition has only 1 sample (publication-safe default is to fail-fast). |
+
+**Alternative flow (bring your own DE table):**
+
+| Kind | Item | Required? | Notes |
+|---|---|---|---|
+| File | DE results table (DESeq2 / Xtail / Anota2Seq) | **required** | Via `--de-table <path>`. CSV or TSV. |
+| File | Prior `mitoribopy rpf` output dir | **required** | Via `--ribo-dir <dir>`. Must contain `rpf_counts.tsv` + `run_settings.json` with `reference_checksum`. |
+| File | Reference FASTA / GTF | **required (one of)** | Via `--reference-gtf <path>` (gets hashed) **or** `--reference-checksum <sha256>` (when the file is not on this host). |
+| File | Condition map | optional | Enables a replicate-based Ribo log2FC for ΔTE; without it, ΔTE rows carry only the mRNA log2FC. |
+
+#### `mitoribopy all` — end-to-end orchestrator
+
+`mitoribopy all` runs the three stages above with one shared YAML config. Required inputs are the **union** of every active stage's required inputs. The config has these top-level sections:
+
+| Section | When to include | Notes |
+|---|---|---|
+| `samples:` | recommended | Top-level `samples: { table: samples.tsv }` is the canonical declaration of every input FASTQ + per-sample metadata. Auto-wires both `align` and `rnaseq`. See [Sample sheet](#sample-sheet-unified-per-project-tsv). |
+| `align:` | required for align | Indexes, kit / strandedness, dedup. Omit `align.fastq` when `samples:` is set — the sheet supplies it. |
+| `rpf:` | required for rpf | Strain, RPF window, FASTA, offset bounds. Auto-wires `--directory`, `--read_counts_file`, `--fasta`. |
+| `rnaseq:` | required for rnaseq | Either flow's keys (the two are mutually exclusive). The sheet auto-wires `rnaseq.sample_sheet` so you do not repeat it. |
+
+Use `mitoribopy all --print-config-template > pipeline_config.yaml` to drop a fully-commented starter into your project.
+
+### Sample sheet (unified per-project TSV)
+
+A single TSV declares every sample once, replacing the old pair of stage-specific tables (`--sample-overrides` and `--condition-map`). It is **the recommended way** to declare inputs for any non-trivial project: pairings between Ribo-seq and RNA-seq are by `sample_id` (never by index), per-sample kit / UMI overrides for mixed batches live in the same file, and an `exclude` column lets you drop a bad library without deleting rows.
+
+**Required columns:** `sample_id`, `assay` (`ribo` or `rna`), `condition`, `fastq_1`.
+**Optional columns:** `replicate`, `fastq_2`, `kit_preset`, `adapter`, `umi_length`, `umi_position`, `strandedness`, `dedup_strategy`, `exclude` (`true`/`false`/blank), `notes`.
+
+Empty cells (`""`, `NA`, `None`, `-`, `null`) read as "use the default". Lines starting with `#` and blank lines are ignored. Validation is strict: a single load pass reports every row error so you can fix the sheet without iterate-and-retry.
+
+```tsv
+sample_id	assay	condition	replicate	fastq_1	fastq_2	kit_preset	umi_length	umi_position	strandedness	exclude	notes
+WT_Ribo_1	ribo	WT	1	fastq/WT_Ribo_1.fq.gz		illumina_truseq_umi	8	5p	forward	false	
+WT_Ribo_2	ribo	WT	2	fastq/WT_Ribo_2.fq.gz		illumina_truseq_umi	8	5p	forward	false	
+KO_Ribo_1	ribo	KO	1	fastq/KO_Ribo_1.fq.gz		illumina_truseq_umi	8	5p	forward	false	
+KO_Ribo_2	ribo	KO	2	fastq/KO_Ribo_2.fq.gz		illumina_truseq_umi	8	5p	forward	true	contaminated lane
+WT_RNA_1	rna	WT	1	fastq/WT_RNA_1_R1.fq.gz	fastq/WT_RNA_1_R2.fq.gz	pretrimmed	0	5p	forward	false	
+KO_RNA_1	rna	KO	1	fastq/KO_RNA_1_R1.fq.gz	fastq/KO_RNA_1_R2.fq.gz	pretrimmed	0	5p	forward	false	
+```
+
+How it threads through the pipeline:
+
+| Stage | What the sheet supplies |
+|---|---|
+| `mitoribopy align` | The Ribo-seq FASTQ list (`assay='ribo'` rows, `exclude=false`) and a materialised `sample_overrides.tsv` carrying the per-sample kit / UMI / dedup columns. |
+| `mitoribopy rnaseq` | The RNA-seq FASTQ list (`assay='rna'`), the Ribo-seq FASTQ list (re-counted from raw FASTQ in this stage's own align machinery), and the `sample_id → condition` mapping that drives the pyDESeq2 contrast. |
+| `mitoribopy all` | Both of the above, auto-wired. Top-level `samples: { table: samples.tsv }` (or shorthand `samples: samples.tsv`) is the only place you need to declare inputs. |
+
+Mutual-exclusion rules: when the sheet is set, declaring `align.fastq` / `align.fastq_dir` / `align.samples` / `align.sample_overrides` / `rnaseq.rna_fastq` / `rnaseq.ribo_fastq` / `rnaseq.condition_map` alongside it is an error — pick one input style per stage.
+
+### Input files (file-by-file reference)
 
 ### FASTQ (primary input to `align`)
 

@@ -319,6 +319,143 @@ def test_no_auto_pseudo_replicate_is_deprecated_no_op(
     assert "--allow-pseudo-replicates-for-demo-not-publication" in err
 
 
+# ---------- --sample-sheet wiring (Phase 1.4 of the refactor) ---------------
+
+
+def _write_sheet(path: Path, body: str) -> Path:
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_sample_sheet_rejects_combination_with_per_flag_inputs(
+    tmp_path: Path, capsys
+) -> None:
+    """--sample-sheet alongside --rna-fastq / --condition-map / --de-table
+    should fail fast with a clear conflict message."""
+    sheet = _write_sheet(
+        tmp_path / "samples.tsv",
+        "sample_id\tassay\tcondition\tfastq_1\n"
+        "WT_R1\trna\tWT\trna1.fq.gz\n"
+        "KO_R1\trna\tKO\trna2.fq.gz\n",
+    )
+    fq = tmp_path / "extra.fq.gz"
+    fq.write_bytes(b"")
+    exit_code = cli.main([
+        "rnaseq",
+        "--sample-sheet", str(sheet),
+        "--rna-fastq", str(fq),
+        "--reference-fasta", "ref.fa",
+        "--gene-id-convention", "bare",
+        "--output", str(tmp_path / "out"),
+        "--condition-a", "WT",
+        "--condition-b", "KO",
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "mutually exclusive" in err
+    assert "--rna-fastq" in err
+
+
+def test_sample_sheet_derives_rna_ribo_fastq_and_condition_map(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The sheet should populate args.rna_fastq / ribo_fastq /
+    condition_map before _run_from_fastq executes."""
+    from mitoribopy.cli import rnaseq as rnaseq_cli
+
+    captured: dict = {}
+
+    def fake_run_from_fastq(args, output_dir):
+        captured["rna_fastq"] = list(args.rna_fastq) if args.rna_fastq else None
+        captured["ribo_fastq"] = list(args.ribo_fastq) if args.ribo_fastq else None
+        captured["condition_map"] = args.condition_map
+        captured["sheet_path"] = getattr(args, "_sample_sheet_path", None)
+        # Return -1 so the caller short-circuits without running the
+        # full TE / plot path (we only need to verify wiring).
+        return -1
+
+    monkeypatch.setattr(rnaseq_cli, "_run_from_fastq", fake_run_from_fastq)
+
+    sheet = _write_sheet(
+        tmp_path / "samples.tsv",
+        "sample_id\tassay\tcondition\tfastq_1\n"
+        "WT_RNA_1\trna\tWT\trna/WT.fq.gz\n"
+        "KO_RNA_1\trna\tKO\trna/KO.fq.gz\n"
+        "WT_Ribo_1\tribo\tWT\tribo/WT.fq.gz\n"
+        "KO_Ribo_1\tribo\tKO\tribo/KO.fq.gz\n",
+    )
+    out_dir = tmp_path / "out"
+    exit_code = cli.main([
+        "rnaseq",
+        "--sample-sheet", str(sheet),
+        "--reference-fasta", str(tmp_path / "ref.fa"),
+        "--gene-id-convention", "bare",
+        "--output", str(out_dir),
+        "--condition-a", "WT",
+        "--condition-b", "KO",
+    ])
+    # _run_from_fastq returned -1 (short-circuit). The orchestrator
+    # treats that as a successful RNA-only run.
+    assert exit_code == 0
+    assert captured["rna_fastq"] == ["rna/WT.fq.gz", "rna/KO.fq.gz"]
+    assert captured["ribo_fastq"] == ["ribo/WT.fq.gz", "ribo/KO.fq.gz"]
+    # The derived condition_map TSV is written next to the sheet.
+    cmap = Path(captured["condition_map"])
+    assert cmap.exists()
+    body = cmap.read_text()
+    assert "WT_RNA_1\tWT" in body
+    assert "KO_Ribo_1\tKO" in body
+    assert captured["sheet_path"] == str(sheet)
+
+
+def test_sample_sheet_with_no_active_rna_rows_errors(
+    tmp_path: Path, capsys
+) -> None:
+    """A sheet with only Ribo rows (or all RNA rows excluded) cannot
+    drive the from-FASTQ flow — we need at least one RNA sample."""
+    sheet = _write_sheet(
+        tmp_path / "samples.tsv",
+        "sample_id\tassay\tcondition\tfastq_1\texclude\n"
+        "WT_Ribo_1\tribo\tWT\tWT.fq.gz\tfalse\n"
+        "KO_Ribo_1\tribo\tKO\tKO.fq.gz\tfalse\n"
+        "WT_RNA_1\trna\tWT\tWT_rna.fq.gz\ttrue\n",
+    )
+    exit_code = cli.main([
+        "rnaseq",
+        "--sample-sheet", str(sheet),
+        "--reference-fasta", str(tmp_path / "ref.fa"),
+        "--gene-id-convention", "bare",
+        "--output", str(tmp_path / "out"),
+        "--condition-a", "WT",
+        "--condition-b", "KO",
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "no active rows with assay='rna'" in err
+
+
+def test_sample_sheet_validation_errors_surface_to_stderr(
+    tmp_path: Path, capsys
+) -> None:
+    sheet = _write_sheet(
+        tmp_path / "samples.tsv",
+        "sample_id\tassay\tcondition\tfastq_1\n"
+        "A\tprotein\tWT\tA.fq.gz\n",   # bad assay
+    )
+    exit_code = cli.main([
+        "rnaseq",
+        "--sample-sheet", str(sheet),
+        "--reference-fasta", str(tmp_path / "ref.fa"),
+        "--gene-id-convention", "bare",
+        "--output", str(tmp_path / "out"),
+        "--condition-a", "WT",
+        "--condition-b", "KO",
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "assay 'protein'" in err
+
+
 def test_allow_pseudo_replicates_flag_is_accepted_by_parser() -> None:
     """The new opt-in flag must be parseable without error, and must set
     args.allow_pseudo_replicates to True."""

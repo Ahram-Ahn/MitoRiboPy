@@ -84,6 +84,20 @@ def build_parser() -> argparse.ArgumentParser:
     # ----- Default flow: from raw FASTQ ------------------------------------
     fastq = parser.add_argument_group("Inputs (from raw FASTQ — default flow)")
     fastq.add_argument(
+        "--sample-sheet",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Unified sample sheet TSV (one row per FASTQ; columns "
+            "documented in mitoribopy.sample_sheet). When provided, "
+            "--rna-fastq, --ribo-fastq, and --condition-map are derived "
+            "from the sheet and passing any of those flags alongside "
+            "--sample-sheet is an error. Pairing between RNA-seq and "
+            "Ribo-seq is by sample_id; index-based pairing is no longer "
+            "supported."
+        ),
+    )
+    fastq.add_argument(
         "--rna-fastq",
         nargs="+",
         default=None,
@@ -92,7 +106,8 @@ def build_parser() -> argparse.ArgumentParser:
             "RNA-seq FASTQ files or directories. The default driver of "
             "the rnaseq subcommand: pass these and the rest of the "
             "pipeline (trim → bowtie2 → count → pyDESeq2 → TE / ΔTE / "
-            "plots) runs end-to-end. Mutually exclusive with --de-table."
+            "plots) runs end-to-end. Mutually exclusive with --de-table "
+            "and --sample-sheet."
         ),
     )
     fastq.add_argument(
@@ -764,6 +779,7 @@ def _run_from_fastq(args, output_dir: Path) -> int:
             "pseudo_replicate_conditions": (
                 list(pseudo_conditions) if pseudo_replicate_mode else []
             ),
+            "sample_sheet": getattr(args, "_sample_sheet_path", None),
         }
         (output_dir / "run_settings.json").write_text(
             json.dumps(slim_settings, indent=2, sort_keys=True),
@@ -773,6 +789,74 @@ def _run_from_fastq(args, output_dir: Path) -> int:
             _emit_pseudo_replicate_banner(pseudo_conditions, when="end")
         return -1
 
+    return 0
+
+
+# ---------- sample sheet -> per-flag input derivation -----------------------
+
+
+def _apply_sample_sheet(args) -> int:
+    """Derive --rna-fastq / --ribo-fastq / --condition-map from a sheet.
+
+    Mutates ``args`` in place. Returns 0 on success or 2 on user-facing
+    errors (mixing with mutually-exclusive flags, sheet validation
+    failure, unknown fields). The caller is expected to propagate the
+    return code.
+    """
+    from ..sample_sheet import SampleSheetError, load_sample_sheet
+
+    conflicts: list[str] = []
+    if args.rna_fastq:
+        conflicts.append("--rna-fastq")
+    if args.ribo_fastq:
+        conflicts.append("--ribo-fastq")
+    if args.condition_map:
+        conflicts.append("--condition-map")
+    if args.de_table:
+        conflicts.append("--de-table")
+    if conflicts:
+        sys.stderr.write(
+            "[mitoribopy rnaseq] ERROR: --sample-sheet is mutually "
+            "exclusive with " + ", ".join(conflicts) + ". The sample "
+            "sheet already declares the FASTQs and the sample → "
+            "condition mapping; pick one input style.\n"
+        )
+        return 2
+
+    try:
+        sheet = load_sample_sheet(args.sample_sheet)
+    except SampleSheetError as exc:
+        sys.stderr.write(f"[mitoribopy rnaseq] ERROR: {exc}\n")
+        return 2
+
+    rna_rows = sheet.by_assay("rna")
+    ribo_rows = sheet.by_assay("ribo")
+
+    if not rna_rows:
+        sys.stderr.write(
+            "[mitoribopy rnaseq] ERROR: --sample-sheet contains no "
+            "active rows with assay='rna'. The from-FASTQ flow needs at "
+            "least one RNA-seq sample.\n"
+        )
+        return 2
+
+    args.rna_fastq = [str(r.fastq_1) for r in rna_rows]
+    args.ribo_fastq = (
+        [str(r.fastq_1) for r in ribo_rows] if ribo_rows else None
+    )
+
+    # Materialise a condition-map TSV next to the sheet so the
+    # downstream condition_map loader (which re-reads from disk after
+    # the pseudo-replicate splitter possibly augments it) finds a
+    # canonical file. This keeps the on-disk artefact discoverable for
+    # users debugging a run.
+    cmap_path = Path(args.sample_sheet).with_suffix(".condition_map.tsv")
+    with cmap_path.open("w", encoding="utf-8") as handle:
+        handle.write("sample\tcondition\n")
+        for row in sheet.active():
+            handle.write(f"{row.sample_id}\t{row.condition}\n")
+    args.condition_map = str(cmap_path)
+    args._sample_sheet_path = str(sheet.path)
     return 0
 
 
@@ -815,6 +899,15 @@ def run(argv: Iterable[str]) -> int:
 
     args = parser.parse_args(argv_list)
     common.apply_common_arguments(args)
+
+    # --sample-sheet is a higher-level input that derives --rna-fastq /
+    # --ribo-fastq / --condition-map for the from-FASTQ flow. Reject
+    # mixing it with the per-flag alternatives so users do not get a
+    # surprising shadow when both define the same field.
+    if args.sample_sheet is not None:
+        rc = _apply_sample_sheet(args)
+        if rc != 0:
+            return rc
 
     # --base-sample / --compare-sample are aliases for --condition-a /
     # --condition-b. Reconcile here so the rest of the run uses a single
@@ -1183,6 +1276,7 @@ def run(argv: Iterable[str]) -> int:
     pseudo_conditions = list(getattr(args, "_pseudo_replicate_conditions", []) or [])
     settings["pseudo_replicate_mode"] = pseudo_mode
     settings["pseudo_replicate_conditions"] = pseudo_conditions
+    settings["sample_sheet"] = getattr(args, "_sample_sheet_path", None)
     (output_dir / "run_settings.json").write_text(
         json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8"
     )

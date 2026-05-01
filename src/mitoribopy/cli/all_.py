@@ -315,6 +315,151 @@ def _stringify(value) -> str:
     return str(value)
 
 
+def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
+    """Materialise a top-level ``samples:`` block into stage configs.
+
+    Accepted shapes::
+
+        samples:
+          table: samples.tsv     # path to a unified sample sheet TSV
+
+        # OR shorthand:
+        samples: samples.tsv
+
+    When set, the sheet drives both stages:
+
+    * ``align.fastq``           ← list of Ribo-seq FASTQ paths from the
+                                  sheet (rows where ``assay='ribo'`` and
+                                  ``exclude`` is false).
+    * ``align.sample_overrides``← TSV materialised from the Ribo rows'
+                                  per-sample kit / UMI columns under
+                                  ``<run_root>/align/sample_overrides.tsv``.
+    * ``rnaseq.sample_sheet``   ← path to the original sheet so the
+                                  rnaseq stage CLI loads it directly.
+
+    Reject (exit 2) when the sheet is set together with conflicting
+    explicit per-stage inputs: the user has to pick one input style per
+    stage. Returns 0 on success.
+    """
+    raw = config.get("samples")
+    if raw in (None, "", {}):
+        return 0
+
+    if isinstance(raw, str):
+        sheet_path = raw
+    elif isinstance(raw, dict):
+        sheet_path = raw.get("table") or raw.get("path")
+        if not sheet_path:
+            print(
+                "[mitoribopy all] ERROR: top-level 'samples:' block must "
+                "carry a 'table:' (or 'path:') key pointing at the "
+                "sample-sheet TSV.",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        print(
+            "[mitoribopy all] ERROR: top-level 'samples:' must be either "
+            "a path string or a mapping with a 'table:' key; "
+            f"got {type(raw).__name__}.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from ..sample_sheet import SampleSheetError, load_sample_sheet
+
+    try:
+        sheet = load_sample_sheet(sheet_path)
+    except SampleSheetError as exc:
+        print(f"[mitoribopy all] ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    align_cfg = config.setdefault("align", {})
+    # Only thread the sheet into rnaseq when the user explicitly opted
+    # into the rnaseq stage. A bare `samples:` block must not silently
+    # turn on rnaseq for align+rpf-only configs.
+    rnaseq_explicit = config.get("rnaseq") is not None
+    rnaseq_cfg = config.setdefault("rnaseq", {}) if rnaseq_explicit else {}
+
+    # --- align side -----------------------------------------------------
+    # Ribo rows feed `mitoribopy align`. Reject explicit conflicts so a
+    # user does not get a silent shadow when they declared FASTQs in two
+    # places.
+    ribo_rows = sheet.by_assay("ribo")
+    if ribo_rows:
+        if align_cfg.get("fastq") or align_cfg.get("fastq_dir"):
+            print(
+                "[mitoribopy all] ERROR: top-level 'samples:' is set, "
+                "but 'align.fastq' / 'align.fastq_dir' is also declared. "
+                "Drop one — either let the sample sheet drive align "
+                "inputs, or remove the 'samples:' block.",
+                file=sys.stderr,
+            )
+            return 2
+        if align_cfg.get("samples") or align_cfg.get("sample_overrides"):
+            print(
+                "[mitoribopy all] ERROR: top-level 'samples:' is set, "
+                "but 'align.samples' / 'align.sample_overrides' is also "
+                "declared. The unified sheet supersedes per-stage "
+                "overrides; drop one.",
+                file=sys.stderr,
+            )
+            return 2
+        align_cfg["fastq"] = [str(r.fastq_1) for r in ribo_rows]
+        # Materialise per-sample overrides only when at least one Ribo
+        # row carries per-sample kit / UMI fields — otherwise leave the
+        # global align defaults in charge.
+        if any(
+            r.kit_preset or r.adapter or r.umi_length is not None
+            or r.umi_position or r.dedup_strategy
+            for r in ribo_rows
+        ):
+            tsv_path = Path(run_root) / "align" / "sample_overrides.tsv"
+            tsv_path.parent.mkdir(parents=True, exist_ok=True)
+            cols = (
+                "sample", "kit_preset", "adapter",
+                "umi_length", "umi_position", "dedup_strategy",
+            )
+            with tsv_path.open("w", encoding="utf-8") as handle:
+                handle.write("\t".join(cols) + "\n")
+                for r in ribo_rows:
+                    row = {
+                        "sample": r.sample_id,
+                        "kit_preset": _stringify(r.kit_preset),
+                        "adapter": _stringify(r.adapter),
+                        "umi_length": _stringify(r.umi_length),
+                        "umi_position": _stringify(r.umi_position),
+                        "dedup_strategy": _stringify(r.dedup_strategy),
+                    }
+                    handle.write("\t".join(row[c] for c in cols) + "\n")
+            align_cfg["sample_overrides"] = str(tsv_path)
+
+    # --- rnaseq side ----------------------------------------------------
+    # The rnaseq subcommand has its own --sample-sheet handler that
+    # rejects mixing the sheet with --rna-fastq / --condition-map / etc.
+    # We just hand the path through.
+    if rnaseq_explicit:
+        rnaseq_conflicts = [
+            key for key in (
+                "rna_fastq", "rna-fastq", "ribo_fastq", "ribo-fastq",
+                "condition_map", "condition-map",
+            )
+            if rnaseq_cfg.get(key)
+        ]
+        if rnaseq_conflicts and rnaseq_cfg.get("sample_sheet") is None:
+            print(
+                "[mitoribopy all] ERROR: top-level 'samples:' is set, but "
+                "'rnaseq' section also declares "
+                + ", ".join(repr(c) for c in rnaseq_conflicts)
+                + ". The unified sheet supersedes per-stage inputs; drop one.",
+                file=sys.stderr,
+            )
+            return 2
+        rnaseq_cfg.setdefault("sample_sheet", str(sheet.path))
+
+    return 0
+
+
 # Per-stage config-template comment, also used by --print-config-template.
 _CONFIG_TEMPLATE = """\
 # mitoribopy all --config pipeline_config.yaml --output results/
@@ -672,6 +817,15 @@ def run(argv: Iterable[str]) -> int:
         return 2
 
     run_root = Path(args.output) if args.output else Path(".")
+
+    # Top-level `samples:` block (unified sample sheet) is the canonical
+    # input description for the run. Apply it FIRST so it can populate
+    # align.fastq / align.sample_overrides + rnaseq.sample_sheet before
+    # the rest of the gating runs.
+    rc = _apply_top_level_samples(config, run_root=run_root)
+    if rc != 0:
+        return rc
+
     has_align = bool(config.get("align")) and not args.skip_align
     has_rpf = bool(config.get("rpf")) and not args.skip_rpf
     has_rnaseq = bool(config.get("rnaseq")) and not args.skip_rnaseq
@@ -680,7 +834,10 @@ def run(argv: Iterable[str]) -> int:
         rnaseq_section.get("de_table") or rnaseq_section.get("de-table")
     )
     has_fastq_mode = has_rnaseq and bool(
-        rnaseq_section.get("rna_fastq") or rnaseq_section.get("rna-fastq")
+        rnaseq_section.get("rna_fastq")
+        or rnaseq_section.get("rna-fastq")
+        or rnaseq_section.get("sample_sheet")
+        or rnaseq_section.get("sample-sheet")
     )
     if has_de_table and has_fastq_mode:
         print(

@@ -564,6 +564,167 @@ def test_all_rejects_rnaseq_with_both_de_table_and_rna_fastq(
     assert "mutually exclusive" in err
 
 
+def test_all_top_level_samples_drives_align_and_rnaseq(
+    tmp_path, monkeypatch
+) -> None:
+    """A top-level `samples:` block in the YAML should auto-wire
+    align.fastq + align.sample_overrides + rnaseq.sample_sheet from the
+    unified sheet, replacing the need for per-stage input flags."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_align(argv):
+        captured["align"] = list(argv)
+        out = Path(tmp_path / "results" / "align")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "read_counts.tsv").write_text("sample\n")
+        (out / "run_settings.json").write_text('{"subcommand":"align"}')
+        return 0
+
+    def fake_rpf(argv):
+        captured["rpf"] = list(argv)
+        out = Path(tmp_path / "results" / "rpf")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "rpf_counts.tsv").write_text("sample\tgene\tcount\n")
+        (out / "run_settings.json").write_text('{"subcommand":"rpf"}')
+        return 0
+
+    def fake_rnaseq(argv):
+        captured["rnaseq"] = list(argv)
+        out = Path(tmp_path / "results" / "rnaseq")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "delta_te.tsv").write_text("gene\n")
+        (out / "run_settings.json").write_text('{"subcommand":"rnaseq"}')
+        return 0
+
+    from mitoribopy.cli import align as align_cli
+    from mitoribopy.cli import rnaseq as rnaseq_cli
+    from mitoribopy.cli import rpf as rpf_cli
+    monkeypatch.setattr(align_cli, "run", fake_align)
+    monkeypatch.setattr(rpf_cli, "run", fake_rpf)
+    monkeypatch.setattr(rnaseq_cli, "run", fake_rnaseq)
+
+    sheet = tmp_path / "samples.tsv"
+    sheet.write_text(
+        "sample_id\tassay\tcondition\tfastq_1\tkit_preset\tumi_length\n"
+        "WT_Ribo_1\tribo\tWT\tribo/WT.fq.gz\tilllumina_truseq_umi\t8\n"
+        "KO_Ribo_1\tribo\tKO\tribo/KO.fq.gz\tilllumina_truseq_umi\t8\n"
+        "WT_RNA_1\trna\tWT\trna/WT.fq.gz\t\t\n"
+        "KO_RNA_1\trna\tKO\trna/KO.fq.gz\t\t\n"
+    )
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        f"samples:\n  table: {sheet}\n"
+        "align:\n  kit_preset: auto\n"
+        "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
+        "rnaseq:\n  gene_id_convention: bare\n"
+        "  condition_a: WT\n  condition_b: KO\n"
+    )
+    results = tmp_path / "results"
+    exit_code = cli.main([
+        "all", "--config", str(cfg), "--output", str(results),
+    ])
+    assert exit_code == 0
+
+    align_argv = captured["align"]
+    # The align serializer uses repeat_flags={"fastq"}, so --fastq is
+    # emitted once per FASTQ. Pull the repeated values back out.
+    fastqs = [
+        align_argv[i + 1]
+        for i, tok in enumerate(align_argv)
+        if tok == "--fastq" and i + 1 < len(align_argv)
+    ]
+    assert fastqs == ["ribo/WT.fq.gz", "ribo/KO.fq.gz"]
+    # Per-sample overrides materialised under <run_root>/align/.
+    assert "--sample-overrides" in align_argv
+    overrides_path = Path(
+        align_argv[align_argv.index("--sample-overrides") + 1]
+    )
+    assert overrides_path.exists()
+    body = overrides_path.read_text()
+    assert "WT_Ribo_1\tilllumina_truseq_umi\t" in body
+    assert "umi_length" in body.splitlines()[0]
+
+    rnaseq_argv = captured["rnaseq"]
+    # The sheet path threads through to the rnaseq stage.
+    assert "--sample-sheet" in rnaseq_argv
+    assert rnaseq_argv[rnaseq_argv.index("--sample-sheet") + 1] == str(sheet)
+
+
+def test_all_top_level_samples_rejects_align_fastq_conflict(
+    tmp_path, capsys
+) -> None:
+    """Declaring `samples:` AND `align.fastq:` at the same time must
+    fail loudly so the user does not get a silent shadow."""
+    sheet = tmp_path / "samples.tsv"
+    sheet.write_text(
+        "sample_id\tassay\tcondition\tfastq_1\n"
+        "WT_Ribo_1\tribo\tWT\tribo/WT.fq.gz\n"
+        "WT_RNA_1\trna\tWT\trna/WT.fq.gz\n"
+    )
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        f"samples:\n  table: {sheet}\n"
+        "align:\n  fastq_dir: input/\n"
+    )
+    exit_code = cli.main([
+        "all", "--config", str(cfg), "--output", str(tmp_path / "out"),
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "samples" in err and "align.fastq" in err
+
+
+def test_all_top_level_samples_shorthand_string_form(tmp_path, monkeypatch) -> None:
+    """`samples: path/to/sheet.tsv` as a bare string should also work."""
+    sheet = tmp_path / "samples.tsv"
+    sheet.write_text(
+        "sample_id\tassay\tcondition\tfastq_1\n"
+        "WT_Ribo_1\tribo\tWT\tribo/WT.fq.gz\n"
+        "WT_RNA_1\trna\tWT\trna/WT.fq.gz\n"
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_align(argv):
+        captured["align"] = list(argv)
+        out = Path(tmp_path / "results" / "align")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "read_counts.tsv").write_text("sample\n")
+        (out / "run_settings.json").write_text("{}")
+        return 0
+
+    def fake_rpf(argv):
+        out = Path(tmp_path / "results" / "rpf")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "rpf_counts.tsv").write_text("sample\tgene\tcount\n")
+        (out / "run_settings.json").write_text("{}")
+        return 0
+
+    from mitoribopy.cli import align as align_cli
+    from mitoribopy.cli import rpf as rpf_cli
+    monkeypatch.setattr(align_cli, "run", fake_align)
+    monkeypatch.setattr(rpf_cli, "run", fake_rpf)
+
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        f"samples: {sheet}\n"
+        "align:\n  kit_preset: auto\n"
+        "rpf:\n  strain: h\n"
+    )
+    exit_code = cli.main([
+        "all", "--config", str(cfg), "--output", str(tmp_path / "results"),
+    ])
+    assert exit_code == 0
+    align_argv = captured["align"]
+    assert "--fastq" in align_argv
+    # repeated --fastq emission (one per file) — only one Ribo row in this sheet.
+    fastqs = [
+        align_argv[i + 1]
+        for i, tok in enumerate(align_argv)
+        if tok == "--fastq" and i + 1 < len(align_argv)
+    ]
+    assert fastqs == ["ribo/WT.fq.gz"]
+
+
 def test_all_keeps_explicit_rnaseq_reference_override(tmp_path, monkeypatch) -> None:
     """User-specified rnaseq.reference_fasta must NOT be clobbered by
     rpf.fasta auto-wiring (RNA-seq may use a different transcriptome)."""
