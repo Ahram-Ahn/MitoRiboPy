@@ -9,11 +9,18 @@ root.
 This file is the provenance spine: it documents how many reads survived
 each step so downstream Phase-6 manifest consumers and human reviewers
 can reconstruct where the read attrition happened.
+
+P5.6: the invariants documented in :func:`assemble_sample_counts` are
+now enforced at run time by :func:`check_count_invariants`. By default
+a violation raises :class:`CountInvariantError` (mapped to
+``E_OUTPUT_COUNT_INVARIANT`` in :mod:`mitoribopy.errors`); the align
+CLI exposes ``--allow-count-invariant-warning`` to demote them to
+warnings for legacy / debugging use.
 """
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Iterable
 
@@ -80,6 +87,128 @@ def read_counts_columns() -> tuple[str, ...]:
 def format_row(counts: SampleCounts) -> str:
     """Format a single :class:`SampleCounts` as a tab-delimited row."""
     return "\t".join(str(getattr(counts, name)) for name in read_counts_columns())
+
+
+@dataclass(frozen=True)
+class CountInvariantViolation:
+    """One failed read-count invariant for a single sample."""
+
+    sample: str
+    rule: str
+    message: str
+
+
+class CountInvariantError(ValueError):
+    """Raised when one or more read-count invariants are violated."""
+
+    def __init__(self, violations: list[CountInvariantViolation]) -> None:
+        self.violations = violations
+        super().__init__(
+            "read_counts invariant violation(s): "
+            + "; ".join(f"{v.sample}/{v.rule}: {v.message}" for v in violations)
+        )
+
+
+def check_count_invariants(
+    rows: Iterable[SampleCounts],
+) -> list[CountInvariantViolation]:
+    """Return the list of invariant violations across *rows*.
+
+    The four invariants enforced here are the ones documented at the
+    top of :func:`assemble_sample_counts`. Each rule is keyed by a
+    short stable name so a downstream report can index by it:
+
+    * ``rrna_split``  — rrna_aligned + post_rrna_filter == post_trim
+    * ``mt_split``    — mt_aligned + unaligned_to_mt == post_rrna_filter
+    * ``mapq_le_mt``  — mt_aligned_after_mapq <= mt_aligned
+    * ``dedup_le_mapq`` — mt_aligned_after_dedup <= mt_aligned_after_mapq
+    """
+    violations: list[CountInvariantViolation] = []
+    for row in rows:
+        if row.rrna_aligned + row.post_rrna_filter != row.post_trim:
+            violations.append(
+                CountInvariantViolation(
+                    sample=row.sample,
+                    rule="rrna_split",
+                    message=(
+                        f"rrna_aligned ({row.rrna_aligned}) + "
+                        f"post_rrna_filter ({row.post_rrna_filter}) "
+                        f"!= post_trim ({row.post_trim})"
+                    ),
+                )
+            )
+        if row.mt_aligned + row.unaligned_to_mt != row.post_rrna_filter:
+            violations.append(
+                CountInvariantViolation(
+                    sample=row.sample,
+                    rule="mt_split",
+                    message=(
+                        f"mt_aligned ({row.mt_aligned}) + "
+                        f"unaligned_to_mt ({row.unaligned_to_mt}) "
+                        f"!= post_rrna_filter ({row.post_rrna_filter})"
+                    ),
+                )
+            )
+        if row.mt_aligned_after_mapq > row.mt_aligned:
+            violations.append(
+                CountInvariantViolation(
+                    sample=row.sample,
+                    rule="mapq_le_mt",
+                    message=(
+                        f"mt_aligned_after_mapq ({row.mt_aligned_after_mapq}) "
+                        f"> mt_aligned ({row.mt_aligned})"
+                    ),
+                )
+            )
+        if row.mt_aligned_after_dedup > row.mt_aligned_after_mapq:
+            violations.append(
+                CountInvariantViolation(
+                    sample=row.sample,
+                    rule="dedup_le_mapq",
+                    message=(
+                        f"mt_aligned_after_dedup ({row.mt_aligned_after_dedup}) "
+                        f"> mt_aligned_after_mapq ({row.mt_aligned_after_mapq})"
+                    ),
+                )
+            )
+    return violations
+
+
+def enforce_count_invariants(
+    rows: Iterable[SampleCounts],
+    *,
+    allow_warning: bool = False,
+) -> list[CountInvariantViolation]:
+    """Run :func:`check_count_invariants` and act on the result.
+
+    When *allow_warning* is True (CLI ``--allow-count-invariant-warning``),
+    every violation is recorded via :mod:`mitoribopy.io.warnings_log` and
+    the function returns the (possibly empty) list. Otherwise the first
+    violation list raises :class:`CountInvariantError` so the caller can
+    abort the run with a clear exit code.
+    """
+    rows_list = list(rows)
+    violations = check_count_invariants(rows_list)
+    if not violations:
+        return violations
+    if allow_warning:
+        from ..errors import E_OUTPUT_COUNT_INVARIANT
+        from ..io.warnings_log import record as _record_warning
+
+        for v in violations:
+            _record_warning(
+                "align",
+                f"{v.rule}: {v.message}",
+                sample_id=v.sample,
+                code=E_OUTPUT_COUNT_INVARIANT,
+                suggested_action=(
+                    "Investigate the upstream stage for this sample. "
+                    "Run with the default (no --allow-count-invariant-warning) "
+                    "to abort on these violations."
+                ),
+            )
+        return violations
+    raise CountInvariantError(violations)
 
 
 def write_read_counts_table(

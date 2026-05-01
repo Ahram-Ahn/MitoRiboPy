@@ -74,6 +74,13 @@ class SampleResolution:
     # "inferred"       – entropy detector landed the value (rnaseq path)
     # "none"           – umi_length resolved to 0 (no UMI in the library)
     umi_source: str = "preset_default"
+    # P5.6: second-best kit and confidence margin from the adapter
+    # detector. ``confidence_margin`` is best_match_rate -
+    # second_best_match_rate; values >= 0 always. Zero / None when no
+    # detection ran (off mode, missing FASTQ).
+    second_best_kit: str | None = None
+    second_best_match_rate: float = 0.0
+    confidence_margin: float = 0.0
 
 
 # The column order is what gets written to ``kit_resolution.tsv``. Keep
@@ -92,7 +99,38 @@ _KIT_RESOLUTION_COLUMNS: tuple[str, ...] = (
     "detection_ambiguous",
     "source",
     "umi_source",  # P1.11
+    # P5.6: detection-confidence diagnostics. The "best_*" pair is the
+    # canonical winner of the adapter scan; "second_best_*" is the
+    # runner-up. ``confidence_margin`` is best - second_best (>= 0).
+    "best_adapter",
+    "best_match_rate",
+    "second_best_kit",
+    "second_best_match_rate",
+    "confidence_margin",
 )
+
+
+def _second_best_from_rates(
+    rates: dict[str, float], *, best_name: str | None
+) -> tuple[str | None, float, float]:
+    """Return ``(second_best_kit, second_best_rate, confidence_margin)``.
+
+    The runner-up is the highest-rate preset that is NOT the winner.
+    Confidence margin is ``best_rate - second_best_rate``; never
+    negative. Returns ``(None, 0.0, 0.0)`` for an empty rate dict.
+    """
+    if not rates:
+        return None, 0.0, 0.0
+    best_rate = rates.get(best_name, 0.0) if best_name else 0.0
+    others = sorted(
+        ((rate, name) for name, rate in rates.items() if name != best_name),
+        reverse=True,
+    )
+    if not others:
+        return None, 0.0, max(best_rate, 0.0)
+    second_rate, second_name = others[0]
+    margin = max(best_rate - second_rate, 0.0)
+    return second_name, second_rate, margin
 
 
 def _classify_umi_source(
@@ -330,6 +368,10 @@ def _resolve_one(
         umi_length=kit.umi_length,
     )
 
+    second_best_kit, second_best_rate, conf_margin = _second_best_from_rates(
+        detection.per_kit_rates, best_name=detected
+    )
+
     return SampleResolution(
         sample=sample,
         fastq=fastq,
@@ -344,6 +386,9 @@ def _resolve_one(
             override_supplied_umi_length=override_umi_length,
             resolved_umi_length=kit.umi_length,
         ),
+        second_best_kit=second_best_kit,
+        second_best_match_rate=second_best_rate,
+        confidence_margin=conf_margin,
     )
 
 
@@ -613,6 +658,16 @@ def write_kit_resolution_tsv(
                 "detection_ambiguous": "true" if resolution.detection_ambiguous else "false",
                 "source": resolution.source,
                 "umi_source": getattr(resolution, "umi_source", "preset_default"),
+                # P5.6 detection-confidence diagnostics.
+                "best_adapter": resolution.kit.adapter or "",
+                "best_match_rate": f"{resolution.detection_match_rate:.4f}",
+                "second_best_kit": getattr(resolution, "second_best_kit", None) or "",
+                "second_best_match_rate": (
+                    f"{getattr(resolution, 'second_best_match_rate', 0.0):.4f}"
+                ),
+                "confidence_margin": (
+                    f"{getattr(resolution, 'confidence_margin', 0.0):.4f}"
+                ),
             }
             handle.write(
                 "\t".join(str(row[col]) for col in _KIT_RESOLUTION_COLUMNS) + "\n"

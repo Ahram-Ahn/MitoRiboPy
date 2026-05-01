@@ -31,7 +31,7 @@ __all__ = [
 
 OUTPUT_SCHEMA_VERSIONS: dict[str, str] = {
     "read_counts.tsv":    "1.0",
-    "kit_resolution.tsv": "1.1",  # P1.11: added umi_source column
+    "kit_resolution.tsv": "1.2",  # P5.6: + best_adapter, best/second_best_match_rate, confidence_margin
     "rpf_counts.tsv":     "1.0",
     "rpf_counts_matrix.tsv": "1.0",
     "rna_counts.tsv":     "1.0",

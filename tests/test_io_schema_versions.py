@@ -92,9 +92,11 @@ def test_read_counts_tsv_parses_with_pandas_comment_arg(tmp_path: Path) -> None:
 
 
 def test_kit_resolution_tsv_includes_umi_source_column(tmp_path: Path) -> None:
-    """P1.11 added umi_source as the trailing column at v1.1; the
-    schema-version header must reflect the bump."""
-    assert OUTPUT_SCHEMA_VERSIONS["kit_resolution.tsv"] == "1.1"
+    """P1.11 added umi_source as the trailing column (v1.1); P5.6
+    added best_adapter / best_match_rate / second_best_kit /
+    second_best_match_rate / confidence_margin (v1.2). The
+    schema-version header must reflect the latest bump."""
+    assert OUTPUT_SCHEMA_VERSIONS["kit_resolution.tsv"] == "1.2"
 
 
 def test_kit_resolution_tsv_writer_emits_schema_header(tmp_path: Path) -> None:
@@ -131,9 +133,12 @@ def test_kit_resolution_tsv_writer_emits_schema_header(tmp_path: Path) -> None:
         f"# schema_version: {OUTPUT_SCHEMA_VERSIONS['kit_resolution.tsv']}"
     )
     header = raw[1].split("\t")
-    assert header[-1] == "umi_source"
+    # P5.6: trailing column is now confidence_margin; umi_source
+    # remains in the header somewhere before the new diagnostics block.
+    assert "umi_source" in header
+    assert header[-1] == "confidence_margin"
     body = raw[2].split("\t")
-    assert body[-1] == "declared"
+    assert body[header.index("umi_source")] == "declared"
 
 
 def test_load_ribo_counts_skips_schema_header_line(tmp_path: Path) -> None:
@@ -231,6 +236,6 @@ def test_manifest_records_output_schemas(tmp_path: Path, monkeypatch) -> None:
     # Spot-check a few entries.
     assert schemas["read_counts.tsv"] == OUTPUT_SCHEMA_VERSIONS["read_counts.tsv"]
     assert schemas["te.tsv"] == OUTPUT_SCHEMA_VERSIONS["te.tsv"]
-    assert schemas["kit_resolution.tsv"] == "1.1"
+    assert schemas["kit_resolution.tsv"] == OUTPUT_SCHEMA_VERSIONS["kit_resolution.tsv"]
     # Manifest layout itself bumped to 1.1 to record the new field.
     assert manifest["schema_version"].startswith("1.")

@@ -53,7 +53,13 @@ from ..align.sample_resolve import (
     resolve_sample_resolutions,
     write_kit_resolution_tsv,
 )
-from ..console import configure_file_logging, log_info, log_progress, log_warning
+from ..console import (
+    configure_file_logging,
+    log_error,
+    log_info,
+    log_progress,
+    log_warning,
+)
 from ..progress import (
     SampleCounter,
     StageTimings,
@@ -211,6 +217,43 @@ def build_parser() -> argparse.ArgumentParser:
             "they are large, regenerable, and not needed by any "
             "downstream stage. Pass this flag when debugging a sample "
             "or comparing per-step intermediate counts."
+        ),
+    )
+    library.add_argument(
+        "--tmpdir",
+        default=None,
+        help=(
+            "Optional override for the directory used for per-step "
+            "scratch files (trimmed FASTQ, contam-filtered FASTQ, "
+            "intermediate BAMs). Defaults to a subdirectory of "
+            "--output. Set this to a fast local SSD when running on a "
+            "cluster with slow shared storage, or to a pre-mounted "
+            "tmpfs to avoid hitting disk altogether for short runs."
+        ),
+    )
+    library.add_argument(
+        "--allow-count-invariant-warning",
+        action="store_true",
+        default=False,
+        help=(
+            "Demote read_counts.tsv invariant violations from errors "
+            "to warnings (recorded in warnings.tsv). The default is "
+            "to fail the run on any violation, since a real violation "
+            "indicates a bug somewhere upstream. Use only when "
+            "debugging with deliberately broken inputs."
+        ),
+    )
+    library.add_argument(
+        "--strict-publication-mode",
+        action="store_true",
+        default=False,
+        help=(
+            "Reject runs that rely on inferred-rather-than-declared "
+            "metadata: inferred-pretrimmed kits, ambiguous adapter "
+            "detection (confidence margin < 0.10), and legacy kit "
+            "preset names. Use when preparing a publication run from a "
+            "cleaned sample sheet so the strict checks fail loud rather "
+            "than a single sample silently picking the wrong defaults."
         ),
     )
     library.add_argument(
@@ -495,6 +538,112 @@ def _per_sample_settings(resolutions: list[SampleResolution]) -> list[dict]:
             }
         )
     return rows
+
+
+def _format_execution_table(
+    resolutions: list[SampleResolution],
+) -> list[str]:
+    """Render a compact per-sample execution table for the pre-run banner.
+
+    P5.6: lets the user verify the kit / adapter / UMI decisions and
+    expected output BED paths before any expensive work runs. Columns
+    mirror :data:`mitoribopy.align.sample_resolve._KIT_RESOLUTION_COLUMNS`
+    but are formatted for stderr (truncated long fields, fixed-width
+    columns).
+    """
+    if not resolutions:
+        return ["execution table: no samples resolved."]
+
+    cols = (
+        "sample",
+        "input_fastq",
+        "applied_kit",
+        "adapter",
+        "umi",
+        "dedup",
+        "strand",
+        "expected_output_bed",
+    )
+    header = (
+        f"{cols[0]:<14} {cols[1]:<30} {cols[2]:<22} "
+        f"{cols[3]:<22} {cols[4]:<8} {cols[5]:<10} "
+        f"{cols[6]:<11} {cols[7]:<22}"
+    )
+    lines = ["execution table (kit_resolution.tsv has the full layout):"]
+    lines.append(header)
+    lines.append("-" * len(header))
+    for r in resolutions:
+        adapter = (r.kit.adapter or "").ljust(22)[:22]
+        fastq = str(r.fastq.name)[:30].ljust(30)
+        umi = f"{r.kit.umi_length}{r.kit.umi_position}".ljust(8)
+        bed_name = f"{r.sample}.mt.bed".ljust(22)[:22]
+        lines.append(
+            f"{r.sample:<14} {fastq} {r.kit.kit:<22} "
+            f"{adapter} {umi} {r.dedup_strategy:<10} "
+            f"{'(see cfg)':<11} {bed_name}"
+        )
+    return lines
+
+
+def _strict_publication_mode_errors(
+    resolutions: list[SampleResolution],
+) -> list[str]:
+    """Return the list of strict-publication-mode rejection reasons.
+
+    Empty list means the resolutions are clean enough to be claimed as
+    publication-grade. The CLI exits 2 when this list is non-empty.
+
+    Rules:
+
+    * No sample picked an inferred ``pretrimmed`` kit. The user must
+      either declare ``kit_preset: pretrimmed`` explicitly or supply a
+      proper kit + adapter.
+    * No sample has ``detection_ambiguous`` true OR a confidence
+      margin below 0.10 — both signal a coin-flip between kits.
+    * No sample landed on a UMI-bearing kit by inference; the
+      ``umi_source`` must be ``declared`` or ``none`` (i.e. the user
+      either declared the UMI or there isn't one).
+    * No sample's resolved kit is a legacy alias (canonicalisation
+      runs earlier; this is a belt-and-braces check).
+    """
+    from ..align._types import KIT_PRESET_ALIASES
+
+    errors: list[str] = []
+    for r in resolutions:
+        if r.source.startswith("inferred_pretrimmed"):
+            errors.append(
+                f"--strict-publication-mode: sample {r.sample!r} picked "
+                "kit=pretrimmed by inference (no known adapter signature). "
+                "Declare kit_preset: pretrimmed explicitly or supply a "
+                "proper kit + adapter."
+            )
+        if r.detection_ambiguous or (
+            r.detection_match_rate > 0.0
+            and getattr(r, "confidence_margin", 0.0) < 0.10
+        ):
+            errors.append(
+                f"--strict-publication-mode: sample {r.sample!r} adapter "
+                f"detection is ambiguous "
+                f"(margin={getattr(r, 'confidence_margin', 0.0):.2f}, "
+                f"second_best={getattr(r, 'second_best_kit', None)!r}). "
+                "Pin --kit-preset / --adapter explicitly to remove the "
+                "ambiguity."
+            )
+        umi_src = getattr(r, "umi_source", "preset_default")
+        if r.kit.umi_length > 0 and umi_src not in ("declared", "none"):
+            errors.append(
+                f"--strict-publication-mode: sample {r.sample!r} resolved "
+                f"to a UMI-bearing kit (umi_length={r.kit.umi_length}) "
+                f"with umi_source={umi_src!r}. Declare umi_length and "
+                "umi_position in the sample sheet."
+            )
+        if r.kit.kit in KIT_PRESET_ALIASES:
+            errors.append(
+                f"--strict-publication-mode: sample {r.sample!r} uses "
+                f"legacy kit alias {r.kit.kit!r}. Use the canonical "
+                f"name {KIT_PRESET_ALIASES[r.kit.kit]!r}."
+            )
+    return errors
 
 
 def _legacy_global_dedup(resolutions: list[SampleResolution]) -> str:
@@ -1117,6 +1266,22 @@ def run(argv: Iterable[str]) -> int:
         f"{len(resolutions)} sample(s).",
     )
 
+    # P5.6: pre-run per-sample execution table. The kit_resolution.tsv
+    # we just wrote covers everything the user needs to verify, but
+    # showing a compact table on stderr before any expensive work
+    # starts catches a wrong adapter / missing UMI declaration in
+    # seconds rather than at minutes-into-the-run.
+    for line in _format_execution_table(resolutions):
+        log_info("ALIGN", line)
+
+    # P5.6: --strict-publication-mode gate.
+    if getattr(args, "strict_publication_mode", False):
+        strict_errors = _strict_publication_mode_errors(resolutions)
+        if strict_errors:
+            for line in strict_errors:
+                log_error("ALIGN", line)
+            return 2
+
     log_info(
         "ALIGN",
         f"Starting align pipeline for {len(inputs)} sample(s) "
@@ -1282,6 +1447,18 @@ def run(argv: Iterable[str]) -> int:
 
     # Deterministic sort by sample name.
     rows.sort(key=lambda row: row.sample)
+    # P5.6: enforce read_counts invariants. Default behaviour aborts
+    # the run on any violation; --allow-count-invariant-warning demotes
+    # to warnings.tsv entries. The previous behaviour was to silently
+    # write the bad numbers into the TSV.
+    try:
+        counts_step.enforce_count_invariants(
+            rows,
+            allow_warning=getattr(args, "allow_count_invariant_warning", False),
+        )
+    except counts_step.CountInvariantError as exc:
+        log_error("ALIGN", f"{exc}")
+        return 2
     counts_step.write_read_counts_table(rows, output_dir / "read_counts.tsv")
 
     wall_sw.__exit__(None, None, None)
