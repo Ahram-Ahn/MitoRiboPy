@@ -39,11 +39,31 @@ def _convert_offsets_between_sites(
 def _pick_most_enriched_with_tiebreak(
     counts_df: pd.DataFrame, offset_col: str
 ) -> pd.DataFrame:
-    """Pick one enriched offset per read length using deterministic tie-break rules."""
+    """Pick one enriched offset per read length and return diagnostic columns.
+
+    Returns a DataFrame with one row per read length and these columns:
+
+    * ``Read Length``
+    * ``<offset_col>``           — the selected offset value (the picked one)
+    * ``n_reads``                — total reads in the input window for this length
+    * ``top_count``              — read count at the selected offset
+    * ``second_best_count``      — read count at the runner-up offset (0 when none)
+    * ``second_best_offset``     — the runner-up offset value (NaN when none)
+    * ``delta_score``            — top_count - second_best_count (raw separation)
+    * ``enrichment_score``       — top_count / n_reads (fraction of mass on the pick)
+
+    Selection still uses the deterministic neighbour-support tie-break:
+    ties on ``Count`` are broken by the sum of counts at offsets
+    ``[x-1, x, x+1]`` (highest wins), then by ``abs(offset)``, then by
+    raw offset value.
+    """
+    import math
+
     picked_rows = []
     for read_length, sub in counts_df.groupby("Read Length", sort=True):
         sub = sub.sort_values([offset_col]).copy()
-        top_count = sub["Count"].max()
+        n_reads = int(sub["Count"].sum())
+        top_count = int(sub["Count"].max()) if not sub.empty else 0
         tied = sub[sub["Count"] == top_count].copy()
 
         count_map = dict(zip(sub[offset_col], sub["Count"]))
@@ -56,9 +76,82 @@ def _pick_most_enriched_with_tiebreak(
             ascending=[False, True, True],
         )
         best_value = tied.iloc[0][offset_col]
-        picked_rows.append({"Read Length": read_length, offset_col: best_value})
+
+        # Second-best by raw count, ignoring the chosen offset.
+        runner = sub[sub[offset_col] != best_value]
+        if runner.empty:
+            second_best_count = 0
+            second_best_offset = math.nan
+        else:
+            runner_top = runner["Count"].max()
+            second_best_count = int(runner_top)
+            # When the runner-up is itself a multi-offset tie, prefer the
+            # one closest to the picked offset for a stable diagnostic.
+            runner_top_rows = runner[runner["Count"] == runner_top]
+            runner_top_rows = runner_top_rows.assign(
+                _absdist=(runner_top_rows[offset_col] - best_value).abs()
+            ).sort_values(["_absdist", offset_col])
+            second_best_offset = runner_top_rows.iloc[0][offset_col]
+
+        delta_score = top_count - second_best_count
+        enrichment_score = (top_count / n_reads) if n_reads > 0 else 0.0
+
+        picked_rows.append({
+            "Read Length": read_length,
+            offset_col: best_value,
+            "n_reads": n_reads,
+            "top_count": top_count,
+            "second_best_count": second_best_count,
+            "second_best_offset": second_best_offset,
+            "delta_score": delta_score,
+            "enrichment_score": enrichment_score,
+        })
 
     return pd.DataFrame(picked_rows)
+
+
+# Confidence-label thresholds. These are explicit numbers so the
+# defensibility argument lives in code, not in tribal knowledge.
+#
+# enrichment_score = top_count / n_reads (fraction of mass at the pick).
+# delta_ratio      = (top_count - second_best_count) / top_count
+#                    (relative separation from the runner-up).
+# n_reads          = total reads in the per-length window.
+#
+# A "high" call requires enough reads for a stable estimate, a clear
+# enrichment peak, and meaningful separation from the runner-up. A
+# "medium" call relaxes one of those. Anything weaker is "low".
+_CONF_HIGH_ENRICH = 0.40
+_CONF_HIGH_DELTA_RATIO = 0.30
+_CONF_HIGH_MIN_READS = 200
+
+_CONF_MEDIUM_ENRICH = 0.25
+_CONF_MEDIUM_MIN_READS = 50
+
+
+def _confidence_label(
+    *, n_reads: int, top_count: int, second_best_count: int, enrichment_score: float
+) -> str:
+    """Classify a per-length offset pick as high / medium / low / insufficient.
+
+    Special-case labels (``manual`` and ``fallback_combined``) are
+    written by callers when those modes apply and bypass this function.
+    """
+    if n_reads <= 0 or top_count <= 0:
+        return "insufficient"
+    delta_ratio = (top_count - second_best_count) / top_count if top_count else 0.0
+    if (
+        enrichment_score >= _CONF_HIGH_ENRICH
+        and delta_ratio >= _CONF_HIGH_DELTA_RATIO
+        and n_reads >= _CONF_HIGH_MIN_READS
+    ):
+        return "high"
+    if (
+        enrichment_score >= _CONF_MEDIUM_ENRICH
+        and n_reads >= _CONF_MEDIUM_MIN_READS
+    ):
+        return "medium"
+    return "low"
 
 
 def determine_p_site_offsets(
@@ -126,27 +219,76 @@ def determine_p_site_offsets(
         log_warning("OFFSET", "No offsets were found inside the requested selection ranges.")
         return None
 
+    five_diag_cols = [
+        "n_reads_5", "top_count_5", "second_best_count_5",
+        "second_best_offset_5", "delta_score_5", "enrichment_score_5",
+        "confidence_5",
+    ]
+    three_diag_cols = [
+        "n_reads_3", "top_count_3", "second_best_count_3",
+        "second_best_offset_3", "delta_score_3", "enrichment_score_3",
+        "confidence_3",
+    ]
+
     if five_df.empty:
-        five_pick = pd.DataFrame(columns=["Read Length", "Most Enriched 5' Offset"])
+        five_pick = pd.DataFrame(
+            columns=["Read Length", "Most Enriched 5' Offset"] + five_diag_cols
+        )
     else:
         five_counts = (
             five_df.groupby(["Read Length", "5' Offset"]).size().reset_index(name="Count")
         )
         five_pick = _pick_most_enriched_with_tiebreak(five_counts, "5' Offset")
-        five_pick.rename(columns={"5' Offset": "Most Enriched 5' Offset"}, inplace=True)
+        five_pick["confidence_5"] = five_pick.apply(
+            lambda r: _confidence_label(
+                n_reads=int(r["n_reads"]),
+                top_count=int(r["top_count"]),
+                second_best_count=int(r["second_best_count"]),
+                enrichment_score=float(r["enrichment_score"]),
+            ),
+            axis=1,
+        )
+        five_pick = five_pick.rename(columns={
+            "5' Offset": "Most Enriched 5' Offset",
+            "n_reads": "n_reads_5",
+            "top_count": "top_count_5",
+            "second_best_count": "second_best_count_5",
+            "second_best_offset": "second_best_offset_5",
+            "delta_score": "delta_score_5",
+            "enrichment_score": "enrichment_score_5",
+        })
 
     if three_df.empty:
-        three_pick = pd.DataFrame(columns=["Read Length", "Most Enriched 3' Offset"])
+        three_pick = pd.DataFrame(
+            columns=["Read Length", "Most Enriched 3' Offset"] + three_diag_cols
+        )
     else:
         three_counts = (
             three_df.groupby(["Read Length", "3' Offset"]).size().reset_index(name="Count")
         )
         three_pick = _pick_most_enriched_with_tiebreak(three_counts, "3' Offset")
-        three_pick.rename(columns={"3' Offset": "Most Enriched 3' Offset"}, inplace=True)
+        three_pick["confidence_3"] = three_pick.apply(
+            lambda r: _confidence_label(
+                n_reads=int(r["n_reads"]),
+                top_count=int(r["top_count"]),
+                second_best_count=int(r["second_best_count"]),
+                enrichment_score=float(r["enrichment_score"]),
+            ),
+            axis=1,
+        )
+        three_pick = three_pick.rename(columns={
+            "3' Offset": "Most Enriched 3' Offset",
+            "n_reads": "n_reads_3",
+            "top_count": "top_count_3",
+            "second_best_count": "second_best_count_3",
+            "second_best_offset": "second_best_offset_3",
+            "delta_score": "delta_score_3",
+            "enrichment_score": "enrichment_score_3",
+        })
 
     selected_offsets = pd.merge(
-        five_pick[["Read Length", "Most Enriched 5' Offset"]],
-        three_pick[["Read Length", "Most Enriched 3' Offset"]],
+        five_pick[["Read Length", "Most Enriched 5' Offset"] + five_diag_cols],
+        three_pick[["Read Length", "Most Enriched 3' Offset"] + three_diag_cols],
         on="Read Length",
         how="outer",
     )
