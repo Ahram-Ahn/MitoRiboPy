@@ -82,10 +82,13 @@ not both.
 
 ## `rpf:` section
 
-Every key corresponds 1:1 to a `mitoribopy rpf` CLI flag. The rpf
-parser accepts underscores in its flags (`--offset_type`,
-`--min_5_offset`, …); the orchestrator preserves that style when
-serialising the section to argv.
+Every key corresponds 1:1 to a `mitoribopy rpf` CLI flag. YAML keys
+are always snake_case (`offset_type`, `min_5_offset`, …); the rpf CLI
+flag is the same name but in hyphen-case (`--offset-type`,
+`--min-5-offset`). The pre-v0.6.0 underscore CLI form
+(`--offset_type`) is still accepted for one transition cycle but is
+not surfaced in `--help` or generated docs. The orchestrator
+serialises every section to hyphenated argv as of v0.6.0.
 
 Selected highlights:
 

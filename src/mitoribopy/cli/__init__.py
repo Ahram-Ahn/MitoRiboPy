@@ -3,16 +3,22 @@
 Top-level synopsis::
 
     mitoribopy [--version] [--help]
-    mitoribopy align   [options]   # Phase 3: FASTQ -> BAM + BED + read counts
-    mitoribopy rpf     [options]   # Ribo-seq analysis pipeline from BED / BAM
-    mitoribopy rnaseq  [options]   # Phase 5: DE-table + rpf -> TE / dTE tables + plots
-    mitoribopy all     [options]   # Phase 6: align + rpf + (optional) rnaseq
+    mitoribopy align              [options]   # FASTQ -> BAM + BED + read counts
+    mitoribopy rpf                [options]   # Ribo-seq analysis from BED / BAM
+    mitoribopy rnaseq             [options]   # DE table + rpf -> TE / dTE
+    mitoribopy all                [options]   # align + rpf + (optional) rnaseq
+    mitoribopy migrate-config     <path>      # rewrite legacy YAML keys
+    mitoribopy validate-config    <path>      # schema + cross-stage checks
+    mitoribopy validate-reference [options]   # FASTA / annotation sanity checks
+    mitoribopy validate-figures   <run_dir>   # figure_qc.tsv producer
+    mitoribopy summarize          <run_dir>   # SUMMARY.md / outputs_index.tsv
+    mitoribopy benchmark          [options]   # wall / RSS benchmark harness
 
-Backward compatibility (v0.3.x only, removed in v0.4.0)
--------------------------------------------------------
-Invoking ``mitoribopy`` without a subcommand and passing flags directly
-(``mitoribopy -s h -f ref.fa ...``) is treated as ``mitoribopy rpf ...``
-with a one-time deprecation warning printed to ``stderr``.
+A subcommand is required. The pre-v0.6.0 fallback that re-routed
+``mitoribopy -s h -f ref.fa ...`` to ``mitoribopy rpf ...`` was
+removed in v0.6.0 (publication freeze). Use the explicit form::
+
+    mitoribopy rpf -s h.sapiens -f ref.fa ...
 """
 
 from __future__ import annotations
@@ -120,15 +126,6 @@ def _print_top_help() -> None:
     print(_TOP_HELP.format(rows=rows))
 
 
-def _emit_legacy_fallback_warning(first_flag: str) -> None:
-    sys.stderr.write(
-        "[mitoribopy] DEPRECATION: invoking 'mitoribopy "
-        f"{first_flag} ...' without a subcommand is deprecated. "
-        "Use 'mitoribopy rpf ...' instead. This fallback will be removed "
-        "in v0.4.0.\n"
-    )
-
-
 def main(argv: Iterable[str] | None = None) -> int:
     """Dispatch the top-level ``mitoribopy`` entry point."""
     raw_args = sys.argv[1:] if argv is None else list(argv)
@@ -148,8 +145,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         return _SUBCOMMANDS[first](rest)
 
     if first.startswith("-"):
-        _emit_legacy_fallback_warning(first)
-        return _SUBCOMMANDS["rpf"](args)
+        sys.stderr.write(
+            f"mitoribopy: error: missing subcommand. Got '{first}' as the "
+            "first token, but a subcommand is required as of v0.6.0. "
+            f"Did you mean 'mitoribopy rpf {first} ...'? "
+            "Run 'mitoribopy --help' for the full list.\n"
+        )
+        return 2
 
     sys.stderr.write(
         f"mitoribopy: error: unknown subcommand '{first}'. "

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MitoRiboPy rpf -- exhaustive shell-script template (rpf stage only).
-# Compatible with: MitoRiboPy 0.4.5+
+# Compatible with: MitoRiboPy 0.6.0+
 #
 # Runs only the rpf stage:
 #
@@ -38,7 +38,7 @@ MT_FASTA="${PROJECT_ROOT}/input_data/human-mt-mRNA.fasta"
 BED_DIR="${PROJECT_ROOT}/results/align/bed"
 
 # Optional but recommended -- enables RPM normalization. Comment out the
-# --read_counts_file line below if you do not have one.
+# --read-counts-file line below if you do not have one.
 READ_COUNTS_FILE="${PROJECT_ROOT}/results/align/read_counts.tsv"
 
 # Output directory.
@@ -56,90 +56,90 @@ RPF_OPTS=(
   # --- Core inputs / outputs ---------------------------------------------
   --fasta "${MT_FASTA}"
   --directory "${BED_DIR}"
-  --read_counts_file "${READ_COUNTS_FILE}"
+  --read-counts-file "${READ_COUNTS_FILE}"
   --output "${OUTPUT_DIR}"
-  --bam_mapq 10                    # MAPQ threshold for BAM inputs (BAM->BED6)
+  --bam-mapq 10                    # MAPQ threshold for BAM inputs (BAM->BED6)
 
   # --- Organism / strain -------------------------------------------------
   --strain h.sapiens               # h.sapiens | s.cerevisiae | custom
                                    # Synonyms `h` and `y` are accepted.
-  # --annotation_file "${PROJECT_ROOT}/my_annotation.csv"
+  # --annotation-file "${PROJECT_ROOT}/my_annotation.csv"
                                    # REQUIRED for --strain custom; columns:
                                    # transcript, l_tr, l_utr5, l_utr3 (+ optional
                                    # l_cds, sequence_name, sequence_aliases,
                                    # display_name)
-  # --codon_tables_file "${PROJECT_ROOT}/my_codons.json"
+  # --codon-tables-file "${PROJECT_ROOT}/my_codons.json"
                                    # only when your code is not in the bundled NCBI list
-  # --codon_table_name vertebrate_mitochondrial
+  # --codon-table-name vertebrate_mitochondrial
                                    # NCBI Genetic Code name (e.g. mold_mitochondrial,
                                    # invertebrate_mitochondrial, ...). Run
                                    # `mitoribopy rpf --help` for the full list.
-  # --start_codons ATG ATA         # override strain default
-  --atp8_atp6_baseline ATP6        # ATP6 | ATP8
-  --nd4l_nd4_baseline ND4          # ND4  | ND4L
+  # --start-codons ATG ATA         # override strain default
+  --atp8-atp6-baseline ATP6        # ATP6 | ATP8
+  --nd4l-nd4-baseline ND4          # ND4  | ND4L
 
   # --- RPF length window -------------------------------------------------
-  --footprint_class monosome       # short | monosome | disome | custom
+  --footprint-class monosome       # short | monosome | disome | custom
                                    # short:    h.sapiens / s.cerevisiae 16-24 nt
                                    # monosome: h.sapiens 28-34, s.cerevisiae 37-41
                                    # disome:   h.sapiens 50-70, s.cerevisiae 60-90
   -rpf 29 34                       # explicit [min, max] (overrides footprint_class)
-  --unfiltered_read_length_range 15 50
+  --unfiltered-read-length-range 15 50
 
   # --- Offset enrichment / selection -------------------------------------
   --align stop                     # start | stop -- which anchor codon to align to
   --range 20                       # plot offsets from -range to +range
-  --min_offset 11                  # shared min absolute offset (legacy fallback)
-  --max_offset 20                  # shared max absolute offset (legacy fallback)
-  --rpf_min_count_frac 0.20        # auto-prune read-length bins below 20% of the
+  --min-offset 11                  # shared min absolute offset (legacy fallback)
+  --max-offset 20                  # shared max absolute offset (legacy fallback)
+  --rpf-min-count-frac 0.20        # auto-prune read-length bins below 20% of the
                                    # most-enriched length's count (set 0 to disable).
-  --min_5_offset 10                # end-specific 5' min (preferred)
-  --max_5_offset 22                # end-specific 5' max
-  --min_3_offset 10                # end-specific 3' min
-  --max_3_offset 22                # end-specific 3' max
-  --offset_mask_nt 5               # mask -N..-1 and +1..+N near the anchor codon
-  --offset_pick_reference p_site   # p_site | reported_site
-  --offset_type 5                  # 5 | 3 -- which read end the offset is measured from
-  --offset_site p                  # p | a -- coordinate space of the SELECTED OFFSETS table
-  --analysis_sites both            # p | a | both -- which downstream sites to generate
-  --codon_overlap_mode full        # full | any
-  # --psite_offset 12              # fixed offset for every read length (bypass enrichment)
-  --offset_mode per_sample         # per_sample | combined
+  --min-5-offset 10                # end-specific 5' min (preferred)
+  --max-5-offset 22                # end-specific 5' max
+  --min-3-offset 10                # end-specific 3' min
+  --max-3-offset 22                # end-specific 3' max
+  --offset-mask-nt 5               # mask -N..-1 and +1..+N near the anchor codon
+  --offset-pick-reference p_site   # p_site | reported_site
+  --offset-type 5                  # 5 | 3 -- which read end the offset is measured from
+  --offset-site p                  # p | a -- coordinate space of the SELECTED OFFSETS table
+  --analysis-sites both            # p | a | both -- which downstream sites to generate
+  --codon-overlap-mode full        # full | any
+  # --psite-offset 12              # fixed offset for every read length (bypass enrichment)
+  --offset-mode per_sample         # per_sample | combined
 
   # --- Outputs / plotting ------------------------------------------------
-  --downstream_dir footprint_density
-  --plot_dir offset_diagnostics    # CSVs go to <plot_dir>/csv/, plots to <plot_dir>/plots/.
+  --downstream-dir footprint_density
+  --plot-dir offset_diagnostics    # CSVs go to <plot_dir>/csv/, plots to <plot_dir>/plots/.
                                    # Per-sample offsets at <plot_dir>/csv/per_sample_offset/.
-  --plot_format svg                # png | pdf | svg
-  --line_plot_style combined       # combined | separate
-  --cap_percentile 0.999
-  --codon_density_window           # smooth codon-density with +/-1 nt window
-  # --x_breaks 10 20 30            # custom x-axis tick marks for offset line plots
-  # --order_samples ctrl_1 ctrl_2 kd_1 kd_2
+  --plot-format svg                # png | pdf | svg
+  --line-plot-style combined       # combined | separate
+  --cap-percentile 0.999
+  --codon-density-window           # smooth codon-density with +/-1 nt window
+  # --x-breaks 10 20 30            # custom x-axis tick marks for offset line plots
+  # --order-samples ctrl_1 ctrl_2 kd_1 kd_2
 
   # --- Read-count normalization -----------------------------------------
-  --rpm_norm_mode total            # total | mt_mrna
-  --mt_mrna_substring_patterns mt_genome mt-mrna mt_mrna
-  # --read_counts_sample_col Sample
-  # --read_counts_reads_col Reads
-  # --read_counts_reference_col Reference
+  --rpm-norm-mode total            # total | mt_mrna
+  --mt-mrna-substring-patterns mt_genome mt-mrna mt_mrna
+  # --read-counts-sample-col Sample
+  # --read-counts-reads-col Reads
+  # --read-counts-reference-col Reference
 
   # --- Optional modules --------------------------------------------------
-  # --structure_density
-  # --structure_density_norm_perc 0.99
-  --cor_plot                       # publication-quality codon-correlation scatter,
+  # --structure-density
+  # --structure-density-norm-perc 0.99
+  --cor-plot                       # publication-quality codon-correlation scatter,
                                    # one folder per requested site (P, A) when both
                                    # are generated.
-  --base_sample WT_R1              # required by --cor_plot; change to YOUR reference.
-  # --cor_mask_method percentile   # percentile | fixed | none
-  # --cor_mask_percentile 0.99
-  # --cor_mask_threshold 1.5
+  --base-sample WT_R1              # required by --cor-plot; change to YOUR reference.
+  # --cor-mask-method percentile   # percentile | fixed | none
+  # --cor-mask-percentile 0.99
+  # --cor-mask-threshold 1.5
 
   # --- Read-coverage outputs (default: both raw and rpm) ------------------
   --no-read_coverage_raw           # skip read_coverage_raw[_codon]/ folders.
                                    # The RPM track below is what most users want.
-  --read_coverage_rpm              # write read_coverage_rpm[_codon]/ folders.
-  --igv_export                     # write IGV-loadable BedGraph tracks under
+  --read-coverage-rpm              # write read_coverage_rpm[_codon]/ folders.
+  --igv-export                     # write IGV-loadable BedGraph tracks under
                                    # igv_tracks/<sample>/<sample>_{p,a}_site.bedgraph.
 
   # --- Shared --------------------------------------------------------------

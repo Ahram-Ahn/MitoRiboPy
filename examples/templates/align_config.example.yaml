@@ -26,7 +26,12 @@
 # --- Inputs / outputs --------------------------------------------------
 # These are usually passed on the command line because they vary per
 # run; uncomment if you want them pinned in the config.
-# fastq_dir: input_data/seq            # legacy alias for the directory form of `fastq:`
+#
+# Inputs are either a directory string OR an explicit list of paths --
+# both go under the same `fastq:` key. The legacy `fastq_dir:` spelling
+# is still accepted as a silent alias by `mitoribopy migrate-config`,
+# but is no longer documented as a public option.
+# fastq: input_data/seq                # directory shortcut
 # fastq:                               # OR a list of explicit paths
 #   - input_data/seq/sampleA.fq.gz
 #   - input_data/seq/sampleB.fq.gz

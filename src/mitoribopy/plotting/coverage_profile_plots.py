@@ -428,7 +428,7 @@ def run_coverage_profile_plots(
             "COVERAGE",
             "Reading total_mrna_map from args is deprecated; pass "
             "total_mrna_map=... as a keyword argument instead. "
-            "The args fallback will be removed in v0.4.0.",
+            "The args fallback will be removed in v0.7.0.",
         )
         resolved_totals = args.total_mrna_map
     else:

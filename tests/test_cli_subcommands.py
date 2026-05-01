@@ -46,24 +46,19 @@ def test_unknown_subcommand_errors(capsys) -> None:
     assert "unknown subcommand" in captured.err
 
 
-# ---------- legacy backward-compat fallback ----------------------------------
+# ---------- legacy backward-compat fallback (removed in v0.6.0) -------------
 
 
-def test_legacy_flag_first_routes_to_rpf_with_warning(monkeypatch, capsys) -> None:
-    captured_argv: dict[str, list[str]] = {}
-
-    def fake_run_pipeline_cli(argv):
-        captured_argv["argv"] = list(argv)
-        return 7
-
-    monkeypatch.setattr(cli, "run_pipeline_cli", fake_run_pipeline_cli)
-
+def test_legacy_no_subcommand_invocation_fails_with_clear_message(capsys) -> None:
+    """Pre-v0.6.0 'mitoribopy -s h -f ref.fa ...' was silently routed to
+    'mitoribopy rpf ...' with a deprecation warning. v0.6.0 removed that
+    fallback for the publication freeze; the call must now exit with a
+    non-zero status and a message that points at the right subcommand."""
     exit_code = cli.main(["-s", "h", "-f", "tiny.fa"])
     captured = capsys.readouterr()
 
-    assert exit_code == 7
-    assert captured_argv["argv"] == ["-s", "h", "-f", "tiny.fa"]
-    assert "DEPRECATION" in captured.err
+    assert exit_code == 2
+    assert "missing subcommand" in captured.err
     assert "mitoribopy rpf" in captured.err
 
 

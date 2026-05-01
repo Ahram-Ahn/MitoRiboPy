@@ -9,6 +9,49 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 (no changes pending)
 
+## [0.6.0] - 2026-05-01
+
+### Publication-readiness freeze (refactor-4)
+
+Manuscript-target release. The blocking issues identified in the
+2026-05-01 publication-readiness audit are addressed; no new
+biological features.
+
+### Removed
+- **Pre-subcommand fallback removed.** Invoking `mitoribopy <flags>`
+  without an explicit subcommand previously routed to `mitoribopy rpf`
+  with a one-line deprecation warning that incorrectly claimed the
+  fallback would be removed in v0.4.0. The fallback is now removed
+  for real; the call exits with code 2 and a clear message that
+  points at the right subcommand. Always use `mitoribopy rpf …`,
+  `mitoribopy align …`, etc.
+
+### Changed
+- **`mitoribopy rpf` parser: hyphen-style flags are now canonical.**
+  Every flag that was previously underscore-only (`--offset_type`,
+  `--min_5_offset`, `--codon_density_window`, `--mt_mrna_substring_patterns`,
+  …) now has a hyphenated public form (`--offset-type`,
+  `--min-5-offset`, `--codon-density-window`,
+  `--mt-mrna-substring-patterns`, …). Underscore aliases continue to
+  parse for one transition cycle but are no longer surfaced in
+  `--help` or in the `mitoribopy all` dry-run plan. The parser
+  also reports as `mitoribopy rpf` rather than the bare `mitoribopy`,
+  and its examples and `--config` metavar describe the modern
+  YAML / JSON / TOML inputs.
+- **`mitoribopy all` orchestrator emits hyphenated argv for every
+  stage.** The previous rpf-specific underscore special-case in
+  `_dict_to_argv` is now legacy-only; `align`, `rpf`, and `rnaseq`
+  all receive the same hyphenated flag style. The underscore mode
+  is still selectable but is not used by any first-party call site.
+
+### Docs
+- Quick-start, CLI reference, and config schema now lead with the
+  canonical hyphenated rpf flags. The `--merge_density` /
+  `--mrna_ref_patterns` / `selected_site` aliases are still listed
+  under "Synonyms" with their canonical replacements.
+- Tutorials and the `examples/templates/run_*.example.sh` scripts
+  are rewritten to use hyphenated flags.
+
 ## [0.5.1] - 2026-04-28
 
 ### Added

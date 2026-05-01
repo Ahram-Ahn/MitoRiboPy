@@ -149,22 +149,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         metavar="PRESET",
         help=(
-            "Library-prep adapter family. 'auto' (default) runs per-sample "
-            "adapter detection and resolves the kit independently for each "
-            "input FASTQ; mixed-kit and mixed-UMI runs are supported. "
-            "Canonical presets organized by adapter family:\n"
-            "  illumina_smallrna     Illumina TruSeq Small RNA adapter, no UMI\n"
-            "  illumina_truseq       Illumina TruSeq Read 1 adapter, no UMI "
-            "(NEBNext Small RNA, TruSeq Stranded Total, SMARTer Pico v3, "
-            "SEQuoia Express, …)\n"
-            "  illumina_truseq_umi   Same adapter + 8 nt 5' UMI (NEBNext Ultra "
-            "II UMI, SEQuoia Complete UMI, …)\n"
-            "  qiaseq_mirna          QIAseq miRNA adapter + 12 nt 3' UMI\n"
-            "  pretrimmed            FASTQs already adapter-trimmed; cutadapt "
-            "skips the -a flag\n"
-            "  custom                requires --adapter <SEQ>\n"
-            "Legacy vendor names (truseq_smallrna, nebnext_smallrna, "
-            "nebnext_ultra_umi, …) remain accepted as aliases."
+            "Library-prep adapter / UMI preset. Default 'auto' detects "
+            "per sample (mixed-kit batches OK). Use 'custom' with "
+            "--adapter <SEQ>. Canonical choices: "
+            "illumina_smallrna | illumina_truseq | illumina_truseq_umi | "
+            "qiaseq_mirna | pretrimmed | custom. Legacy vendor aliases "
+            "(truseq_smallrna, nebnext_smallrna, nebnext_ultra_umi, …) "
+            "are accepted but not shown in --help; the full vendor "
+            "mapping lives in README → Adapter / UMI presets."
         ),
     )
     library.add_argument(
@@ -236,11 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Demote read_counts.tsv invariant violations from errors "
-            "to warnings (recorded in warnings.tsv). The default is "
-            "to fail the run on any violation, since a real violation "
-            "indicates a bug somewhere upstream. Use only when "
-            "debugging with deliberately broken inputs."
+            "DEVELOPER / DEBUG ONLY. Demote read_counts.tsv invariant "
+            "violations from errors to warnings. The default is to fail "
+            "the run on any violation, since a real violation indicates "
+            "a bug somewhere upstream. NEVER use for a publication run "
+            "(`mitoribopy all --strict` will reject this flag too)."
         ),
     )
     library.add_argument(
@@ -1277,6 +1269,14 @@ def run(argv: Iterable[str]) -> int:
     # P5.6: --strict-publication-mode gate.
     if getattr(args, "strict_publication_mode", False):
         strict_errors = _strict_publication_mode_errors(resolutions)
+        # Refactor-4 (report §3.2.E): a publication run must never demote
+        # the read-count invariant check to a warning, even by accident.
+        if getattr(args, "allow_count_invariant_warning", False):
+            strict_errors.append(
+                "--allow-count-invariant-warning is incompatible with "
+                "--strict-publication-mode (it is a developer / debug "
+                "escape hatch, not a publication switch)."
+            )
         if strict_errors:
             for line in strict_errors:
                 log_error("ALIGN", line)

@@ -110,27 +110,42 @@ Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no N
 
 ## Installation
 
-### From PyPI (recommended)
+### Publication / manuscript compatibility
 
-```bash
-python -m pip install mitoribopy
-```
+| What | Value |
+|---|---|
+| Manuscript-target version | **v0.6.0** (publication freeze) |
+| Minimum supported version | v0.6.0 |
+| Verify installed version | `mitoribopy --version` |
+| Git tag | `v0.6.0` |
 
-The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). This pulls in every Python dependency (`numpy`, `pandas`, `matplotlib`, `seaborn`, `biopython`, `scipy`, `PyYAML`, `pysam`) automatically. The external bioinformatics tools (`cutadapt`, `bowtie2`, `umi_tools`, …) still need to be on `$PATH` separately — see [External tool dependencies](#external-tool-dependencies) below.
+The README, CLI help, and `examples/templates/` in this repository all describe the **v0.6.0** interface. Older PyPI builds (≤ v0.5.1) shipped a different rpf flag style and a now-removed no-subcommand fallback; do not pin to those for a publication-grade reanalysis.
 
-### From source (latest development version)
+### From source (recommended for the manuscript build)
 
 ```bash
 git clone https://github.com/Ahram-Ahn/MitoRiboPy.git
 cd MitoRiboPy
+git checkout v0.6.0          # exact manuscript version; omit for HEAD
 python -m pip install -e .
+mitoribopy --version          # MUST print 0.6.0 or later
 ```
 
-Use this when you need a fix or feature that has not yet been released to PyPI. For development and tests, install the dev extras:
+This pulls every Python dependency (`numpy`, `pandas`, `matplotlib`, `seaborn`, `biopython`, `scipy`, `PyYAML`, `pysam`) automatically. The external bioinformatics tools (`cutadapt`, `bowtie2`, `umi_tools`, …) still need to be on `$PATH` separately — see [External tool dependencies](#external-tool-dependencies) below.
+
+For development and tests, add the dev extras:
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
+
+### From PyPI
+
+```bash
+python -m pip install 'mitoribopy>=0.6.0'
+```
+
+The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). Pin the lower bound (`>=0.6.0`) so a stale PyPI cache cannot install a pre-publication-freeze build.
 
 ### Verify the install
 
@@ -190,19 +205,73 @@ mitoribopy all --config pipeline_config.yaml --output results/
 
 The matching shell-script templates are at [examples/templates/run_align.example.sh](examples/templates/run_align.example.sh), [examples/templates/run_rpf.example.sh](examples/templates/run_rpf.example.sh), and [examples/templates/run_pipeline.example.sh](examples/templates/run_pipeline.example.sh) — pick those if you prefer per-stage commands you can split across cluster jobs.
 
-A minimal `pipeline_config.yaml` for a typical human mt-Ribo-seq run looks like this (annotated):
+### Publication-safe recipe
+
+Use this recipe for any run that backs a manuscript, preprint, or shared dataset. **One switch — `mitoribopy all --strict` — turns on every publication-readiness gate** (config preflight, align strict-publication-mode, post-run figure QC, warning promotion). Each step also leaves a self-auditing artifact you can drop into a methods section.
+
+```bash
+# 0. Pin the manuscript version
+python -m pip install 'mitoribopy>=0.6.0'
+mitoribopy --version
+
+# 1. Optional pre-flights (also run automatically by --strict below)
+mitoribopy validate-config pipeline_config.yaml --strict
+mitoribopy validate-reference \
+    --fasta references/human_mt_transcriptome.fa \
+    --strain h.sapiens
+
+# 2. Dry-run to inspect the per-stage commands the orchestrator will issue
+mitoribopy all --config pipeline_config.yaml --output results/full_run --dry-run
+
+# 3. Run, publication-safe, with structured progress events for audit logs
+mitoribopy all \
+    --config pipeline_config.yaml \
+    --output results/full_run \
+    --strict \
+    --progress jsonl \
+    --progress-file results/full_run/progress.jsonl
+```
+
+That single `--strict` invocation:
+
+* runs `validate-config --strict` up-front and aborts before any stage if a deprecated key, unknown key, or missing input is found,
+* forwards `--strict-publication-mode` into the align stage so non-default policies that would invalidate a publication run fail-fast,
+* writes `<output>/canonical_config.yaml` (the fully-resolved config the run actually executed — auto-wiring + sample-sheet expansion + rnaseq-mode resolution applied) so a reviewer can diff it against your input config,
+* runs `validate-figures --strict` after the pipeline finishes, promoting warn-only QC findings to fail in `figure_qc.tsv`,
+* still emits `SUMMARY.md`, `outputs_index.tsv`, `warnings.tsv`, and `progress.jsonl` regardless of the strictness gates.
+
+For TE / ΔTE, the publication route is `--rnaseq-mode de_table`: run a full-transcriptome DESeq2 / Xtail / Anota2Seq externally and feed the table back. The in-tree from-FASTQ path runs pyDESeq2 on the **mt-mRNA subset only** and is exploratory; n=1 designs fail-fast unless you pass `--allow-pseudo-replicates-for-demo-not-publication`.
 
 ```yaml
+# Publication TE route (place under `rnaseq:` in your pipeline_config.yaml).
+rnaseq:
+  rnaseq_mode: de_table
+  de_table: external_full_transcriptome_deseq2.tsv
+  reference_gtf: references/gencode_or_refseq.gtf   # SHA-gated against rpf
+  gene_id_convention: hgnc                          # or ensembl / refseq / mt_prefixed / bare
+  base_sample: WT
+  compare_sample: KO
+```
+
+A minimal `pipeline_config.yaml` for a typical human mt-Ribo-seq run looks like this (annotated). **The recommended idiom is a top-level `samples:` block** — a single TSV that names every Ribo-seq and (optional) RNA-seq FASTQ once, and is auto-wired into both the align and rnaseq stages. `align.fastq:` is still accepted as a standalone shortcut for a single-stage run.
+
+```yaml
+# Top-level: unified per-project sample sheet (recommended). The same
+# TSV drives both align (Ribo-seq rows) and rnaseq (RNA-seq rows). See
+# `mitoribopy --help` and docs/reference/sample_sheet_schema.md for
+# the column reference. Pairings between Ribo-seq and RNA-seq are by
+# sample_id, never by index.
+samples:
+  table: samples.tsv
+
 align:
-  # Per-sample auto detection; explicit kit_preset becomes a fallback.
+  # Per-sample auto detection; an explicit kit_preset is the fallback
+  # when the per-sample column is empty.
   kit_preset: auto                # auto | illumina_smallrna | illumina_truseq |
                                   # illumina_truseq_umi | qiaseq_mirna |
                                   # pretrimmed | custom
   adapter_detection: auto         # auto | off | strict
   library_strandedness: forward
-  # Pass a directory string (auto-glob of *.fq, *.fq.gz, *.fastq, *.fastq.gz)
-  # OR an explicit list of paths.
-  fastq: input_data/seq
   contam_index: input_data/indexes/rrna_contam
   mt_index: input_data/indexes/mt_tx
   mapq: 10
@@ -214,13 +283,16 @@ rpf:
   strain: h.sapiens               # human mt-mRNA reference + codon table
   fasta: input_data/human-mt-mRNA.fasta
   footprint_class: monosome       # short | monosome | disome | custom
-  rpf: [29, 34]                   # filtered RPF length range
+  rpf: [29, 34]                   # filtered RPF length range (overrides
+                                  # footprint_class only when needed)
   align: stop                     # anchor offsets at the stop codon
   offset_type: "5"                # offsets reported from the read 5' end
-  offset_site: p                  # selection coordinate space (P-site)
+  offset_site: p                  # coordinate space of the SELECTED OFFSETS
+                                  # table (controls offset_applied.csv only)
   offset_pick_reference: p_site
   offset_mode: per_sample         # per-sample offsets drive downstream
-  analysis_sites: both            # write BOTH P-site and A-site outputs
+  analysis_sites: both            # which downstream P-site/A-site outputs
+                                  # to generate (independent of offset_site)
   min_5_offset: 10
   max_5_offset: 22
   min_3_offset: 10
@@ -229,6 +301,8 @@ rpf:
   plot_format: svg
   codon_density_window: true
 ```
+
+> `offset_site` controls the coordinate system of the selected-offset table. `analysis_sites` controls which downstream P-site / A-site outputs are produced. They are independent — for example, you can pick offsets in P-site space and still emit both P-site and A-site coverage profiles.
 
 After the run, you'll have:
 

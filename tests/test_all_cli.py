@@ -201,17 +201,20 @@ def test_all_dry_run_with_config_lists_per_stage_argv(tmp_path, capsys) -> None:
     assert "rpf: " in out
     assert "rnaseq: " in out
     assert "--gene-id-convention hgnc" in out
-    # rpf uses underscored flag style because pipeline.runner declares
-    # --read_counts_file that way. The orchestrator must emit it verbatim.
-    assert "--read_counts_file" in out
+    # As of v0.6.0 the rpf parser accepts hyphenated flags as the
+    # canonical public form, so the orchestrator emits --read-counts-file.
+    # The underscore form (--read_counts_file) is still parsable as a
+    # legacy alias but is no longer surfaced through the orchestrator.
+    assert "--read-counts-file" in out
 
 
 def test_all_show_stage_help_prints_full_stage_help(capsys) -> None:
     exit_code = cli.main(["all", "--show-stage-help", "rpf"])
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert "Run the standalone MitoRiboPy Ribo-seq pipeline." in out
-    assert "--unfiltered_read_length_range" in out
+    assert "Run the MitoRiboPy Ribo-seq analysis stage" in out
+    # Hyphenated form is canonical as of v0.6.0; verify the help surfaces it.
+    assert "--unfiltered-read-length-range" in out
 
 
 def test_all_print_config_template_exits_zero_with_all_three_sections(capsys) -> None:
@@ -229,9 +232,11 @@ def test_all_print_config_template_exits_zero_with_all_three_sections(capsys) ->
     assert "align" in parsed and "rpf" in parsed
 
 
-def test_all_dry_run_rpf_section_uses_underscored_flags(tmp_path, capsys) -> None:
-    """Regression: the rpf parser declares --offset_type with underscores,
-    so the dry-run plan must emit underscored flags for rpf."""
+def test_all_dry_run_rpf_section_uses_hyphenated_flags(tmp_path, capsys) -> None:
+    """As of v0.6.0 the rpf parser accepts hyphenated flags as the
+    canonical public form, so the dry-run plan must emit them. The
+    underscored aliases still parse but are no longer surfaced through
+    the orchestrator."""
     cfg = tmp_path / "p.yaml"
     cfg.write_text(
         "rpf:\n"
@@ -249,11 +254,11 @@ def test_all_dry_run_rpf_section_uses_underscored_flags(tmp_path, capsys) -> Non
     ])
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert "--offset_type 5" in out
-    assert "--offset-type" not in out
+    assert "--offset-type 5" in out
+    assert "--offset_type 5" not in out
     assert "-rpf" not in out  # absent because this config did not set rpf
-    assert "--min_5_offset 10" in out
-    assert "--codon_density_window" in out
+    assert "--min-5-offset 10" in out
+    assert "--codon-density-window" in out
 
 
 # ---------- required args ---------------------------------------------------

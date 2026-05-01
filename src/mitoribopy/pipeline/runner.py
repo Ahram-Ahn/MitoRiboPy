@@ -27,24 +27,30 @@ def configure_plot_defaults() -> None:
 def build_parser(defaults: dict) -> argparse.ArgumentParser:
     """Build the standalone package CLI parser."""
     parser = argparse.ArgumentParser(
-        prog="mitoribopy",
+        prog="mitoribopy rpf",
         description=(
-            "Run the standalone MitoRiboPy Ribo-seq pipeline.\n"
-            "This CLI filters BED inputs, estimates offsets, and then generates\n"
-            "translation-profile, codon, coverage-profile, and optional\n"
-            "RNA-seq/structure-density outputs."
+            "Run the MitoRiboPy Ribo-seq analysis stage on BED / BAM inputs.\n"
+            "This subcommand filters reads, estimates P-site / A-site offsets,\n"
+            "and then generates translation-profile, codon, coverage-profile,\n"
+            "and optional RNA-seq / structure-density outputs."
         ),
         epilog=(
             "Examples:\n"
-            "  mitoribopy -s h -f ref.fa --directory beds -rpf 29 34 --align stop \\\n"
-            "    --offset_type 5 --offset_site p --offset_mask_nt 5 --output output -m\n"
-            "  mitoribopy ... --min_5_offset 10 --max_5_offset 22 \\\n"
-            "    --min_3_offset 12 --max_3_offset 30\n"
-            "  mitoribopy -s custom -f ref.fa --directory beds --annotation_file ann.csv \\\n"
-            "    --codon_tables_file codon_tables.json --codon_table_name standard\n"
+            "  mitoribopy rpf --strain h.sapiens --fasta ref.fa --directory beds \\\n"
+            "                 -rpf 29 34 --align stop --offset-type 5 \\\n"
+            "                 --offset-site p --offset-mask-nt 5 --output out \\\n"
+            "                 --codon-density-window\n"
+            "  mitoribopy rpf ... --min-5-offset 10 --max-5-offset 22 \\\n"
+            "                     --min-3-offset 12 --max-3-offset 30\n"
+            "  mitoribopy rpf --strain custom --fasta ref.fa --directory beds \\\n"
+            "                 --annotation-file ann.csv \\\n"
+            "                 --codon-tables-file codon_tables.json \\\n"
+            "                 --codon-table-name standard\n"
             "\n"
             "Tip: prefer the end-specific 5'/3' offset bounds.\n"
-            "Use --min_offset/--max_offset only as shared fallback bounds."
+            "Use --min-offset / --max-offset only as shared fallback bounds.\n"
+            "Underscore-style flags (--offset_type, --min_5_offset, ...) are\n"
+            "still accepted for one transition cycle but no longer shown here."
         ),
         formatter_class=MitoRiboPyHelpFormatter,
     )
@@ -58,8 +64,12 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     core_group.add_argument(
         "--config",
         default=None,
-        metavar="CONFIG.json",
-        help="Optional JSON config file. CLI arguments override values from this file.",
+        metavar="CONFIG",
+        help=(
+            "Optional config file (.yaml, .yml, .json, or .toml; format "
+            "auto-detected by extension). CLI arguments override values "
+            "from this file."
+        ),
     )
     core_group.add_argument(
         "-f",
@@ -107,6 +117,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     directory_action.default_display = "current working directory"
     core_group.add_argument(
+        "--bam-mapq",
         "--bam_mapq",
         type=int,
         default=defaults["bam_mapq"],
@@ -131,6 +142,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         "disome   h.sapiens: 50-70, s.cerevisiae: 60-90"
     )
     footprint_action = core_group.add_argument(
+        "--footprint-class",
         "--footprint_class",
         choices=["short", "monosome", "disome", "custom"],
         default=defaults["footprint_class"],
@@ -155,6 +167,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     footprint_action.default_display = "monosome"
     core_group.add_argument(
+        "--annotation-file",
         "--annotation_file",
         default=defaults["annotation_file"],
         metavar="ANNOTATION.csv",
@@ -169,6 +182,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     core_group.add_argument(
+        "--codon-tables-file",
         "--codon_tables_file",
         default=defaults["codon_tables_file"],
         metavar="CODON_TABLES.json",
@@ -182,6 +196,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     codon_table_action = core_group.add_argument(
+        "--codon-table-name",
         "--codon_table_name",
         default=defaults["codon_table_name"],
         metavar="TABLE_NAME",
@@ -218,6 +233,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         "s.cerevisiae: yeast_mitochondrial"
     )
     start_codons_action = core_group.add_argument(
+        "--start-codons",
         "--start_codons",
         nargs="+",
         default=defaults["start_codons"],
@@ -229,6 +245,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     start_codons_action.default_display = "y: ATG, h: ATG ATA, custom: ATG"
     core_group.add_argument(
+        "--atp8-atp6-baseline",
         "--atp8_atp6_baseline",
         choices=["ATP6", "ATP8"],
         default=defaults["atp8_atp6_baseline"],
@@ -238,6 +255,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     core_group.add_argument(
+        "--nd4l-nd4-baseline",
         "--nd4l_nd4_baseline",
         choices=["ND4", "ND4L"],
         default=defaults["nd4l_nd4_baseline"],
@@ -262,6 +280,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Plot offsets from -range to +range around the chosen anchor codon.",
     )
     offset_group.add_argument(
+        "--min-offset",
         "--min_offset",
         type=int,
         default=defaults["min_offset"],
@@ -272,6 +291,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     offset_group.add_argument(
+        "--max-offset",
         "--max_offset",
         type=int,
         default=defaults["max_offset"],
@@ -282,6 +302,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     offset_group.add_argument(
+        "--rpf-min-count-frac",
         "--rpf_min_count_frac",
         type=float,
         default=defaults["rpf_min_count_frac"],
@@ -297,6 +318,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     min_5_action = offset_group.add_argument(
+        "--min-5-offset",
         "--min_5_offset",
         type=int,
         default=defaults["min_5_offset"],
@@ -305,6 +327,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     min_5_action.default_display = "same as --min_offset"
     max_5_action = offset_group.add_argument(
+        "--max-5-offset",
         "--max_5_offset",
         type=int,
         default=defaults["max_5_offset"],
@@ -313,6 +336,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     max_5_action.default_display = "same as --max_offset"
     min_3_action = offset_group.add_argument(
+        "--min-3-offset",
         "--min_3_offset",
         type=int,
         default=defaults["min_3_offset"],
@@ -321,6 +345,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     min_3_action.default_display = "same as --min_offset"
     max_3_action = offset_group.add_argument(
+        "--max-3-offset",
         "--max_3_offset",
         type=int,
         default=defaults["max_3_offset"],
@@ -329,6 +354,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     max_3_action.default_display = "same as --max_offset"
     offset_group.add_argument(
+        "--offset-mask-nt",
         "--offset_mask_nt",
         type=int,
         default=defaults["offset_mask_nt"],
@@ -339,6 +365,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     offset_group.add_argument(
+        "--offset-pick-reference",
         "--offset_pick_reference",
         choices=["reported_site", "p_site", "selected_site"],
         default=defaults["offset_pick_reference"],
@@ -358,6 +385,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     offset_group.add_argument(
+        "--offset-type",
         "--offset_type",
         choices=["5", "3"],
         default=defaults["offset_type"],
@@ -368,6 +396,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     offset_group.add_argument(
+        "--offset-site",
         "--offset_site",
         choices=["p", "a"],
         default=defaults["offset_site"],
@@ -380,6 +409,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     offset_group.add_argument(
+        "--analysis-sites",
         "--analysis_sites",
         choices=["p", "a", "both"],
         default=defaults.get("analysis_sites", "both"),
@@ -394,6 +424,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     offset_group.add_argument(
+        "--codon-overlap-mode",
         "--codon_overlap_mode",
         choices=["full", "any"],
         default=defaults["codon_overlap_mode"],
@@ -413,6 +444,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     offset_group.add_argument(
         "-p",
+        "--psite-offset",
         "--psite_offset",
         type=int,
         default=defaults["psite_offset"],
@@ -423,6 +455,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     offset_group.add_argument(
+        "--offset-mode",
         "--offset_mode",
         choices=["per_sample", "combined"],
         default=defaults.get("offset_mode", "per_sample"),
@@ -447,23 +480,27 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Base output directory for all pipeline results, including mitoribopy.log.",
     )
     output_group.add_argument(
+        "--downstream-dir",
         "--downstream_dir",
         default=defaults["downstream_dir"],
         help="Per-sample subdirectory name for frame and codon analyses.",
     )
     output_group.add_argument(
+        "--plot-dir",
         "--plot_dir",
         default=defaults["plot_dir"],
         help="Shared subdirectory name for offset CSV files and plots.",
     )
     output_group.add_argument(
         "-fmt",
+        "--plot-format",
         "--plot_format",
         choices=["png", "pdf", "svg"],
         default=defaults["plot_format"],
         help="File format used for saved plots.",
     )
     output_group.add_argument(
+        "--x-breaks",
         "--x_breaks",
         nargs="+",
         type=int,
@@ -472,12 +509,14 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Optional custom x-axis tick marks for offset line plots.",
     )
     output_group.add_argument(
+        "--line-plot-style",
         "--line_plot_style",
         choices=["combined", "separate"],
         default=defaults["line_plot_style"],
         help="Draw offset line plots in one combined panel or separate 5'/3' panels.",
     )
     output_group.add_argument(
+        "--cap-percentile",
         "--cap_percentile",
         type=float,
         default=defaults["cap_percentile"],
@@ -485,6 +524,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
     )
     output_group.add_argument(
         "-m",
+        "--codon-density-window",
         "--codon_density_window",
         "--merge_density",
         dest="codon_density_window",
@@ -501,18 +541,21 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     output_group.add_argument(
+        "--order-samples",
         "--order_samples",
         nargs="+",
         default=defaults["order_samples"],
         help="Optional sample order for Ribo-seq plots and aggregated outputs.",
     )
     normalization_group.add_argument(
+        "--read-counts-file",
         "--read_counts_file",
         default=defaults["read_counts_file"],
         metavar="COUNTS_TABLE",
         help="Read-count table for RPM normalization (.csv, .tsv, or .txt; delimiter auto-detected).",
     )
     normalization_group.add_argument(
+        "--read-counts-sample-col",
         "--read_counts_sample_col",
         default=defaults["read_counts_sample_col"],
         help=(
@@ -521,6 +564,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     normalization_group.add_argument(
+        "--read-counts-reads-col",
         "--read_counts_reads_col",
         default=defaults["read_counts_reads_col"],
         help=(
@@ -529,6 +573,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     normalization_group.add_argument(
+        "--unfiltered-read-length-range",
         "--unfiltered_read_length_range",
         nargs=2,
         type=int,
@@ -540,6 +585,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     normalization_group.add_argument(
+        "--rpm-norm-mode",
         "--rpm_norm_mode",
         choices=["total", "mt_mrna"],
         default=defaults["rpm_norm_mode"],
@@ -551,6 +597,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     normalization_group.add_argument(
+        "--read-counts-reference-col",
         "--read_counts_reference_col",
         default=defaults["read_counts_reference_col"],
         help=(
@@ -559,6 +606,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     normalization_group.add_argument(
+        "--mt-mrna-substring-patterns",
         "--mt_mrna_substring_patterns",
         "--mrna_ref_patterns",
         dest="mt_mrna_substring_patterns",
@@ -579,47 +627,55 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     optional_group.add_argument(
+        "--structure-density",
         "--structure_density",
         action="store_true",
         default=defaults["structure_density"],
         help="Generate structure-density exports from footprint-density tables.",
     )
     optional_group.add_argument(
+        "--structure-density-norm-perc",
         "--structure_density_norm_perc",
         type=float,
         default=defaults["structure_density_norm_perc"],
         help="Upper percentile used to cap and scale structure-density values.",
     )
     optional_group.add_argument(
+        "--cor-plot",
         "--cor_plot",
         action="store_true",
         default=defaults["cor_plot"],
         help="Generate codon-correlation plots.",
     )
     optional_group.add_argument(
+        "--base-sample",
         "--base_sample",
         default=defaults["base_sample"],
         help="Reference sample for codon-correlation comparisons.",
     )
     optional_group.add_argument(
+        "--cor-mask-method",
         "--cor_mask_method",
         choices=["percentile", "fixed", "none"],
         default=defaults["cor_mask_method"],
         help="Masking rule for extreme codon-correlation outliers.",
     )
     optional_group.add_argument(
+        "--cor-mask-percentile",
         "--cor_mask_percentile",
         type=float,
         default=defaults["cor_mask_percentile"],
         help="Percentile cutoff used when --cor_mask_method percentile.",
     )
     optional_group.add_argument(
+        "--cor-mask-threshold",
         "--cor_mask_threshold",
         type=float,
         default=defaults["cor_mask_threshold"],
         help="Fixed absolute cutoff used when --cor_mask_method fixed.",
     )
     optional_group.add_argument(
+        "--read-coverage-raw",
         "--read_coverage_raw",
         action=argparse.BooleanOptionalAction,
         default=defaults["read_coverage_raw"],
@@ -630,6 +686,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     optional_group.add_argument(
+        "--read-coverage-rpm",
         "--read_coverage_rpm",
         action=argparse.BooleanOptionalAction,
         default=defaults["read_coverage_rpm"],
@@ -640,6 +697,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     optional_group.add_argument(
+        "--igv-export",
         "--igv_export",
         action=argparse.BooleanOptionalAction,
         default=defaults["igv_export"],
@@ -671,12 +729,12 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
     parser = build_parser(defaults)
     args = parser.parse_args(argv_list)
 
-    # Canonicalise the deprecated --offset_pick_reference value at the
+    # Canonicalise the deprecated --offset-pick-reference value at the
     # CLI boundary so every downstream consumer sees the new name and
     # the user gets one (and only one) deprecation line.
     if getattr(args, "offset_pick_reference", None) == "selected_site":
         _warn_deprecated(
-            "--offset_pick_reference selected_site -> reported_site "
+            "--offset-pick-reference selected_site -> reported_site "
             "(same behaviour, clearer name)."
         )
         args.offset_pick_reference = "reported_site"
@@ -691,29 +749,29 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
         args.max_3_offset = args.max_offset
 
     if args.min_offset > args.max_offset:
-        parser.error("--min_offset cannot be greater than --max_offset")
+        parser.error("--min-offset cannot be greater than --max-offset")
     if args.min_5_offset > args.max_5_offset:
-        parser.error("--min_5_offset cannot be greater than --max_5_offset")
+        parser.error("--min-5-offset cannot be greater than --max-5-offset")
     if args.min_3_offset > args.max_3_offset:
-        parser.error("--min_3_offset cannot be greater than --max_3_offset")
+        parser.error("--min-3-offset cannot be greater than --max-3-offset")
     if args.offset_mask_nt < 0:
-        parser.error("--offset_mask_nt must be zero or a positive integer")
+        parser.error("--offset-mask-nt must be zero or a positive integer")
     if args.range <= 0:
         parser.error("--range must be a positive integer")
     if args.cap_percentile <= 0 or args.cap_percentile > 1:
-        parser.error("--cap_percentile must be in (0, 1]")
+        parser.error("--cap-percentile must be in (0, 1]")
     if len(args.unfiltered_read_length_range) != 2:
-        parser.error("--unfiltered_read_length_range requires MIN_LEN MAX_LEN")
+        parser.error("--unfiltered-read-length-range requires MIN_LEN MAX_LEN")
     if int(args.unfiltered_read_length_range[0]) > int(args.unfiltered_read_length_range[1]):
         parser.error(
-            "--unfiltered_read_length_range MIN_LEN cannot be greater than MAX_LEN"
+            "--unfiltered-read-length-range MIN_LEN cannot be greater than MAX_LEN"
         )
     if args.structure_density_norm_perc <= 0 or args.structure_density_norm_perc > 1:
-        parser.error("--structure_density_norm_perc must be in (0, 1]")
+        parser.error("--structure-density-norm-perc must be in (0, 1]")
     if args.cor_mask_method == "percentile" and (
         args.cor_mask_percentile <= 0 or args.cor_mask_percentile >= 1
     ):
-        parser.error("--cor_mask_percentile must be in (0, 1)")
+        parser.error("--cor-mask-percentile must be in (0, 1)")
     # Canonicalise the deprecated short strain aliases (h, y) to their
     # full species names so the rest of the pipeline only sees the
     # canonical form. Emit one DEPRECATED line so the user knows to
@@ -737,20 +795,20 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
     # -rpf range, and a codon-table source.
     if args.strain == "custom":
         if not args.annotation_file:
-            parser.error("--strain custom requires --annotation_file")
+            parser.error("--strain custom requires --annotation-file")
         if args.rpf is None:
             parser.error(
                 "--strain custom requires an explicit -rpf MIN_LEN MAX_LEN range"
             )
         if not (args.codon_tables_file or args.codon_table_name):
             parser.error(
-                "--strain custom requires --codon_table_name (pick from "
+                "--strain custom requires --codon-table-name (pick from "
                 "the built-in NCBI Genetic Codes list, see "
-                "--codon_table_name help) or --codon_tables_file (your "
+                "--codon-table-name help) or --codon-tables-file (your "
                 "own codon-table JSON)"
             )
 
-    # --footprint_class=custom requires an explicit -rpf even for the
+    # --footprint-class=custom requires an explicit -rpf even for the
     # built-in strains, because the whole point of 'custom' is
     # "I know my footprint class, don't pick one for me".
     if (
@@ -759,7 +817,7 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
         and args.strain not in BUILTIN_STRAIN_PRESETS
     ):
         parser.error(
-            "--footprint_class custom requires an explicit -rpf MIN_LEN MAX_LEN range"
+            "--footprint-class custom requires an explicit -rpf MIN_LEN MAX_LEN range"
         )
 
     # Inject footprint-class unfiltered-length defaults when the user did

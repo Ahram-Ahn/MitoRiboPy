@@ -312,14 +312,14 @@ $ mitoribopy rpf \
     --directory results/align/bed/ \
     -rpf 29 34 \
     --align stop \
-    --offset_type 5 \
-    --offset_site p \
-    --analysis_sites both \
-    --min_5_offset 11 --max_5_offset 18 \
-    --min_3_offset 11 --max_3_offset 18 \
-    --plot_format svg \
-    --read_counts_file results/align/read_counts.tsv \
-    --rpm_norm_mode mt_mrna \
+    --offset-type 5 \
+    --offset-site p \
+    --analysis-sites both \
+    --min-5-offset 11 --max-5-offset 18 \
+    --min-3-offset 11 --max-3-offset 18 \
+    --plot-format svg \
+    --read-counts-file results/align/read_counts.tsv \
+    --rpm-norm-mode mt_mrna \
     --output results/rpf_v2/
 ```
 

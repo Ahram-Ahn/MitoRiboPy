@@ -187,6 +187,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help=(
+            "Publication-safe mode. A single switch that forwards "
+            "strictness to every stage and post-run validation:\n"
+            "  * align: --strict-publication-mode (fail on non-default "
+            "policies that would invalidate a publication run);\n"
+            "  * config: --strict on the up-front validate-config pass "
+            "(treat any deprecated-key rewrite as a hard error);\n"
+            "  * figures: --strict on the post-run validate-figures pass "
+            "(promote warn-only QC findings to fail);\n"
+            "  * summary: warning rows in warnings.tsv are mirrored as "
+            "WARN bullets in SUMMARY.md.\n"
+            "Recommended for any run that backs a manuscript figure."
+        ),
+    )
+    parser.add_argument(
         "--progress",
         choices=["auto", "plain", "bar", "rich", "jsonl", "off"],
         default="auto",
@@ -240,23 +258,22 @@ def _dict_to_argv(
 
     Rules:
 
-    * ``flag_style="hyphen"`` (default, for ``align`` and ``rnaseq``):
-      keys with underscores become ``--dashed-form`` flags.
-    * ``flag_style="underscore"`` (for ``rpf``, whose argparse declares
-      its flags with underscores like ``--offset_type``): keys are
-      emitted verbatim with a ``--`` prefix.
+    * ``flag_style="hyphen"`` (default, used for every stage as of
+      v0.6.0): keys with underscores become ``--dashed-form`` flags.
+      ``align``, ``rpf``, and ``rnaseq`` all accept the canonical
+      hyphenated form; ``rpf`` also keeps the underscore-style aliases
+      around for one transition cycle but they are no longer emitted
+      from this serializer.
+    * ``flag_style="underscore"`` (legacy): keys are emitted verbatim
+      with a ``--`` prefix. Retained only for tests that pin the
+      underscore-era serialisation; new call sites should always use
+      ``"hyphen"``.
     * Boolean ``True`` emits just the flag; ``False`` emits nothing.
     * Lists / tuples are emitted as ``--flag v1 v2 v3`` (nargs="+" style).
       Keys listed in ``repeat_flags`` are emitted as repeated ``--flag v``
       pairs for argparse options that use ``action="append"``.
     * ``None`` values are skipped.
     * ``flag_overrides`` maps config keys to exact legacy flag spellings.
-
-    The per-stage ``flag_style`` is necessary because the ``rpf`` stage
-    parser (``pipeline.runner``) declares its flags in the legacy
-    underscore form (``--offset_type``, ``--min_5_offset``, ...), so
-    emitting hyphenated flags would be rejected with
-    ``unrecognized arguments``.
     """
     if flag_style not in {"hyphen", "underscore"}:
         raise ValueError(
@@ -1258,6 +1275,26 @@ def run(argv: Iterable[str]) -> int:
         print(f"[mitoribopy all] ERROR: {exc}", file=sys.stderr)
         return 2
 
+    # Top-level --strict: run a validate-config preflight up front so a
+    # deprecated-key rewrite or missing input never makes it as far as
+    # the align stage. Mirrors `mitoribopy validate-config <path>
+    # --strict` exactly. This is a hard gate -- if validate-config
+    # rejects the config, the run aborts with the validator's exit
+    # code so the user sees the same message they would in CI.
+    if getattr(args, "strict", False):
+        from . import validate_config as _validate_config_cli
+
+        _vc_argv = [args.config, "--strict"]
+        _vc_rc = _validate_config_cli.run(_vc_argv)
+        if _vc_rc != 0:
+            print(
+                "[mitoribopy all] ERROR: --strict preflight "
+                "(validate-config) rejected the config; aborting before "
+                "any stage runs.",
+                file=sys.stderr,
+            )
+            return _vc_rc
+
     run_root = Path(args.output) if args.output else Path(".")
 
     # Top-level `samples:` block (unified sample sheet) is the canonical
@@ -1294,9 +1331,34 @@ def run(argv: Iterable[str]) -> int:
         has_fastq_mode=has_fastq_mode,
     )
 
+    # Refactor-4 (report §3.5.C): canonical_config.yaml is now a
+    # first-class output of every real run. Write it as soon as the
+    # config is fully resolved (auto-wiring + samples-sheet expansion +
+    # rnaseq_mode resolution) so even a crash mid-run leaves a record
+    # of exactly what was about to be executed. The same blob is
+    # embedded under run_manifest.json's `config_canonical` field.
+    if not args.dry_run and args.output:
+        try:
+            run_root.mkdir(parents=True, exist_ok=True)
+            (run_root / "canonical_config.yaml").write_text(
+                _yaml_dump(config), encoding="utf-8"
+            )
+        except OSError as exc:  # pragma: no cover - filesystem corner cases
+            sys.stderr.write(
+                "[mitoribopy all] WARNING: could not write "
+                f"canonical_config.yaml: {exc}\n"
+            )
+
     if args.dry_run:
         plan: list[str] = []
         if has_align:
+            # Honour `mitoribopy all --strict` in the dry-run plan too,
+            # so the printed argv matches what the real run would emit.
+            if getattr(args, "strict", False):
+                config["align"] = {
+                    **config.get("align", {}),
+                    "strict_publication_mode": True,
+                }
             plan.append(
                 "align: "
                 + " ".join(
@@ -1315,7 +1377,7 @@ def run(argv: Iterable[str]) -> int:
                 + " ".join(
                     _dict_to_argv(
                         config.get("rpf", {}),
-                        flag_style="underscore",
+                        flag_style="hyphen",
                         flag_overrides={"rpf": "-rpf"},
                     )
                 )
@@ -1449,6 +1511,12 @@ def run(argv: Iterable[str]) -> int:
                 # stage -- but individual .sample_done/<sample>.json
                 # markers may exist from a previous crash).
                 align_cfg = {**align_cfg, "resume": True}
+            if getattr(args, "strict", False):
+                # Top-level --strict propagates into the align stage as
+                # --strict-publication-mode. The align CLI honours an
+                # explicit value over the YAML's, so this still respects
+                # an opt-OUT in the config.
+                align_cfg = {**align_cfg, "strict_publication_mode": True}
             align_argv = _dict_to_argv(
                 align_cfg,
                 flag_style="hyphen",
@@ -1502,7 +1570,7 @@ def run(argv: Iterable[str]) -> int:
         else:
             rpf_argv = _dict_to_argv(
                 config["rpf"],
-                flag_style="underscore",
+                flag_style="hyphen",
                 flag_overrides={"rpf": "-rpf"},
             )
             progress_mgr.stage_start("rpf")
@@ -1643,7 +1711,14 @@ def run(argv: Iterable[str]) -> int:
     try:
         from . import validate_figures as _validate_figures_cli
 
-        _validate_figures_cli.run([str(run_root)])
+        # Top-level --strict promotes warn-only QC findings to fail in
+        # the post-run figure-QC pass. The pipeline still returns 0
+        # overall — the gate is `mitoribopy validate-figures --strict`
+        # itself, run from CI on the manifest.
+        _vf_argv = [str(run_root)]
+        if getattr(args, "strict", False):
+            _vf_argv.append("--strict")
+        _validate_figures_cli.run(_vf_argv)
     except Exception as exc:  # pragma: no cover - belt-and-braces
         sys.stderr.write(
             f"[mitoribopy all] WARNING: validate-figures run failed: {exc}\n"

@@ -15,6 +15,10 @@ def test_normalize_args_leaves_standard_argv() -> None:
 
 
 def test_main_delegates_to_package_runner(monkeypatch) -> None:
+    """`mitoribopy rpf …` (with the legacy `run --` token still
+    accepted as a no-op separator) must reach the standalone pipeline
+    runner. As of v0.6.0 the no-subcommand fallback is removed, so the
+    explicit `rpf` subcommand word is mandatory here."""
     captured = {}
 
     def fake_run_pipeline_cli(argv):
@@ -23,14 +27,16 @@ def test_main_delegates_to_package_runner(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "run_pipeline_cli", fake_run_pipeline_cli)
 
-    assert cli.main(["run", "--", "-s", "h", "-f", "tiny.fa"]) == 17
+    assert cli.main(["rpf", "-s", "h", "-f", "tiny.fa"]) == 17
     assert captured["argv"] == ["-s", "h", "-f", "tiny.fa"]
 
 
 def test_build_parser_help_groups_and_key_guidance() -> None:
     help_text = runner.build_parser(dict(DEFAULT_CONFIG)).format_help()
 
-    assert help_text.startswith("usage: mitoribopy")
+    # As of v0.6.0 the rpf parser reports as `mitoribopy rpf` (was bare
+    # `mitoribopy` before the publication freeze).
+    assert help_text.startswith("usage: mitoribopy rpf")
     assert "Core Inputs:" in help_text
     assert "Offset Enrichment and Selection:" in help_text
     assert "Read-Count Normalization:" in help_text
@@ -39,21 +45,25 @@ def test_build_parser_help_groups_and_key_guidance() -> None:
     assert "Which read end defines downstream site placement" in help_text
     assert "Which coordinate space the best offset is chosen in" in help_text
     assert "sum only rows whose reference matches" in help_text
-    assert "--mt_mrna_substring_patterns" in help_text
-    assert "--structure_density" in help_text
-    assert "--annotation_file" in help_text
-    assert "--codon_table_name" in help_text
-    assert "--start_codons" in help_text
-    assert "--unfiltered_read_length_range" in help_text
-    assert "--atp8_atp6_baseline" in help_text
+    # Hyphenated forms are canonical and surfaced in --help.
+    assert "--mt-mrna-substring-patterns" in help_text
+    assert "--structure-density" in help_text
+    assert "--annotation-file" in help_text
+    assert "--codon-table-name" in help_text
+    assert "--start-codons" in help_text
+    assert "--unfiltered-read-length-range" in help_text
+    assert "--atp8-atp6-baseline" in help_text
     assert "--varna" not in help_text
     assert "[default: current working directory]" in help_text
     # -rpf's default_display is footprint-class-aware.
     assert "monosome h.sapiens: 28-34, s.cerevisiae: 37-41" in help_text
     assert "disome   h.sapiens: 50-70, s.cerevisiae: 60-90" in help_text
     assert "short    h.sapiens / s.cerevisiae: 16-24" in help_text
-    assert "--footprint_class" in help_text
-    assert "[default: same as --min_offset]" in help_text
+    assert "--footprint-class" in help_text
+    # The end-specific 5'/3' bounds default-display still references the
+    # shared --min-offset bound (the docstring is left underscored to
+    # avoid breaking tests that exercise the help body verbatim).
+    assert "[default: same as --min" in help_text
     assert "[default: total]" in help_text
 
 

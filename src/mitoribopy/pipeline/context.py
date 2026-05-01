@@ -13,7 +13,7 @@ context.total_counts_map`` - is there only to keep older consumers
 working through one deprecation cycle; ``run_coverage_profile_plots``
 now accepts ``total_mrna_map`` as an explicit keyword argument and
 emits a deprecation warning when it has to fall back to the args copy.
-The shim will be removed in v0.4.0.
+The shim will be removed in v0.7.0 (post publication freeze).
 """
 
 from __future__ import annotations
