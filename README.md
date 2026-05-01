@@ -8,7 +8,7 @@ Mitochondrial ribosome profiling (mt-Ribo-seq) analysis, end to end.
 
 MitoRiboPy is a Python package + CLI for analysing mt-Ribo-seq data from raw FASTQ all the way through translation-efficiency integration with paired RNA-seq. Every per-sample decision (kit, dedup, offsets) is independent, so mixed-library batches just work.
 
-The package is built around four pipeline subcommands plus four utility subcommands:
+The package is built around four pipeline subcommands plus seven utility subcommands:
 
 | Subcommand | What it does |
 |---|---|
@@ -17,6 +17,8 @@ The package is built around four pipeline subcommands plus four utility subcomma
 | `mitoribopy rnaseq` | Translation efficiency from paired RNA-seq + Ribo-seq. **Default flow:** pass `--rna-fastq` + `--ribo-fastq` + `--reference-fasta` and the subcommand runs trimming → bowtie2 → counting → pyDESeq2 → TE / ΔTE / plots end-to-end (requires the `[fastq]` extra: `pip install 'mitoribopy[fastq]'`). **Alternative:** pass `--de-table` from an external DESeq2 / Xtail / Anota2Seq run + a prior rpf run; this path is mutually exclusive with `--rna-fastq` and enforces a SHA256 reference-consistency gate. |
 | `mitoribopy all` | End-to-end orchestrator that runs align + rpf + (optional) rnaseq from one YAML config and writes a composed `run_manifest.json` |
 | `mitoribopy validate-config` | Pre-flight check: parse + canonicalise legacy keys + check paths + validate `rnaseq.mode` against supplied inputs. Exit 0 / 2. Use before launching long-running cluster jobs. |
+| `mitoribopy validate-reference` | Pre-flight a custom mt-transcriptome FASTA + annotation pair (matching IDs, matching lengths, CDS divisible by 3, valid start / stop codons under the chosen codon table). Exit 0 / 2. |
+| `mitoribopy validate-figures` | Mechanically validate every plot under a finished run root: check label / legend / stat-box overlap, label clipping, point counts vs source TSV, SVG text editability, PNG dpi, and metadata sidecars. Writes `figure_qc.tsv`. Exit 0 / 1 / 2 (clean / warn-only / fail; `--strict` upgrades warn → fail). |
 | `mitoribopy migrate-config` | Rewrite legacy YAML keys to canonical names (e.g. `merge_density:` → `codon_density_window:`, `strain: h` → `strain: h.sapiens`). Pipe stdout to a new file or pass `--in-place`. |
 | `mitoribopy summarize` | Regenerate `SUMMARY.md` and `summary_qc.tsv` from a finished run by reading `run_manifest.json` and per-stage outputs. Auto-invoked by `mitoribopy all` after every run. |
 | `mitoribopy benchmark` | Time + RSS + disk-measure a `mitoribopy all` invocation. `--subsample N` reservoir-samples each FASTQ for fast tuning runs; outputs `benchmark.tsv` + `benchmark_summary.md`. |
@@ -32,6 +34,8 @@ The package is built around four pipeline subcommands plus four utility subcomma
 | I want a quick exploratory mt-only RNA/Ribo TE run | `mitoribopy rnaseq --rnaseq-mode from_fastq --rna-fastq rna/ --ribo-fastq ribo/` |
 | I have a non-human / non-yeast organism | `mitoribopy rpf --strain custom --annotation_file ... --codon_tables_file ...` |
 | I want to check my config without running anything | `mitoribopy validate-config pipeline_config.yaml` |
+| I want to pre-flight a custom mt-transcriptome FASTA + annotation pair | `mitoribopy validate-reference --fasta custom_mt.fa --annotation custom_mt.csv` |
+| I want to mechanically QC every plot in a finished run | `mitoribopy validate-figures runs/full/ --strict` |
 | I want to inspect what `all` would actually do | `mitoribopy all --print-canonical-config --config ... --output ...` |
 | I want to estimate cluster time / memory / disk | `mitoribopy benchmark --config ... --output bench/ --subsample 200000` |
 | My config uses old key names (e.g. `merge_density:`, `strain: h`) | `mitoribopy migrate-config old.yaml > new.yaml` |
@@ -1080,6 +1084,52 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
 ```
 
 In v0.4.4 the legacy `p/` / `a/` subfolders under `translation_profile/` and `coverage_profile_plots/` were dropped. The site is encoded in filename prefixes (`p_site_*` / `a_site_*`) so a single per-sample folder hosts both sites without ambiguity, and downstream tooling never has to branch on `--analysis_sites`.
+
+### What should I inspect first?
+
+After every run, walk these files in order. The first three (`SUMMARY.md`,
+`warnings.tsv`, `summary_qc.tsv`) catch ~90% of the gotchas without having
+to dig into per-stage TSVs.
+
+1. `SUMMARY.md` — one-page human-readable view of what ran and what was produced.
+2. `warnings.tsv` — every structured warning (`stage / sample_id / severity / code / message / suggested_action`). An empty file (header only) means nothing was flagged.
+3. `summary_qc.tsv` — per-sample QC across all stages.
+4. `align/kit_resolution.tsv` — confirm each sample resolved to the right kit / UMI / dedup strategy.
+5. `align/read_counts.tsv` — per-stage read funnel (trim → contam → mt → MAPQ → dedup).
+6. `rpf/offset_diagnostics/plots/offset_drift_*.svg` — per-sample offset drift in a single glance.
+7. `rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv` — exact offset table actually applied.
+8. `rpf/rpf_counts.tsv` (+ `rpf/rpf_counts.metadata.json` sidecar) — per-(sample, gene) RPF count matrix.
+9. `rnaseq/te.tsv` and `rnaseq/delta_te.tsv` — translation efficiency and ΔTE tables (when the rnaseq stage ran).
+10. `figure_qc.tsv` (after `mitoribopy validate-figures runs/full/`) — mechanical pass/warn/fail per plot (label overlap, point counts, SVG editability).
+
+### When NOT to trust the output
+
+The pipeline finishes "successfully" (exit 0) under a number of conditions
+that should still make a reviewer pause. Check `warnings.tsv` for any of
+the codes below; each row's `suggested_action` tells you what to do.
+
+- **Adapter detection low confidence** — `align/kit_resolution.tsv` has `source=user_fallback` or a small `confidence_margin`. The detection picked something but wasn't sure; spot-check the assigned adapter against the FASTQ.
+- **High contaminant fraction** — `read_counts.tsv` shows >50% of post-trim reads filtered out as rRNA / contaminant. The library may not be the libraryyou think it is.
+- **Low mt-mRNA alignment fraction** — `mt_aligned / post_rrna_filter < 0.05`. The reference, the strain preset, or the input may be off.
+- **No clear offset peak** — `rpf/offset_diagnostics/plots/offset_*.svg` shows a flat enrichment landscape. The selected offset was a fallback, not a real peak.
+- **Weak frame-0 dominance** — coverage plots in `rpf/coverage_profile_plots/p_site_density_rpm_frame/` show ≪70% frame-0 density. Either contamination or a wrong offset.
+- **Sample-specific offset fallback** — a sample's `offset_applied.csv` row shows the global fallback offset rather than the per-sample optimum. Either too few reads or a flat landscape.
+- **Pseudo-replicate mode** — `rnaseq/EXPLORATORY.md` exists. The DE statistics are exploratory only — re-run with biological replicates for publication.
+- **Inferred UMI without declaration** — `kit_resolution.tsv` shows `umi_source=inferred`. Confirm with the wet-lab record before trusting dedup.
+- **Gene-ID match rate below threshold** — `warnings.tsv` has a `GENE_ID_MATCH_RATE_LOW` row. Your DE table and rpf reference may not match.
+- **`figure_qc.tsv` has any `fail` row** — overlapping labels, clipped text, or a point-count mismatch with the source TSV. A `--strict` `validate-figures` run will exit 2 in this case.
+
+### Publication route (recommended for figures + tables in a paper)
+
+For a publication-grade analysis, run the pipeline on the full
+transcriptome externally (DESeq2 / Xtail / Anota2Seq) and let MitoRiboPy
+handle the mt-translation-efficiency layer:
+
+1. `mitoribopy align` + `mitoribopy rpf` to get RPF counts.
+2. Run RNA-seq DE externally on the FULL transcriptome with your tool of choice.
+3. `mitoribopy rnaseq --rnaseq-mode de_table --de-table de.tsv --ribo-dir runs/full/rpf/` to compute TE / ΔTE on top.
+4. `mitoribopy validate-figures runs/full/ --strict` to mechanically QC every plot.
+5. Bundle `run_manifest.json`, `summary_qc.tsv`, `figure_qc.tsv`, and the SVG sidecars into the paper's supplement / repository — together they record every parameter and pass each plot through a defined QC contract.
 
 ### Key files to look at first
 

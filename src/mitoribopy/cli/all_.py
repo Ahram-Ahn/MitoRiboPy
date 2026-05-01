@@ -186,6 +186,41 @@ def build_parser() -> argparse.ArgumentParser:
             "'config_canonical' on real runs."
         ),
     )
+    parser.add_argument(
+        "--progress",
+        choices=["auto", "plain", "bar", "rich", "jsonl", "off"],
+        default="auto",
+        metavar="MODE",
+        help=(
+            "Progress display mode. 'auto' (default) picks a tqdm bar on "
+            "an interactive TTY and one-line plain logs on HPC / non-TTY "
+            "streams. 'plain' forces stable [PROGRESS] log lines. 'bar' "
+            "forces tqdm bars (falls back to plain if tqdm is missing). "
+            "'rich' degrades to bar in this version. 'jsonl' streams "
+            "machine-readable JSON events to stderr (or to "
+            "--progress-file). 'off' silences all progress output, but "
+            "--progress-file still attaches if set."
+        ),
+    )
+    parser.add_argument(
+        "--progress-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Append every typed progress event to this file as JSONL "
+            "(one JSON object per line). Independent of --progress: an "
+            "explicit --progress-file always attaches, even when "
+            "--progress=off. Default location is "
+            "<output>/progress.jsonl when --output is set; pass "
+            "explicitly to override."
+        ),
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        default=False,
+        help="Shortcut for --progress=off.",
+    )
     return parser
 
 
@@ -1362,12 +1397,49 @@ def run(argv: Iterable[str]) -> int:
     from . import align as align_cli
     from . import rnaseq as rnaseq_cli
     from . import rpf as rpf_cli
+    from ..io.outputs_index import write_outputs_index as _write_outputs_index
+    from ..io.warnings_log import flush_tsv as _flush_warnings_tsv
+    from ..progress import ProgressManager
+
+    # Refactor-4: warnings.tsv and outputs_index.tsv must exist on disk
+    # at the run root no matter what — even if a stage crashes before
+    # the manifest write, downstream tooling (and the assessment §8
+    # output contract) relies on the paths existing. Touch them now
+    # with header-only content; they are re-written by _write_manifest
+    # at the end of the run.
+    run_root.mkdir(parents=True, exist_ok=True)
+    _flush_warnings_tsv(run_root / "warnings.tsv")
+    _write_outputs_index(run_root)
+
+    # Event-driven progress system. The default --progress-file location
+    # is <run-root>/progress.jsonl unless the user overrode it. The
+    # manager is a context manager so file handles flush even if a
+    # stage raises.
+    progress_mode = "off" if args.no_progress else args.progress
+    progress_file = args.progress_file
+    if progress_file is None and progress_mode != "off":
+        progress_file = run_root / "progress.jsonl"
+    progress_mgr = ProgressManager.from_cli(
+        mode=progress_mode,
+        progress_file=progress_file,
+    )
+    progress_mgr.run_start(
+        subcommand="all",
+        config_source=args.config,
+    )
+
+    def _emit_resume_skip(stage: str, reason: str) -> None:
+        progress_mgr.resume_skip(stage=stage, reason=reason)
 
     # --- align ----------------------------------------------------------
     if has_align:
         if resume_active and _should_skip_align(run_root):
             stages_skipped.append("align")
             skip_reasons["align"] = "resume: read_counts.tsv already exists"
+            _emit_resume_skip("align", skip_reasons["align"])
+            progress_mgr.stage_end(
+                "align", status="skipped", reason=skip_reasons["align"]
+            )
         else:
             align_cfg = _normalize_align_inputs(config["align"], run_root=run_root)
             if resume_active:
@@ -1382,16 +1454,35 @@ def run(argv: Iterable[str]) -> int:
                 flag_style="hyphen",
                 repeat_flags={"fastq"},
             )
+            progress_mgr.stage_start("align")
             t0 = time.monotonic()
             rc = align_cli.run(align_argv)
             runtimes["align"] = time.monotonic() - t0
             if rc != 0:
+                progress_mgr.stage_end(
+                    "align", status="error",
+                    elapsed_seconds=runtimes["align"],
+                    reason=f"exit_code={rc}",
+                )
+                # Re-flush warnings.tsv + outputs_index so they always
+                # reflect the partial state the run produced before
+                # the failure.
+                _flush_warnings_tsv(run_root / "warnings.tsv")
+                _write_outputs_index(run_root)
+                progress_mgr.run_end(
+                    status="error",
+                    elapsed_seconds=time.monotonic() - t_total_start,
+                )
+                progress_mgr.close()
                 print(
                     f"[mitoribopy all] align stage failed with exit code {rc}.",
                     file=sys.stderr,
                 )
                 return rc
             stages_run.append("align")
+            progress_mgr.stage_end(
+                "align", status="done", elapsed_seconds=runtimes["align"]
+            )
     else:
         if args.skip_align:
             stages_skipped.append("align")
@@ -1404,22 +1495,45 @@ def run(argv: Iterable[str]) -> int:
         if resume_active and _should_skip_rpf(run_root):
             stages_skipped.append("rpf")
             skip_reasons["rpf"] = "resume: rpf_counts.tsv already exists"
+            _emit_resume_skip("rpf", skip_reasons["rpf"])
+            progress_mgr.stage_end(
+                "rpf", status="skipped", reason=skip_reasons["rpf"]
+            )
         else:
             rpf_argv = _dict_to_argv(
                 config["rpf"],
                 flag_style="underscore",
                 flag_overrides={"rpf": "-rpf"},
             )
+            progress_mgr.stage_start("rpf")
             t0 = time.monotonic()
             rc = rpf_cli.run(rpf_argv)
             runtimes["rpf"] = time.monotonic() - t0
             if rc != 0:
+                progress_mgr.stage_end(
+                    "rpf", status="error",
+                    elapsed_seconds=runtimes["rpf"],
+                    reason=f"exit_code={rc}",
+                )
+                # Re-flush warnings.tsv + outputs_index so they always
+                # reflect the partial state the run produced before
+                # the failure.
+                _flush_warnings_tsv(run_root / "warnings.tsv")
+                _write_outputs_index(run_root)
+                progress_mgr.run_end(
+                    status="error",
+                    elapsed_seconds=time.monotonic() - t_total_start,
+                )
+                progress_mgr.close()
                 print(
                     f"[mitoribopy all] rpf stage failed with exit code {rc}.",
                     file=sys.stderr,
                 )
                 return rc
             stages_run.append("rpf")
+            progress_mgr.stage_end(
+                "rpf", status="done", elapsed_seconds=runtimes["rpf"]
+            )
     else:
         if args.skip_rpf:
             stages_skipped.append("rpf")
@@ -1434,18 +1548,41 @@ def run(argv: Iterable[str]) -> int:
         if resume_active and _should_skip_rnaseq(run_root):
             stages_skipped.append("rnaseq")
             skip_reasons["rnaseq"] = "resume: delta_te.tsv already exists"
+            _emit_resume_skip("rnaseq", skip_reasons["rnaseq"])
+            progress_mgr.stage_end(
+                "rnaseq", status="skipped", reason=skip_reasons["rnaseq"]
+            )
         else:
             rnaseq_argv = _dict_to_argv(config["rnaseq"], flag_style="hyphen")
+            progress_mgr.stage_start("rnaseq")
             t0 = time.monotonic()
             rc = rnaseq_cli.run(rnaseq_argv)
             runtimes["rnaseq"] = time.monotonic() - t0
             if rc != 0:
+                progress_mgr.stage_end(
+                    "rnaseq", status="error",
+                    elapsed_seconds=runtimes["rnaseq"],
+                    reason=f"exit_code={rc}",
+                )
+                # Re-flush warnings.tsv + outputs_index so they always
+                # reflect the partial state the run produced before
+                # the failure.
+                _flush_warnings_tsv(run_root / "warnings.tsv")
+                _write_outputs_index(run_root)
+                progress_mgr.run_end(
+                    status="error",
+                    elapsed_seconds=time.monotonic() - t_total_start,
+                )
+                progress_mgr.close()
                 print(
                     f"[mitoribopy all] rnaseq stage failed with exit code {rc}.",
                     file=sys.stderr,
                 )
                 return rc
             stages_run.append("rnaseq")
+            progress_mgr.stage_end(
+                "rnaseq", status="done", elapsed_seconds=runtimes["rnaseq"]
+            )
     else:
         if args.skip_rnaseq:
             stages_skipped.append("rnaseq")
@@ -1497,4 +1634,48 @@ def run(argv: Iterable[str]) -> int:
         sys.stderr.write(
             f"[mitoribopy all] WARNING: SUMMARY.md generation failed: {exc}\n"
         )
+
+    # Refactor-4: also auto-run validate-figures so figure_qc.tsv is
+    # always produced. We never elevate the run's exit code based on
+    # plot QC — the contract for `all` is "did the pipeline finish",
+    # not "are the figures publication-ready". Users who need that
+    # gate run `mitoribopy validate-figures --strict` themselves.
+    try:
+        from . import validate_figures as _validate_figures_cli
+
+        _validate_figures_cli.run([str(run_root)])
+    except Exception as exc:  # pragma: no cover - belt-and-braces
+        sys.stderr.write(
+            f"[mitoribopy all] WARNING: validate-figures run failed: {exc}\n"
+        )
+
+    # Re-write outputs_index.tsv so the refactor-4 additions
+    # (figure_qc.tsv, progress.jsonl) get advertised even when their
+    # writers ran AFTER the manifest call above.
+    try:
+        from ..io.outputs_index import write_outputs_index as _wri
+
+        _wri(run_root)
+    except Exception:  # pragma: no cover
+        pass
+
+    # Refactor-4: emit a final RunEnd event with the warning / error
+    # totals lifted from warnings_log so a downstream JSONL consumer can
+    # compute success without re-parsing the manifest.
+    try:
+        from ..io.warnings_log import collected as _wl_collected
+
+        _wl_records = _wl_collected()
+        n_warn = sum(1 for r in _wl_records if r.severity == "warn")
+        n_err = sum(1 for r in _wl_records if r.severity == "error")
+    except Exception:  # pragma: no cover
+        n_warn = 0
+        n_err = 0
+    progress_mgr.run_end(
+        status="done",
+        elapsed_seconds=time.monotonic() - t_total_start,
+        n_warnings=n_warn,
+        n_errors=n_err,
+    )
+    progress_mgr.close()
     return 0
