@@ -30,6 +30,7 @@ from . import rnaseq as _rnaseq
 from . import rpf as _rpf
 from . import summarize as _summarize
 from . import validate_config as _validate_config
+from . import validate_reference as _validate_reference
 
 __all__ = ["main", "run_pipeline_cli"]
 
@@ -59,6 +60,7 @@ _SUBCOMMANDS: dict[str, Callable[[Iterable[str]], int]] = {
     "all": _all.run,
     "migrate-config": _migrate_config.run,
     "validate-config": _validate_config.run,
+    "validate-reference": _validate_reference.run,
     "summarize": _summarize.run,
     "benchmark": _benchmark.run,
 }
@@ -71,6 +73,7 @@ _SUBCOMMAND_SUMMARIES: list[tuple[str, str]] = [
     ("all", _all.ALL_SUBCOMMAND_HELP),
     ("migrate-config", _migrate_config.MIGRATE_CONFIG_HELP),
     ("validate-config", _validate_config.VALIDATE_CONFIG_HELP),
+    ("validate-reference", _validate_reference.VALIDATE_REFERENCE_HELP),
     ("summarize", _summarize.SUMMARIZE_SUBCOMMAND_HELP),
     ("benchmark", _benchmark.BENCHMARK_SUBCOMMAND_HELP),
 ]

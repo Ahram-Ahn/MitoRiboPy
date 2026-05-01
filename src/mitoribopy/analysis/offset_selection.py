@@ -36,6 +36,30 @@ def _convert_offsets_between_sites(
     return converted
 
 
+def _shannon_entropy(counts: list[int] | pd.Series) -> float:
+    """Shannon entropy (in bits) of the per-offset count distribution.
+
+    P5.7: a peak distribution where all the mass sits on one offset
+    has entropy 0; a flat distribution across N offsets has entropy
+    log2(N). This complements ``enrichment_score`` (which only looks
+    at the winner) for samples whose distribution has a sharp peak
+    plus a long tail vs samples whose distribution is bimodal but
+    the winner happens to dominate slightly.
+    """
+    import math
+
+    total = float(sum(counts))
+    if total <= 0:
+        return 0.0
+    entropy = 0.0
+    for c in counts:
+        if c <= 0:
+            continue
+        p = float(c) / total
+        entropy -= p * math.log2(p)
+    return entropy
+
+
 def _pick_most_enriched_with_tiebreak(
     counts_df: pd.DataFrame, offset_col: str
 ) -> pd.DataFrame:
@@ -51,6 +75,8 @@ def _pick_most_enriched_with_tiebreak(
     * ``second_best_offset``     — the runner-up offset value (NaN when none)
     * ``delta_score``            — top_count - second_best_count (raw separation)
     * ``enrichment_score``       — top_count / n_reads (fraction of mass on the pick)
+    * ``entropy``                — Shannon entropy (bits) of the per-offset
+                                   count distribution (P5.7)
 
     Selection still uses the deterministic neighbour-support tie-break:
     ties on ``Count`` are broken by the sum of counts at offsets
@@ -95,6 +121,7 @@ def _pick_most_enriched_with_tiebreak(
 
         delta_score = top_count - second_best_count
         enrichment_score = (top_count / n_reads) if n_reads > 0 else 0.0
+        entropy = _shannon_entropy(sub["Count"].tolist())
 
         picked_rows.append({
             "Read Length": read_length,
@@ -105,6 +132,11 @@ def _pick_most_enriched_with_tiebreak(
             "second_best_offset": second_best_offset,
             "delta_score": delta_score,
             "enrichment_score": enrichment_score,
+            "entropy": entropy,
+            # ``fallback_used`` is set to False here; downstream callers
+            # that flip a per-length pick to the combined-offset table
+            # rewrite this to True.
+            "fallback_used": False,
         })
 
     return pd.DataFrame(picked_rows)
@@ -222,11 +254,13 @@ def determine_p_site_offsets(
     five_diag_cols = [
         "n_reads_5", "top_count_5", "second_best_count_5",
         "second_best_offset_5", "delta_score_5", "enrichment_score_5",
+        "entropy_5", "fallback_used_5",
         "confidence_5",
     ]
     three_diag_cols = [
         "n_reads_3", "top_count_3", "second_best_count_3",
         "second_best_offset_3", "delta_score_3", "enrichment_score_3",
+        "entropy_3", "fallback_used_3",
         "confidence_3",
     ]
 
@@ -256,6 +290,8 @@ def determine_p_site_offsets(
             "second_best_offset": "second_best_offset_5",
             "delta_score": "delta_score_5",
             "enrichment_score": "enrichment_score_5",
+            "entropy": "entropy_5",
+            "fallback_used": "fallback_used_5",
         })
 
     if three_df.empty:
@@ -284,6 +320,8 @@ def determine_p_site_offsets(
             "second_best_offset": "second_best_offset_3",
             "delta_score": "delta_score_3",
             "enrichment_score": "enrichment_score_3",
+            "entropy": "entropy_3",
+            "fallback_used": "fallback_used_3",
         })
 
     selected_offsets = pd.merge(
