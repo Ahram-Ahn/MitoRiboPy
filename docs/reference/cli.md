@@ -148,7 +148,7 @@ Requires the `[fastq]` optional-dependency extra: `pip install 'mitoribopy[fastq
 - `--bowtie2-index PREFIX` — pre-built bowtie2 index prefix; skips `bowtie2-build`. `--reference-fasta` is still required for hashing.
 - `--workdir DIR` — scratch directory for trim / index / per-sample BAM. Defaults to `<output>/work`.
 - `--align-threads N` (default `4`) — threads passed to cutadapt and bowtie2.
-- `--no-auto-pseudo-replicate` — disable the auto-split of n=1 conditions into `rep1` / `rep2` (FASTQ record parity). Without auto-split, pyDESeq2 will refuse to fit dispersion on n=1-per-condition designs and the run will fail.
+- `--allow-pseudo-replicates-for-demo-not-publication` — **opt INTO** auto-splitting any n=1 condition into `rep1` / `rep2` by FASTQ record parity. Without this flag, n=1 designs are a hard error (publication-safe default). With it, the run continues but stamps `pseudo_replicate_mode: true` in `run_settings.json`, writes an `EXPLORATORY.md` sidecar, and emits a loud stderr banner — padj / "significant" markers in the resulting plots and tables are NOT biologically defensible. The pre-v0.5.2 `--no-auto-pseudo-replicate` flag is accepted as a deprecated no-op.
 
 PE + UMI is currently `NotImplementedError` — preprocess UMIs into the read name first, or use the alternative flow.
 

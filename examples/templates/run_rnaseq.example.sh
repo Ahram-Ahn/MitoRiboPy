@@ -115,13 +115,13 @@ if [[ "${FLOW}" == "default" ]]; then
     --align-threads "${ALIGN_THREADS}"
 
     # --- Pseudo-replicate auto-split (default ON) ----------------------
-    # When a condition has only 1 sample, the FASTQ is auto-split by
-    # record parity into rep1 / rep2 so pyDESeq2 has n>=2 for dispersion
-    # estimation. The augmented condition map is written to
-    # <output>/condition_map.augmented.tsv. Pass the line below to
-    # disable -- the run will then fail at the DESeq2 dispersion step
-    # on n=1-per-condition designs.
-    # --no-auto-pseudo-replicate
+    # n=1 designs are a hard error by default (publication-safe). To
+    # opt INTO the FASTQ-record-parity pseudo-replicate fallback for a
+    # demo / tutorial smoke test, uncomment the line below. Doing so
+    # writes EXPLORATORY.md to the output dir and stamps
+    # `pseudo_replicate_mode: true` in run_settings.json — padj from
+    # such a run is NOT biologically defensible.
+    # --allow-pseudo-replicates-for-demo-not-publication
   )
 elif [[ "${FLOW}" == "de-table" ]]; then
   RNASEQ_OPTS=(

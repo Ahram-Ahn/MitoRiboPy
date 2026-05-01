@@ -37,22 +37,25 @@ Both R1 + R2 present → paired sample. Lone R1 → SE sample with the stem name
 
 The default flow uses `--base-sample` (reference / denominator) and `--compare-sample` (comparison / numerator) as the pyDESeq2 contrast. The legacy `--condition-a` / `--condition-b` flags are still accepted as aliases. Any conditions in your `--condition-map` that are NOT one of these two are still fitted by DESeq2 (because they contribute to dispersion estimation) but do not appear in the contrast results.
 
-### Step 4 — Auto pseudo-replicates for n=1 designs
+### Step 4 — n=1 designs (publication-safe default + opt-in fallback)
 
-Real-world experiments frequently have only one library per condition. pyDESeq2 needs **at least two samples per condition** to estimate dispersion, otherwise it errors out at the `Fitting dispersions` step. To prevent that, when a condition has exactly one sample, `mitoribopy rnaseq` automatically stream-splits its FASTQ by record parity (record N → `rep1` if even, `rep2` if odd) so pyDESeq2 sees n=2.
-
-This is a **mechanical workaround**, not biological replication: the dispersion estimates will be artificially low because the two halves share the exact same library minus the read order. The subcommand prints one stderr WARNING per split so you are never surprised:
+pyDESeq2 needs **at least two samples per condition** to estimate dispersion, otherwise it errors out at the `Fitting dispersions` step. As of v0.5.2 the default behaviour for n=1 designs is to **fail fast** — the run exits with code 2 and tells you the offending condition(s). This is the publication-safe default: a tutorial run that silently inflates significance is worse than a clear error.
 
 ```text
-[mitoribopy rnaseq] WARNING: RNA-seq condition 'KO' has only 1 sample
-('KO_rnaseq'); auto-splitting reads by record parity into pseudo-
-replicates 'KO_rnaseq_rep1' / 'KO_rnaseq_rep2'. These are mechanical
-halves of the same library, NOT biological replicates — DESeq2
-dispersion estimates will be artificially low. Pass
---no-auto-pseudo-replicate to disable.
+[mitoribopy rnaseq] ERROR: the following condition(s) have only 1 sample
+and pyDESeq2 cannot fit dispersion on n=1 designs: 'KO'.
+  Resolve by ONE of:
+    1. supply biological replicates (recommended);
+    2. run external DE and use the --de-table flow;
+    3. pass --allow-pseudo-replicates-for-demo-not-publication
+       for a non-publication exploratory run (FASTQ-record
+       parity halves; padj/p-values are NOT biologically
+       defensible).
 ```
 
-The augmented condition map (original entries + rep1 / rep2 entries) is persisted to `<output>/condition_map.augmented.tsv`. Pass `--no-auto-pseudo-replicate` if you have biological replicates already named correctly in your condition map.
+If you genuinely just want a tutorial / smoke-test run, opt in with `--allow-pseudo-replicates-for-demo-not-publication`. The subcommand then stream-splits the FASTQ by record parity (record N → `rep1` if even, `rep2` if odd) and continues, but it stamps `pseudo_replicate_mode: true` in `run_settings.json`, writes an `EXPLORATORY.md` sidecar listing the outputs that are not biologically defensible, and brackets the run with a loud stderr banner. The augmented condition map (original entries + rep1 / rep2 entries) lands at `<output>/condition_map.augmented.tsv`.
+
+The pre-v0.5.2 `--no-auto-pseudo-replicate` flag is still accepted but is now a deprecated no-op (the safe default already does what it asked for). Drop it from your scripts.
 
 ### Step 5 — Run
 
@@ -237,7 +240,8 @@ rnaseq:
   compare_sample: knockdown             # alias for condition_b
   align_threads: 8
   # bowtie2_index: cache/bt2_cache/transcriptome_5ca397907373   # optional
-  # no_auto_pseudo_replicate: false                             # default
+  # allow_pseudo_replicates_for_demo_not_publication: false     # default;
+  #   set true ONLY for tutorials / smoke tests on n=1 designs
 ```
 
 `mitoribopy all` auto-wires `rnaseq.ribo_dir` to `<run_root>/rpf/` for the alternative flow; in the default flow `--ribo-dir` / `--ribo-counts` are not used — Ribo-seq counts are produced from `--ribo-fastq`.
@@ -248,7 +252,7 @@ rnaseq:
 
 - **Default flow: pyDESeq2 not installed.** The subcommand emits a clear runtime error pointing at the `[fastq]` extra. Install with `pip install 'mitoribopy[fastq]'`.
 - **Default flow: PE + UMI.** Currently `NotImplementedError`. Preprocess UMIs into the read name first, or use the alternative flow.
-- **Default flow: pseudo-replicate inflation.** Auto-split halves are NOT biological replicates and DESeq2's padj will be artificially small. Read the WARNING lines.
+- **Default flow: pseudo-replicate inflation.** When the n=1 fallback is opted into via `--allow-pseudo-replicates-for-demo-not-publication`, the auto-split halves are NOT biological replicates and DESeq2's padj will be artificially small. Treat the run as exploratory; the `EXPLORATORY.md` sidecar in the output dir lists which fields not to cite.
 - **Alternative flow: DE statistics over mt only.** Do not run DESeq2 / Xtail / Anota2Seq on a 13-gene universe. Run DE on the full transcriptome and subset for input to MitoRiboPy.
 - **Alternative flow: Mixed gene-ID conventions.** If your DE table uses Ensembl IDs but you pass `--gene-id-convention hgnc`, the per-row match silently fails for every gene. Check the WARNING line.
 - **Alternative flow: Reference MISMATCH.** The SHA256 gate is intentionally strict; even a single trailing newline in the FASTA flips the hash. Re-align one side with the exact file the other side uses.

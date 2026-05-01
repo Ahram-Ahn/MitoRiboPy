@@ -178,3 +178,161 @@ def test_yaml_base_sample_key_satisfies_condition_a(
     assert "--output" in err
     assert "--condition-a" not in err
     assert "--condition-b" not in err
+
+
+# ---------- pseudo-replicate gate (Phase 1.2 of the refactor) ----------------
+
+
+def test_conditions_with_one_sample_helper() -> None:
+    from mitoribopy.cli.rnaseq import _conditions_with_one_sample
+    from mitoribopy.rnaseq.fastq_pairing import FastqSample
+    from pathlib import Path as _P
+
+    samples = [
+        FastqSample(sample="WT_a", r1=_P("WT_a.fq.gz")),
+        FastqSample(sample="WT_b", r1=_P("WT_b.fq.gz")),
+        FastqSample(sample="KO_a", r1=_P("KO_a.fq.gz")),
+        FastqSample(sample="UNUSED", r1=_P("UNUSED.fq.gz")),
+    ]
+    cmap = {"WT_a": "WT", "WT_b": "WT", "KO_a": "KO"}
+    # KO has only one sample; WT has two; UNUSED is not in the map.
+    assert _conditions_with_one_sample(samples, cmap) == ["KO"]
+
+
+def test_exploratory_sidecar_calls_out_outputs_to_avoid(tmp_path) -> None:
+    from mitoribopy.cli.rnaseq import _write_exploratory_sidecar
+
+    out = tmp_path / "rnaseq"
+    out.mkdir()
+    _write_exploratory_sidecar(out, ["WT", "KO"])
+    text = (out / "EXPLORATORY.md").read_text()
+    assert "EXPLORATORY" in text
+    assert "WT" in text and "KO" in text
+    # Make sure the sidecar names the dangerous outputs explicitly.
+    for token in ("padj", "p-value", "significant"):
+        assert token in text.lower()
+
+
+def _patch_fastq_layer(monkeypatch, rna_conds: dict, ribo_conds: dict | None = None):
+    """Mock enumerate_fastqs / detect_samples so _run_from_fastq can reach
+    the singleton gate without doing any real I/O.
+
+    ``rna_conds`` is a dict mapping ``sample_name -> condition``; one
+    FastqSample is fabricated per entry. ``ribo_conds`` does the same for
+    Ribo-seq, or ``None`` to leave the Ribo side empty.
+    """
+    from mitoribopy.cli import rnaseq as rnaseq_cli
+    from mitoribopy.rnaseq import fastq_pairing as fp
+
+    samples_rna = [
+        fp.FastqSample(sample=name, r1=Path(f"{name}.fq.gz"))
+        for name in rna_conds
+    ]
+    samples_ribo = [
+        fp.FastqSample(sample=name, r1=Path(f"{name}.fq.gz"))
+        for name in (ribo_conds or {})
+    ]
+
+    def fake_enumerate(_inputs):
+        return [Path("dummy.fq.gz")]
+
+    def fake_detect(_paths):
+        # Distinguish RNA vs Ribo by checking the call order via a flag.
+        # We use a list-pop trick: first call returns RNA, second returns Ribo.
+        return fake_detect._queue.pop(0)
+
+    fake_detect._queue = [samples_rna, samples_ribo]
+    monkeypatch.setattr(fp, "enumerate_fastqs", fake_enumerate)
+    monkeypatch.setattr(fp, "detect_samples", fake_detect)
+    return rnaseq_cli
+
+
+def test_pseudo_replicate_gate_fails_fast_without_optin(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """An n=1 condition without the explicit opt-in flag must exit 2
+    BEFORE bowtie2 / pyDESeq2 can run."""
+    rnaseq_cli = _patch_fastq_layer(
+        monkeypatch,
+        rna_conds={"WT_a": "WT", "KO_a": "KO"},  # both n=1
+    )
+
+    cmap = tmp_path / "conditions.tsv"
+    cmap.write_text("sample\tcondition\nWT_a\tWT\nKO_a\tKO\n")
+
+    import argparse as _ap
+    args = _ap.Namespace(
+        rna_fastq=["dummy.fq.gz"],
+        ribo_fastq=None,
+        reference_fasta=str(tmp_path / "ref.fa"),
+        bowtie2_index=None,
+        workdir=str(tmp_path / "work"),
+        align_threads=1,
+        condition_map=str(cmap),
+        condition_a="WT",
+        condition_b="KO",
+        allow_pseudo_replicates=False,
+        no_auto_pseudo_replicate=False,
+    )
+    rc = rnaseq_cli._run_from_fastq(args, tmp_path / "out")
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "only 1 sample" in err
+    assert "--allow-pseudo-replicates-for-demo-not-publication" in err
+    # Both singleton conditions should be reported.
+    assert "'WT'" in err and "'KO'" in err
+
+
+def test_no_auto_pseudo_replicate_is_deprecated_no_op(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The pre-v0.5.2 opt-out flag is now a no-op that warns and falls
+    through to the new safe default (i.e. n=1 still hard-fails)."""
+    rnaseq_cli = _patch_fastq_layer(
+        monkeypatch,
+        rna_conds={"WT_a": "WT", "KO_a": "KO"},
+    )
+
+    cmap = tmp_path / "conditions.tsv"
+    cmap.write_text("sample\tcondition\nWT_a\tWT\nKO_a\tKO\n")
+
+    import argparse as _ap
+    args = _ap.Namespace(
+        rna_fastq=["dummy.fq.gz"],
+        ribo_fastq=None,
+        reference_fasta=str(tmp_path / "ref.fa"),
+        bowtie2_index=None,
+        workdir=str(tmp_path / "work"),
+        align_threads=1,
+        condition_map=str(cmap),
+        condition_a="WT",
+        condition_b="KO",
+        allow_pseudo_replicates=False,
+        no_auto_pseudo_replicate=True,  # legacy opt-out
+    )
+    rc = rnaseq_cli._run_from_fastq(args, tmp_path / "out")
+    err = capsys.readouterr().err
+    # Deprecation warning emitted for the legacy flag…
+    assert "DEPRECATED" in err
+    # …but the run still hard-fails because n=1 is now the safe default.
+    assert rc == 2
+    assert "--allow-pseudo-replicates-for-demo-not-publication" in err
+
+
+def test_allow_pseudo_replicates_flag_is_accepted_by_parser() -> None:
+    """The new opt-in flag must be parseable without error, and must set
+    args.allow_pseudo_replicates to True."""
+    from mitoribopy.cli.rnaseq import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "--rna-fastq", "x.fq.gz",
+        "--reference-fasta", "ref.fa",
+        "--gene-id-convention", "bare",
+        "--output", "out",
+        "--condition-map", "cmap.tsv",
+        "--condition-a", "WT",
+        "--condition-b", "KO",
+        "--allow-pseudo-replicates-for-demo-not-publication",
+    ])
+    assert args.allow_pseudo_replicates is True

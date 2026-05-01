@@ -144,17 +144,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     fastq.add_argument(
-        "--no-auto-pseudo-replicate",
+        "--allow-pseudo-replicates-for-demo-not-publication",
+        dest="allow_pseudo_replicates",
         action="store_true",
         default=False,
         help=(
-            "Disable the default behaviour where any condition with only "
-            "1 sample is auto-split into rep1 / rep2 by FASTQ record "
-            "parity. Without auto-split, pyDESeq2 will refuse to fit "
-            "dispersion on n=1-per-condition designs and the run will "
-            "fail. Pass this flag only if you genuinely have biological "
-            "replicates already named correctly in the condition map."
+            "Opt INTO the auto-pseudo-replicate fallback for conditions "
+            "with only 1 sample. Without this flag, an n=1 design is a "
+            "hard error (exit 2) — the safe default for publication-grade "
+            "DE. With this flag, each n=1 condition is split into rep1 / "
+            "rep2 by FASTQ record parity so pyDESeq2 has n>=2 to fit "
+            "dispersion on, BUT the resulting p-values and padj are NOT "
+            "biologically defensible (the two halves are mechanical "
+            "subsamples of one library). Use ONLY for demos / tutorials. "
+            "The run_settings.json records pseudo_replicate_mode=true "
+            "and an EXPLORATORY.md sidecar is written to the output dir."
         ),
+    )
+    # Deprecated alias for the pre-v0.5.2 opt-out flag. The default has
+    # flipped (pseudo-replicate mode is now opt-IN), so this flag is now
+    # a no-op accepted only to keep older config files / scripts working.
+    fastq.add_argument(
+        "--no-auto-pseudo-replicate",
+        dest="no_auto_pseudo_replicate",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,
     )
 
     # ----- Required in both flows ------------------------------------------
@@ -393,6 +408,73 @@ def _write_delta_te_table(rows: Iterable[DTeRow], path: Path) -> None:
 # ---------- from-FASTQ orchestrator -----------------------------------------
 
 
+def _conditions_with_one_sample(samples: list, condition_map: dict) -> list[str]:
+    """Return sorted condition names that map to exactly one sample.
+
+    Samples whose ``sample`` field is missing from ``condition_map`` are
+    ignored: the rest of the pipeline already errors on them downstream.
+    """
+    counts: dict[str, int] = {}
+    for s in samples:
+        cond = condition_map.get(s.sample)
+        if cond is None:
+            continue
+        counts[cond] = counts.get(cond, 0) + 1
+    return sorted(c for c, n in counts.items() if n == 1)
+
+
+def _emit_pseudo_replicate_banner(
+    conditions: list[str], *, when: str
+) -> None:
+    bar = "=" * 72
+    head = (
+        "PSEUDO-REPLICATE MODE ACTIVE — EXPLORATORY ONLY"
+        if when == "start"
+        else "PSEUDO-REPLICATE RUN COMPLETE — EXPLORATORY ONLY"
+    )
+    body = (
+        f"Conditions split by FASTQ-record parity: {', '.join(conditions)}.\n"
+        "padj / p-values in plots and tables come from mechanical halves "
+        "of one library and are NOT biologically defensible. Use these "
+        "outputs for tutorials, smoke tests, or QC only — never for "
+        "publication or for a 'significant gene' claim. To produce "
+        "publication-grade DE, supply biological replicates or run DE "
+        "externally and pass --de-table."
+    )
+    sys.stderr.write(f"\n{bar}\n{head}\n{bar}\n{body}\n{bar}\n\n")
+
+
+def _write_exploratory_sidecar(
+    output_dir: Path, conditions: list[str]
+) -> None:
+    """Drop EXPLORATORY.md next to te.tsv / delta_te.tsv."""
+    sidecar = Path(output_dir) / "EXPLORATORY.md"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text(
+        "# EXPLORATORY RUN — pseudo-replicate mode active\n\n"
+        f"Conditions split by FASTQ-record parity: {', '.join(conditions)}\n\n"
+        "This run was launched with `--allow-pseudo-replicates-for-"
+        "demo-not-publication`. The condition(s) above had only one "
+        "sample, so the FASTQ for each was streamed-split in two by "
+        "record parity to give pyDESeq2 the n>=2 it needs to fit "
+        "dispersion. The two 'replicates' are therefore mechanical "
+        "halves of the same library, NOT biological replicates.\n\n"
+        "## Outputs to NOT cite\n\n"
+        "- p-values, padj, and 'significant' markers in `de_table.tsv`, "
+        "`rpf_de_table.tsv`, `delta_te.tsv`, and the volcano plots.\n"
+        "- Dispersion estimates in pyDESeq2 fits.\n\n"
+        "## Outputs that remain meaningful\n\n"
+        "- Read counts, alignment statistics, and the FASTA / FASTQ "
+        "provenance recorded in `run_settings.json`.\n"
+        "- Descriptive log2 fold-change point estimates (treat as "
+        "exploratory; do not gate publication claims on them).\n\n"
+        "To produce defensible statistics, supply biological "
+        "replicates or run DE externally and re-run `mitoribopy "
+        "rnaseq` with `--de-table`.\n",
+        encoding="utf-8",
+    )
+
+
 def _auto_split_singletons(
     samples: list,
     condition_map: dict,
@@ -431,8 +513,8 @@ def _auto_split_singletons(
                 f"replicates {rep1.sample!r} / {rep2.sample!r}. These "
                 "are mechanical halves of the same library, NOT "
                 "biological replicates — DESeq2 dispersion estimates "
-                "will be artificially low. Pass "
-                "--no-auto-pseudo-replicate to disable.\n"
+                "will be artificially low and the resulting padj is "
+                "NOT publication-grade.\n"
             )
         else:
             new_samples.append(s)
@@ -498,13 +580,51 @@ def _run_from_fastq(args, output_dir: Path) -> int:
         Path(args.condition_map) if args.condition_map else None
     )
 
-    # Auto-split any condition with only one sample so pyDESeq2 has
-    # n>=2 to fit dispersion on. Pass --no-auto-pseudo-replicate to
-    # opt out (the run will then fail at the DESeq2 step on n=1
-    # designs, which is what users with real biological replicates
-    # already named correctly want).
+    # Pseudo-replicate gate.
+    #
+    # Pre-v0.5.2 the from-FASTQ flow auto-split any condition with n=1
+    # into two pseudo-replicates by FASTQ record parity, on by default.
+    # That made pyDESeq2 happy but produced p-values that look real and
+    # are not — the two halves are mechanical subsamples of one library.
+    # The default is now opt-IN: detect singletons up-front, fail with a
+    # clear message unless the user has passed
+    # --allow-pseudo-replicates-for-demo-not-publication.
+    if getattr(args, "no_auto_pseudo_replicate", False):
+        sys.stderr.write(
+            "[mitoribopy rnaseq] DEPRECATED: --no-auto-pseudo-replicate "
+            "is a no-op as of v0.5.2 (pseudo-replicate mode is now "
+            "opt-in via --allow-pseudo-replicates-for-demo-not-publication). "
+            "Drop the flag from your scripts; it will be removed in a "
+            "future release.\n"
+        )
+
+    allow_pseudo = bool(getattr(args, "allow_pseudo_replicates", False))
+    rna_singletons = _conditions_with_one_sample(rna_samples, condition_map)
+    ribo_singletons = (
+        _conditions_with_one_sample(ribo_samples, condition_map)
+        if ribo_samples else []
+    )
+    pseudo_conditions = sorted(set(rna_singletons) | set(ribo_singletons))
+
+    if pseudo_conditions and not allow_pseudo:
+        sys.stderr.write(
+            "[mitoribopy rnaseq] ERROR: the following condition(s) have "
+            "only 1 sample and pyDESeq2 cannot fit dispersion on n=1 "
+            f"designs: {', '.join(repr(c) for c in pseudo_conditions)}.\n"
+            "  Resolve by ONE of:\n"
+            "    1. supply biological replicates (recommended);\n"
+            "    2. run external DE and use the --de-table flow;\n"
+            "    3. pass --allow-pseudo-replicates-for-demo-not-publication\n"
+            "       for a non-publication exploratory run (FASTQ-record\n"
+            "       parity halves; padj/p-values are NOT biologically\n"
+            "       defensible).\n"
+        )
+        return 2
+
     original_map = dict(condition_map)
-    if not getattr(args, "no_auto_pseudo_replicate", False):
+    pseudo_replicate_mode = bool(pseudo_conditions and allow_pseudo)
+    if pseudo_replicate_mode:
+        _emit_pseudo_replicate_banner(pseudo_conditions, when="start")
         rna_samples, condition_map = _auto_split_singletons(
             rna_samples, condition_map, workdir / "rna_split", "RNA-seq"
         )
@@ -512,6 +632,7 @@ def _run_from_fastq(args, output_dir: Path) -> int:
             ribo_samples, condition_map = _auto_split_singletons(
                 ribo_samples, condition_map, workdir / "ribo_split", "Ribo-seq"
             )
+        _write_exploratory_sidecar(output_dir, pseudo_conditions)
 
     # Persist the (possibly augmented) condition map so the downstream
     # delta-TE step picks up the new rep1 / rep2 entries when it re-
@@ -616,12 +737,18 @@ def _run_from_fastq(args, output_dir: Path) -> int:
     args._rpf_de_table_path = (
         str(rpf_de_table_path) if rpf_de_table_path is not None else None
     )
+    args._pseudo_replicate_mode = pseudo_replicate_mode
+    args._pseudo_replicate_conditions = list(pseudo_conditions) if pseudo_replicate_mode else []
     args._fastq_provenance = {
         "mode": "from-fastq" if ribo_results else "from-fastq-rna-only",
         "reference_fasta": str(args.reference_fasta),
         "bowtie2_index": str(bt2_index),
         "rna_samples": [_provenance_entry(r) for r in rna_results],
         "ribo_samples": [_provenance_entry(r) for r in ribo_results],
+        "pseudo_replicate_mode": pseudo_replicate_mode,
+        "pseudo_replicate_conditions": (
+            list(pseudo_conditions) if pseudo_replicate_mode else []
+        ),
     }
 
     if not ribo_results:
@@ -633,11 +760,17 @@ def _run_from_fastq(args, output_dir: Path) -> int:
             "reference_checksum": reference_checksum,
             "de_table": args.de_table,
             "de_format_resolved": "deseq2",
+            "pseudo_replicate_mode": pseudo_replicate_mode,
+            "pseudo_replicate_conditions": (
+                list(pseudo_conditions) if pseudo_replicate_mode else []
+            ),
         }
         (output_dir / "run_settings.json").write_text(
             json.dumps(slim_settings, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+        if pseudo_replicate_mode:
+            _emit_pseudo_replicate_banner(pseudo_conditions, when="end")
         return -1
 
     return 0
@@ -744,8 +877,10 @@ def run(argv: Iterable[str]) -> int:
                 "(content-addressed cache: <workdir>/bt2_cache/transcriptome_<sha12>)",
                 "trim + align every sample (cutadapt + bowtie2); count primary "
                 "mapped reads per transcript",
-                "auto-split any condition with n=1 into rep1 / rep2 by record "
-                "parity (disable with --no-auto-pseudo-replicate)",
+                "fail fast on any condition with n=1 (publication-safe "
+                "default); pass --allow-pseudo-replicates-for-demo-not-"
+                "publication to opt into FASTQ-record-parity splitting "
+                "for demos / tutorials only",
                 f"build sample sheet, run pyDESeq2 contrast on the RNA "
                 f"subset ({base} vs {compare})",
                 "serialise mRNA pyDESeq2 result to de_table.tsv (DESeq2 schema)",
@@ -1044,7 +1179,13 @@ def run(argv: Iterable[str]) -> int:
     fastq_provenance = getattr(args, "_fastq_provenance", None)
     if fastq_provenance is not None:
         settings["from_fastq"] = fastq_provenance
+    pseudo_mode = bool(getattr(args, "_pseudo_replicate_mode", False))
+    pseudo_conditions = list(getattr(args, "_pseudo_replicate_conditions", []) or [])
+    settings["pseudo_replicate_mode"] = pseudo_mode
+    settings["pseudo_replicate_conditions"] = pseudo_conditions
     (output_dir / "run_settings.json").write_text(
         json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8"
     )
+    if pseudo_mode:
+        _emit_pseudo_replicate_banner(pseudo_conditions, when="end")
     return 0

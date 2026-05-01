@@ -79,13 +79,16 @@ bowtie2_index: null                     # optional pre-built bowtie2 prefix;
 workdir: null                           # scratch dir; default <output>/work
 align_threads: 4                        # threads passed to cutadapt + bowtie2
 
-# When a condition has only 1 sample, FASTQs are auto-split into
-# rep1 / rep2 by record parity so pyDESeq2 has n>=2 for dispersion.
-# The augmented condition map lands at
-# <output>/condition_map.augmented.tsv. Set `no_auto_pseudo_replicate:
-# true` to disable -- the run will then fail at the DESeq2 step on
-# n=1-per-condition designs.
-no_auto_pseudo_replicate: false
+# When a condition has only 1 sample, the run fails fast (publication-
+# safe default). Opt INTO the FASTQ-record-parity pseudo-replicate
+# fallback by setting the flag below to `true`; this is for tutorial /
+# demo use only — the resulting padj is NOT biologically defensible
+# because the two halves are mechanical subsamples of one library.
+# When opted in, the augmented condition map lands at
+# <output>/condition_map.augmented.tsv, run_settings.json carries
+# `pseudo_replicate_mode: true`, and EXPLORATORY.md is written to the
+# output dir listing the fields not to cite.
+allow_pseudo_replicates: false
 
 # Notes on the default flow:
 # - PE + UMI is currently NotImplementedError. Preprocess UMIs into the

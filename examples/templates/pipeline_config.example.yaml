@@ -285,10 +285,12 @@ rpf:
 #   #                                         # skips bowtie2-build
 #   # workdir: null                           # scratch; default <output>/work
 #   align_threads: 4                          # threads for cutadapt + bowtie2
-#   no_auto_pseudo_replicate: false           # default false; when true,
-#                                             # n=1 conditions are NOT split
-#                                             # into rep1/rep2 and the run
-#                                             # fails at pyDESeq2 dispersion.
+#   allow_pseudo_replicates: false            # default false (fail-fast on
+#                                             # n=1 conditions). Set true ONLY
+#                                             # for demo/tutorial smoke tests:
+#                                             # FASTQs split by record parity,
+#                                             # padj is NOT publication-grade,
+#                                             # EXPLORATORY.md sidecar written.
 #
 #   # --- Alternative-flow keys (--de-table; delete when using --rna-fastq) ---
 #

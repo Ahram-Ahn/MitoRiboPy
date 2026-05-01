@@ -284,11 +284,12 @@ if [[ "${RUN_RNASEQ}" == "true" ]]; then
                                    # pre-built prefix; skips bowtie2-build
       --workdir "${OUTPUT_DIR}/rnaseq/work"
       --align-threads "${RNASEQ_ALIGN_THREADS}"
-      # --no-auto-pseudo-replicate
-                                   # default OFF; when set, n=1
-                                   # conditions are NOT split into
-                                   # rep1/rep2 and the run will fail at
-                                   # pyDESeq2 dispersion.
+      # --allow-pseudo-replicates-for-demo-not-publication
+                                   # default OFF (fail-fast on n=1).
+                                   # Uncomment for tutorial / smoke-test
+                                   # runs only — opts INTO FASTQ-record-
+                                   # parity pseudo-replicate splitting;
+                                   # padj is NOT publication-grade.
     )
   elif [[ "${RNASEQ_FLOW}" == "de-table" ]]; then
     RNASEQ_OPTS=(
