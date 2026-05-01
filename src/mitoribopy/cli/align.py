@@ -418,16 +418,49 @@ def build_parser() -> argparse.ArgumentParser:
     execution = parser.add_argument_group("Execution")
     execution.add_argument(
         "--max-parallel-samples",
-        type=int,
-        default=1,
-        metavar="N",
+        type=str,
+        default=None,
+        metavar="N|auto",
         help=(
-            "Number of samples to process concurrently. With --threads T, "
-            "each worker uses max(1, T // N) tool threads so total CPU "
-            "use stays around T. Default 1 (serial; backward-compatible). "
+            "Number of samples to process concurrently. Accepts an integer "
+            "or 'auto' (default). 'auto' picks min(n_samples, "
+            "threads/min_per_sample, memory_gb/est_per_sample) so a "
+            "modern CPU is not left idle on a multi-sample run. With "
+            "--threads T, each worker uses max(1, T // N) tool threads so "
+            "total CPU use stays around T. Pass --max-parallel-samples 1 "
+            "(or --single-sample-mode) for legacy serial behaviour. "
             "Per-sample work (cutadapt + bowtie2 + dedup + BAM->BED) is "
             "embarrassingly parallel; the joint 'mitoribopy rpf' stage is "
             "unaffected."
+        ),
+    )
+    execution.add_argument(
+        "--parallel-samples",
+        dest="max_parallel_samples",
+        type=str,
+        default=None,
+        metavar="N|auto",
+        help=argparse.SUPPRESS,
+    )
+    execution.add_argument(
+        "--single-sample-mode",
+        action="store_true",
+        default=False,
+        help=(
+            "Force serial execution (alias for --max-parallel-samples 1). "
+            "Use when you want one sample's logs interleaved cleanly or "
+            "when memory pressure rules out concurrency."
+        ),
+    )
+    execution.add_argument(
+        "--memory-gb",
+        type=str,
+        default=None,
+        metavar="GB|auto",
+        help=(
+            "Total memory budget (in GiB) the auto scheduler may use. "
+            "Accepts a float or 'auto' (no memory cap). Used only when "
+            "--max-parallel-samples auto."
         ),
     )
 
@@ -1300,9 +1333,35 @@ def run(argv: Iterable[str]) -> int:
     if resume_active:
         sample_done_dir.mkdir(parents=True, exist_ok=True)
 
-    requested_threads = getattr(args, "threads", None) or 1
-    max_parallel = max(1, int(getattr(args, "max_parallel_samples", 1) or 1))
-    per_worker_threads = _per_worker_threads(requested_threads, max_parallel)
+    from ..pipeline.resource_plan import plan_parallelism, write_resource_plan
+
+    requested_threads = getattr(args, "threads", None) or "auto"
+    requested_parallel_raw = getattr(args, "max_parallel_samples", None)
+    if getattr(args, "single_sample_mode", False):
+        requested_parallel: int | str = 1
+    elif requested_parallel_raw is None:
+        requested_parallel = "auto"
+    else:
+        requested_parallel = requested_parallel_raw
+    requested_memory = getattr(args, "memory_gb", None)
+
+    resource_plan = plan_parallelism(
+        n_samples=len(resolutions) or 1,
+        requested_threads=requested_threads,
+        requested_parallel=requested_parallel,
+        memory_gb=requested_memory,
+    )
+    plan_path = write_resource_plan(resource_plan, output_dir)
+    log_info(
+        "ALIGN",
+        f"Resource plan: {resource_plan.parallel_samples} parallel sample(s) x "
+        f"{resource_plan.per_sample_threads} thread(s) per worker "
+        f"(threads={resource_plan.total_threads}, "
+        f"reason={resource_plan.reason!r}); written to {plan_path}.",
+    )
+
+    max_parallel = resource_plan.parallel_samples
+    per_worker_threads = resource_plan.per_sample_threads
 
     # Split resolutions into resume-cached (instantly available) and
     # pending (need real work). Cached samples short-circuit the executor
@@ -1460,6 +1519,50 @@ def run(argv: Iterable[str]) -> int:
         log_error("ALIGN", f"{exc}")
         return 2
     counts_step.write_read_counts_table(rows, output_dir / "read_counts.tsv")
+
+    # P5.7 (publication review): emit umi_qc.tsv so reviewers can
+    # confirm that UMI extraction + coordinate+UMI dedup behaved as
+    # advertised. We pair every SampleCounts row with the resolved kit
+    # so the table records the umi_length / umi_position / dedup_method
+    # actually used, not just the requested values.
+    umi_qc_rows: list[dedup_step.UmiQCRow] = []
+    resolutions_by_sample = {r.sample: r for r in resolutions}
+    requested_method = str(getattr(args, "umi_dedup_method", "unique") or "unique")
+    for row in rows:
+        resolution = resolutions_by_sample.get(row.sample)
+        umi_length = (
+            int(resolution.kit.umi_length)
+            if resolution is not None and resolution.kit is not None
+            else 0
+        )
+        umi_position = (
+            str(resolution.kit.umi_position)
+            if resolution is not None
+            and resolution.kit is not None
+            and getattr(resolution.kit, "umi_position", None) is not None
+            else None
+        )
+        dedup_strategy = (
+            resolution.dedup_strategy
+            if resolution is not None and resolution.dedup_strategy
+            else "auto"
+        )
+        effective_strategy = dedup_step.resolve_dedup_strategy(
+            dedup_strategy, umi_length=umi_length,
+        )
+        method = requested_method if effective_strategy == "umi-tools" else "skip"
+        umi_qc_rows.append(
+            dedup_step.build_umi_qc_row(
+                sample_id=row.sample,
+                umi_length=umi_length,
+                umi_position=umi_position,
+                dedup_strategy=str(effective_strategy),
+                dedup_method=method,
+                pre_count=int(row.mt_aligned_after_mapq),
+                post_count=int(row.mt_aligned_after_dedup),
+            )
+        )
+    dedup_step.write_umi_qc_tsv(umi_qc_rows, output_dir / "umi_qc.tsv")
 
     wall_sw.__exit__(None, None, None)
     log_info(

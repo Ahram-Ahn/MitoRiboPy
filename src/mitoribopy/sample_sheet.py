@@ -19,19 +19,31 @@ Required columns (header row, tab-separated)::
 
 Optional columns (any subset; missing columns default to ``None``)::
 
-    replicate          free-form replicate label ('1', '2', 'A', ...);
-                       informational only — pairing is by sample_id
-    fastq_2            path to R2 FASTQ for paired-end reads
-    kit_preset         per-sample kit override (overrides --kit-preset)
-    adapter            per-sample adapter override
-    umi_length         integer; per-sample UMI length override
-    umi_position       '5p' or '3p'
-    strandedness       'forward' | 'reverse' | 'unstranded'
-    dedup_strategy     'auto' | 'umi-tools' | 'skip'
-    exclude            'true' / 'false' / blank — when true, the row is
-                       skipped (use to drop a bad library without
-                       deleting the row)
-    notes              free-form
+    replicate              free-form replicate label ('1', '2', 'A', ...);
+                           informational only — pairing is by sample_id
+    biological_sample_id   logical biological sample id (groups Ribo+RNA
+                           replicates that share a biological replicate)
+    library_type           'single_end' | 'paired_end' | 'auto'
+    fastq_2                path to R2 FASTQ for paired-end reads
+    kit_preset             per-sample kit override (overrides --kit-preset)
+    adapter                per-sample adapter override
+    umi_length             integer; per-sample UMI length override
+    umi_position           '5p' or '3p'
+    strandedness           'forward' | 'reverse' | 'unstranded'
+    dedup_strategy         'auto' | 'umi-tools' | 'skip'
+    read_length_min        integer; per-sample minimum RPF length
+    read_length_max        integer; per-sample maximum RPF length
+    reference_id           logical reference identifier (e.g.
+                           'human_mt_rCRS_v1') — informational, used
+                           to flag drift across samples
+    include                'true' / 'false' / blank — when present,
+                           overrides ``exclude`` (true = keep the row).
+                           Recognised so authors can use whichever
+                           polarity they prefer.
+    exclude                'true' / 'false' / blank — when true, the row
+                           is skipped (use to drop a bad library without
+                           deleting the row)
+    notes                  free-form
 
 Empty cells (``""``, ``"NA"``, ``"None"``, ``"-"``) are read as
 ``None``. Lookups are case-sensitive. ``assay`` is canonicalised to
@@ -118,6 +130,8 @@ _REQUIRED_COLUMNS: tuple[str, ...] = (
 
 _OPTIONAL_COLUMNS: tuple[str, ...] = (
     "replicate",
+    "biological_sample_id",
+    "library_type",
     "fastq_2",
     "kit_preset",
     "adapter",
@@ -125,6 +139,10 @@ _OPTIONAL_COLUMNS: tuple[str, ...] = (
     "umi_position",
     "strandedness",
     "dedup_strategy",
+    "read_length_min",
+    "read_length_max",
+    "reference_id",
+    "include",
     "exclude",
     "notes",
 )
@@ -137,6 +155,9 @@ _VALID_STRANDEDNESS: frozenset[str] = frozenset(
 )
 _VALID_DEDUP: frozenset[str] = frozenset({"auto", "umi-tools", "skip"})
 _VALID_UMI_POS: frozenset[str] = frozenset({"5p", "3p"})
+_VALID_LIBRARY_TYPE: frozenset[str] = frozenset(
+    {"single_end", "paired_end", "auto"}
+)
 
 _NULL_TOKENS: frozenset[str] = frozenset({"", "NA", "None", "none", "-", "null"})
 _BOOL_TRUE: frozenset[str] = frozenset({"true", "yes", "1", "y", "t"})
@@ -160,6 +181,8 @@ class SampleRow:
     condition: str
     fastq_1: Path
     replicate: str | None = None
+    biological_sample_id: str | None = None
+    library_type: str | None = None
     fastq_2: Path | None = None
     kit_preset: str | None = None
     adapter: str | None = None
@@ -167,6 +190,9 @@ class SampleRow:
     umi_position: str | None = None
     strandedness: str | None = None
     dedup_strategy: str | None = None
+    read_length_min: int | None = None
+    read_length_max: int | None = None
+    reference_id: str | None = None
     exclude: bool = False
     notes: str | None = None
 
@@ -343,8 +369,22 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
             )
 
         exclude_raw = get("exclude")
+        include_raw = get("include")
         exclude_bool = False
-        if exclude_raw is not None:
+        # Honour `include` as the priority polarity when both are set;
+        # this lets users adopt either convention without surprise.
+        if include_raw is not None:
+            iv = include_raw.lower()
+            if iv in _BOOL_TRUE:
+                exclude_bool = False
+            elif iv in _BOOL_FALSE:
+                exclude_bool = True
+            else:
+                errors.append(
+                    f"line {line_no}: include {include_raw!r} is not a "
+                    "boolean (use 'true' / 'false' / blank)"
+                )
+        elif exclude_raw is not None:
             ev = exclude_raw.lower()
             if ev in _BOOL_TRUE:
                 exclude_bool = True
@@ -355,6 +395,45 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
                     f"line {line_no}: exclude {exclude_raw!r} is not a "
                     "boolean (use 'true' / 'false' / blank)"
                 )
+
+        library_type = get("library_type")
+        if library_type is not None and library_type not in _VALID_LIBRARY_TYPE:
+            errors.append(
+                f"line {line_no}: library_type {library_type!r} must be "
+                f"one of {sorted(_VALID_LIBRARY_TYPE)}"
+            )
+
+        def _parse_optional_int(
+            colname: str, allow_zero: bool = True,
+        ) -> int | None:
+            raw = get(colname)
+            if raw is None:
+                return None
+            try:
+                value = int(raw)
+            except ValueError:
+                errors.append(
+                    f"line {line_no}: {colname} {raw!r} is not an integer"
+                )
+                return None
+            if value < 0 or (not allow_zero and value == 0):
+                errors.append(
+                    f"line {line_no}: {colname} must be > 0 (got {value})"
+                )
+                return None
+            return value
+
+        read_length_min = _parse_optional_int("read_length_min", allow_zero=False)
+        read_length_max = _parse_optional_int("read_length_max", allow_zero=False)
+        if (
+            read_length_min is not None
+            and read_length_max is not None
+            and read_length_min > read_length_max
+        ):
+            errors.append(
+                f"line {line_no}: read_length_min ({read_length_min}) > "
+                f"read_length_max ({read_length_max})"
+            )
 
         # Bail before constructing the row when required fields are
         # missing — stop the per-row validation but keep collecting
@@ -375,6 +454,8 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
                 condition=condition,
                 fastq_1=Path(fastq_1),
                 replicate=get("replicate"),
+                biological_sample_id=get("biological_sample_id"),
+                library_type=library_type,
                 fastq_2=Path(get("fastq_2")) if get("fastq_2") else None,
                 kit_preset=get("kit_preset"),
                 adapter=get("adapter"),
@@ -382,6 +463,9 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
                 umi_position=umi_pos,
                 strandedness=strandedness,
                 dedup_strategy=dedup,
+                read_length_min=read_length_min,
+                read_length_max=read_length_max,
+                reference_id=get("reference_id"),
                 exclude=exclude_bool,
                 notes=get("notes"),
             )

@@ -675,6 +675,64 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Fixed absolute cutoff used when --cor_mask_method fixed.",
     )
     optional_group.add_argument(
+        "--cor-metric",
+        "--cor_metric",
+        choices=["log2_density_rpm", "log2_rpm", "linear", "raw_count"],
+        default=defaults["cor_metric"],
+        help=(
+            "Primary codon-correlation metric. log2_density_rpm (default) "
+            "log-transforms RPM-normalised codon density; raw_count "
+            "reproduces the legacy depth-dominated scatter (and emits "
+            "W_CODON_RAW_COUNT_PRIMARY)."
+        ),
+    )
+    optional_group.add_argument(
+        "--cor-regression",
+        "--cor_regression",
+        choices=["theil_sen", "ols", "none"],
+        default=defaults["cor_regression"],
+        help=(
+            "Robust regression method drawn through the codon-correlation "
+            "scatter. theil_sen (default) is median-based and tolerant of "
+            "outliers; ols reproduces the legacy linear fit."
+        ),
+    )
+    optional_group.add_argument(
+        "--cor-support-min-raw",
+        "--cor_support_min_raw",
+        type=int,
+        default=defaults["cor_support_min_raw"],
+        help=(
+            "Minimum raw value required in BOTH samples for a codon to "
+            "be marked include_primary. Low-support codons remain in the "
+            "metrics TSV but are dimmed in the figure and excluded from "
+            "the residual ranking."
+        ),
+    )
+    optional_group.add_argument(
+        "--cor-label-top-n",
+        "--cor_label_top_n",
+        type=int,
+        default=defaults["cor_label_top_n"],
+        help="Number of codons to label on the scatter (by support-aware label score).",
+    )
+    optional_group.add_argument(
+        "--cor-pseudocount",
+        "--cor_pseudocount",
+        default=defaults["cor_pseudocount"],
+        help="Additive pseudocount before log2. 'auto' or float.",
+    )
+    optional_group.add_argument(
+        "--cor-raw-panel",
+        "--cor_raw_panel",
+        choices=["qc_only", "off"],
+        default=defaults["cor_raw_panel"],
+        help=(
+            "Where to write the raw-count panel when metric=raw_count. "
+            "'qc_only' (default) routes it to raw_count_qc/; 'off' skips it."
+        ),
+    )
+    optional_group.add_argument(
         "--read-coverage-raw",
         "--read_coverage_raw",
         action=argparse.BooleanOptionalAction,

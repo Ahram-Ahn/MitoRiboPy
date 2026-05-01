@@ -1,20 +1,174 @@
-"""Codon-level correlation analysis between a base sample and comparison samples."""
+"""Codon-level correlation analysis between a base sample and comparison samples.
+
+Publication-readiness redesign (2026-05): the headline statistic is no
+longer a Pearson correlation on raw count-like columns. Raw-count
+correlations are dominated by sequencing depth and codon-usage
+frequency in the reference, so "high correlation" mostly means "the
+samples sequenced to similar depth", not "codon occupancy is similar".
+
+The new pipeline:
+
+* **Metric.** Default ``log2_density_rpm`` — log2 of codon density
+  normalized to a million assigned P-sites, with a small additive
+  pseudocount to handle zeros.
+* **Regression.** Default ``theil_sen`` (median-based, robust to
+  outliers; uses :func:`scipy.stats.theilslopes`).
+* **Support filter.** Codons with very low raw P-site support in
+  *either* sample are flagged as low-support and excluded from the
+  primary-figure label set (controlled by ``support_min_raw``).
+* **MA / Bland-Altman panel.** Always written alongside the scatter so
+  reviewers can see codon-specific shifts that a correlation hides.
+* **Label scoring.** Outlier labels are picked by
+  ``|log2 fold change| * log10(1 + min_raw_support)`` instead of pure
+  residual magnitude — this prevents a low-support codon from dominating
+  the figure on rounding noise.
+
+Backwards compatibility: the legacy ``column="CoverageDivFreq"`` argument
+is still honoured (it now selects the raw column we transform on); the
+legacy per-version CSV / scatter is still emitted; passing
+``metric="raw_count"`` reproduces the old behaviour but raises the
+``W_CODON_RAW_COUNT_PRIMARY`` warning.
+"""
 
 from __future__ import annotations
 
+import json
 import math
 import os
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy.stats import linregress
+from scipy.stats import kendalltau, linregress, spearmanr, theilslopes
 
 from ..console import iter_with_progress, log_info, log_warning
 from ..plotting.style import apply_publication_style
 
 apply_publication_style()
+
+
+# ---------------------------------------------------------------------------
+# Metric / regression policy
+# ---------------------------------------------------------------------------
+
+
+_VALID_METRICS = ("log2_density_rpm", "log2_rpm", "linear", "raw_count")
+_VALID_REGRESSIONS = ("theil_sen", "ols", "none")
+_DEFAULT_PSEUDOCOUNT = 0.5
+_DEFAULT_SUPPORT_MIN_RAW = 10
+W_CODON_RAW_COUNT_PRIMARY = "W_CODON_RAW_COUNT_PRIMARY"
+
+
+def _coerce_pseudocount(pseudocount, fallback_series: pd.Series) -> float:
+    """Resolve ``pseudocount='auto'`` to half the smallest non-zero value."""
+    if isinstance(pseudocount, (int, float)) and not isinstance(pseudocount, bool):
+        return float(pseudocount)
+    if pseudocount in (None, "auto", "AUTO"):
+        nonzero = fallback_series[fallback_series > 0]
+        if nonzero.empty:
+            return _DEFAULT_PSEUDOCOUNT
+        return max(_DEFAULT_PSEUDOCOUNT, float(nonzero.min()) * 0.5)
+    return _DEFAULT_PSEUDOCOUNT
+
+
+def _transform_metric(
+    base_vals: pd.Series,
+    sample_vals: pd.Series,
+    *,
+    metric: str,
+    pseudocount: float,
+) -> tuple[pd.Series, pd.Series, dict]:
+    """Apply the chosen metric transform and return (base_t, sample_t, meta).
+
+    ``meta`` records what was done so it can be embedded in the
+    ``codon_correlation.metadata.json`` sidecar.
+    """
+    metric = str(metric).lower()
+    if metric == "raw_count":
+        return base_vals.astype(float), sample_vals.astype(float), {
+            "metric": "raw_count",
+            "transform": "identity",
+            "pseudocount": 0.0,
+        }
+    if metric == "linear":
+        return base_vals.astype(float), sample_vals.astype(float), {
+            "metric": "linear",
+            "transform": "identity",
+            "pseudocount": 0.0,
+        }
+    # Both log2 modes apply the same per-sample-RPM scaling (so a
+    # depth-difference does not move the headline scatter).
+    scale_base = max(float(base_vals.sum()) / 1e6, 1e-12)
+    scale_sample = max(float(sample_vals.sum()) / 1e6, 1e-12)
+    base_rpm = base_vals.astype(float) / scale_base
+    sample_rpm = sample_vals.astype(float) / scale_sample
+    base_t = np.log2(base_rpm + pseudocount)
+    sample_t = np.log2(sample_rpm + pseudocount)
+    return base_t, sample_t, {
+        "metric": metric,
+        "transform": "log2(value/RPM_scale + pseudocount)",
+        "pseudocount": float(pseudocount),
+        "rpm_scale_base": float(scale_base),
+        "rpm_scale_sample": float(scale_sample),
+    }
+
+
+def _fit_regression(
+    x: np.ndarray, y: np.ndarray, *, method: str,
+) -> dict:
+    """Fit the requested regression and return diagnostics.
+
+    Always returns ``slope``, ``intercept``, ``predicted`` (over ``x``),
+    ``residual`` (``y - predicted``), and a ``method`` string. For
+    ``method="none"`` the line is the identity ``y = x``, which lets the
+    rest of the pipeline keep working.
+    """
+    method = str(method).lower()
+    n = int(min(len(x), len(y)))
+    if n < 3 or method == "none":
+        slope, intercept = 1.0, 0.0
+        predicted = slope * x + intercept
+        return {
+            "method": "identity" if method == "none" else f"{method}_too_few_points",
+            "slope": slope,
+            "intercept": intercept,
+            "predicted": predicted,
+            "residual": y - predicted,
+        }
+    if method == "theil_sen":
+        slope, intercept, lo_slope, hi_slope = theilslopes(y, x)
+        predicted = slope * x + intercept
+        return {
+            "method": "theil_sen",
+            "slope": float(slope),
+            "intercept": float(intercept),
+            "slope_ci_low": float(lo_slope),
+            "slope_ci_high": float(hi_slope),
+            "predicted": predicted,
+            "residual": y - predicted,
+        }
+    # OLS fallback (back-compat with the old behaviour).
+    slope, intercept, r_value, p_value, _ = linregress(x, y)
+    predicted = slope * x + intercept
+    return {
+        "method": "ols",
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "predicted": predicted,
+        "residual": y - predicted,
+        "r": float(r_value),
+        "p": float(p_value),
+    }
+
+
+def _label_score(
+    log2_fc: pd.Series, support_min_raw: pd.Series,
+) -> pd.Series:
+    """``|log2 FC| * log10(1 + min support)`` — biases labels to high-support codons."""
+    support_term = np.log10(1.0 + support_min_raw.astype(float))
+    return (log2_fc.abs().astype(float) * support_term).fillna(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +300,42 @@ def run_codon_correlation(
     mask_percentile: float = 0.99,
     mask_threshold: float | None = None,
     site: str = "p",
+    *,
+    metric: str = "log2_density_rpm",
+    regression: str = "theil_sen",
+    pseudocount: float | str = "auto",
+    support_min_raw: int = _DEFAULT_SUPPORT_MIN_RAW,
+    label_top_n: int = 10,
+    raw_panel: str = "qc_only",
 ) -> None:
     """Run codon correlation analysis comparing the base sample to every
     other sample for the requested site.
+
+    Parameters
+    ----------
+    metric
+        Primary plotting / scoring transform. ``log2_density_rpm`` (the
+        default) is the publication-recommended choice; ``raw_count``
+        reproduces the old behaviour but emits a structured warning.
+    regression
+        Regression line drawn through the scatter and used to compute
+        residuals. ``theil_sen`` (default) is robust to outliers;
+        ``ols`` reproduces the old linear regression; ``none`` skips
+        the regression and uses an identity line.
+    pseudocount
+        Additive pseudocount before the log2. ``"auto"`` resolves to
+        ``max(0.5, 0.5 * min_nonzero_value)`` per (base, sample) pair.
+    support_min_raw
+        Minimum raw value required in BOTH samples for a codon to be
+        considered "primary"; lower-support codons remain in the data
+        table but are excluded from labels and the residual ranking.
+    label_top_n
+        Number of codons to label on the scatter, ranked by
+        ``|log2_fold_change| * log10(1 + min_raw_support)``.
+    raw_panel
+        ``"qc_only"`` (default): write the raw-count scatter under
+        ``raw_count_qc/`` so it is clearly a QC artefact, not a
+        publication figure. ``"off"`` skips the raw panel entirely.
 
     ``site`` selects which codon-usage table to read:
       * ``"p"``: read ``p_site_codon_usage_total.csv``; for stop-codon
@@ -158,8 +345,34 @@ def run_codon_correlation(
         stop-codon override; A-site usage never masks the stop).
 
     Two versions (``all`` and ``masked``) are produced based on
-    thresholds. CSV + SVG + PNG outputs are saved for each.
+    thresholds. The function writes:
+
+    * ``codon_correlation_metrics.tsv`` (one row per sample/codon) — the
+      authoritative tabular output, suitable for re-plotting.
+    * ``{base}_vs_{sample}_{version}.csv`` — legacy per-pair CSVs.
+    * ``{base}_vs_{sample}_{version}.svg/.png`` — three-panel publication
+      figure (log2 density scatter, MA plot, residual plot).
+    * ``codon_correlation.metadata.json`` — sidecar describing the
+      metric, regression method, pseudocount, and warnings.
     """
+    if metric not in _VALID_METRICS:
+        raise ValueError(
+            f"metric={metric!r} not in {_VALID_METRICS}"
+        )
+    if regression not in _VALID_REGRESSIONS:
+        raise ValueError(
+            f"regression={regression!r} not in {_VALID_REGRESSIONS}"
+        )
+    raw_metric = metric == "raw_count"
+    if raw_metric:
+        log_warning(
+            "COR",
+            f"[{W_CODON_RAW_COUNT_PRIMARY}] metric='raw_count' selected "
+            "for primary codon-correlation figure. Raw-count codon "
+            "correlation is depth- and abundance-dominated; use "
+            "metric='log2_density_rpm' (default) or 'log2_rpm' for "
+            "publication figures.",
+        )
     site = str(site).lower()
     if site not in {"p", "a"}:
         site = "p"
@@ -215,6 +428,7 @@ def run_codon_correlation(
     base_df = base_df[["Codon", "AA", "Category", "base_val"]]
 
     corr_records = []
+    metrics_records: list[pd.DataFrame] = []
 
     for sample_name in iter_with_progress(
         list(samples),
@@ -265,155 +479,255 @@ def run_codon_correlation(
                 merged_current = merged.copy()
             merged_current = merged_current.copy()
 
+            # Resolve pseudocount (auto -> 0.5 * smallest non-zero, floored at 0.5).
+            pc = _coerce_pseudocount(
+                pseudocount,
+                pd.concat([merged_current["base_val"], merged_current["sample_val"]]),
+            )
+            base_t, sample_t, transform_meta = _transform_metric(
+                merged_current["base_val"],
+                merged_current["sample_val"],
+                metric=metric,
+                pseudocount=pc,
+            )
+            merged_current["base_metric"] = base_t.to_numpy()
+            merged_current["sample_metric"] = sample_t.to_numpy()
+            merged_current["log2_fold_change"] = (
+                merged_current["sample_metric"] - merged_current["base_metric"]
+                if metric.startswith("log2")
+                else np.log2(
+                    (merged_current["sample_val"].astype(float) + pc)
+                    / (merged_current["base_val"].astype(float) + pc)
+                )
+            )
+            merged_current["mean_log2_density"] = 0.5 * (
+                merged_current["base_metric"] + merged_current["sample_metric"]
+            )
+            merged_current["support_min_raw"] = (
+                merged_current[["base_val", "sample_val"]].min(axis=1).astype(float)
+            )
+            merged_current["support_total_raw"] = (
+                merged_current["base_val"].astype(float)
+                + merged_current["sample_val"].astype(float)
+            )
+            merged_current["include_primary"] = (
+                merged_current["support_min_raw"] >= float(support_min_raw)
+            )
+            merged_current["exclusion_reason"] = np.where(
+                merged_current["include_primary"], "none", "low_support"
+            )
+
+            primary = merged_current[merged_current["include_primary"]]
+            x = primary["base_metric"].to_numpy(dtype=float)
+            y = primary["sample_metric"].to_numpy(dtype=float)
+
+            fit = _fit_regression(x, y, method=regression)
+            slope = float(fit["slope"])
+            intercept = float(fit["intercept"])
+            # Predict over the full table (including low-support codons)
+            # so the residual column covers every row.
+            full_pred = slope * merged_current["base_metric"].to_numpy() + intercept
+            merged_current["predicted"] = full_pred
+            merged_current["robust_residual"] = (
+                merged_current["sample_metric"].to_numpy() - full_pred
+            )
+            # Legacy "residual" column kept as the absolute version for
+            # backwards compatibility with existing downstream parsers.
+            merged_current["residual"] = np.abs(merged_current["robust_residual"])
+
+            # Robust label policy: pick by |log2 FC| weighted by support
+            # so a low-support codon doesn't dominate the figure.
+            merged_current["label_score"] = _label_score(
+                merged_current["log2_fold_change"],
+                merged_current["support_min_raw"],
+            )
+            label_pool = merged_current[merged_current["include_primary"]].copy()
+            top10 = label_pool.nlargest(int(label_top_n), "label_score").copy()
+            top10["label"] = (
+                top10["Codon"].astype(str) + " (" + top10["AA"].astype(str) + ")"
+            )
+
+            # Headline correlations (r/spearman/kendall) on the
+            # transformed, primary-support subset.
+            if len(x) >= 3:
+                r_value = float(np.corrcoef(x, y)[0, 1])
+                try:
+                    sp_r, _ = spearmanr(x, y)
+                    spearman_r = float(sp_r)
+                except Exception:
+                    spearman_r = float("nan")
+                try:
+                    kt, _ = kendalltau(x, y)
+                    kendall_tau = float(kt)
+                except Exception:
+                    kendall_tau = float("nan")
+            else:
+                r_value = spearman_r = kendall_tau = float("nan")
+            r_squared = r_value * r_value if not math.isnan(r_value) else float("nan")
+
             out_csv = os.path.join(output_dir, f"{base_sample}_vs_{sample_name}_{version}.csv")
             merged_current.to_csv(out_csv, index=False)
             log_info("COR", f"Wrote correlation CSV => {out_csv}")
 
-            # Regression on the CoverageDivFreq values.
-            slope, intercept, r_value, p_value, _ = linregress(
-                merged_current["base_val"], merged_current["sample_val"]
-            )
-            merged_current["predicted"] = (
-                slope * merged_current["base_val"] + intercept
-            )
-            merged_current["residual"] = abs(
-                merged_current["sample_val"] - merged_current["predicted"]
-            )
-            # Label the 10 codons farthest from the regression line.
-            top10 = merged_current.nlargest(10, "residual").copy()
-            top10["label"] = top10["Codon"].astype(str) + " (" + top10["AA"].astype(str) + ")"
+            # Append to the long-format metrics table written once at
+            # the end of the run.
+            metrics_row = merged_current.copy()
+            metrics_row.insert(0, "version", version)
+            metrics_row.insert(0, "compare_sample", sample_name)
+            metrics_row.insert(0, "base_sample", base_sample)
+            metrics_row.insert(0, "site", site_label)
+            metrics_records.append(metrics_row)
 
-            # ----- Publication-quality scatter --------------------------
+            # ----- Three-panel publication figure -----------------------
             #
-            # Design choices:
-            # * square aspect ratio with shared axis limits + identity
-            #   line so deviation from y=x is visually obvious;
-            # * alpha + small marker edge to mute overplotting at the
-            #   low-coverage corner;
-            # * Okabe-Ito colour-blind safe palette per Category;
-            # * leader-line labels for the 10 highest-residual codons,
-            #   placed greedily to avoid overlap (no adjustText dep);
-            # * compact stat box with r, R^2, p, slope, intercept, N;
-            # * SVG (vector, for figures) + 300 dpi PNG (for slides)
-            #   side by side.
+            # Panel A: log2-density scatter with identity + robust fit
+            #          and support-aware labels.
+            # Panel B: MA / Bland-Altman plot — surfaces codon-specific
+            #          shifts a correlation hides.
+            # Panel C: residual plot — distribution of (sample - fit) so
+            #          a scale or biased shift is obvious.
+            # When metric='raw_count', panel A is rendered in the original
+            # raw scale and the figure is written under raw_count_qc/ to
+            # mark it as a QC artefact, not a publication figure.
             fallback_palette = list(sns.color_palette("Set2", 8).as_hex())
             categories = list(merged_current["Category"].astype(str).unique())
             colour_map = {
                 cat: _categorical_colour(cat, fallback_palette) for cat in categories
             }
 
-            fig, ax = plt.subplots(figsize=(7.5, 7.5))
+            primary_mask = merged_current["include_primary"].to_numpy()
+
+            fig, (ax_scatter, ax_ma, ax_resid) = plt.subplots(
+                1, 3, figsize=(18, 6)
+            )
+
+            x_plot = merged_current["base_metric"].to_numpy()
+            y_plot = merged_current["sample_metric"].to_numpy()
+
+            # Panel A — scatter
             for category, group in merged_current.groupby("Category", sort=False):
-                ax.scatter(
-                    group["base_val"],
-                    group["sample_val"],
+                ax_scatter.scatter(
+                    group["base_metric"],
+                    group["sample_metric"],
                     s=42,
-                    alpha=0.75,
+                    alpha=np.where(group["include_primary"], 0.85, 0.30),
                     color=colour_map[str(category)],
                     edgecolor="white",
                     linewidth=0.6,
                     label=str(category),
                 )
-
-            # Square axes anchored on the data range so y=x is informative.
-            data_min = float(
-                min(merged_current["base_val"].min(), merged_current["sample_val"].min())
-            )
-            data_max = float(
-                max(merged_current["base_val"].max(), merged_current["sample_val"].max())
-            )
+            data_min = float(min(x_plot.min(), y_plot.min()))
+            data_max = float(max(x_plot.max(), y_plot.max()))
             pad = max((data_max - data_min) * 0.05, 1e-6)
             axis_min = data_min - pad
             axis_max = data_max + pad
-            ax.set_xlim(axis_min, axis_max)
-            ax.set_ylim(axis_min, axis_max)
-            ax.set_aspect("equal", adjustable="box")
-
-            identity = np.linspace(axis_min, axis_max, 100)
-            ax.plot(
-                identity,
-                identity,
-                color="0.6",
-                linestyle=":",
-                linewidth=1.0,
-                label="y = x",
-            )
-            x_vals = np.linspace(axis_min, axis_max, 100)
-            ax.plot(
-                x_vals,
-                slope * x_vals + intercept,
+            ax_scatter.set_xlim(axis_min, axis_max)
+            ax_scatter.set_ylim(axis_min, axis_max)
+            ax_scatter.set_aspect("equal", adjustable="box")
+            line_x = np.linspace(axis_min, axis_max, 100)
+            ax_scatter.plot(line_x, line_x, color="0.6", linestyle=":", linewidth=1.0, label="y = x")
+            ax_scatter.plot(
+                line_x,
+                slope * line_x + intercept,
                 color="#D55E00",
                 linestyle="--",
                 linewidth=1.4,
-                label=f"OLS fit (r = {r_value:.3f})",
+                label=f"{regression} (slope={slope:.3f})",
             )
-
             _place_residual_labels(
-                ax,
-                top10,
-                x_col="base_val",
-                y_col="sample_val",
+                ax_scatter, top10,
+                x_col="base_metric",
+                y_col="sample_metric",
                 label_col="label",
                 axis_min=axis_min,
                 axis_max=axis_max,
             )
-
-            r_squared = r_value * r_value
             stat_lines = [
-                f"r = {r_value:.3f}",
-                f"R$^2$ = {r_squared:.3f}",
-                f"p = {p_value:.2e}",
+                f"metric = {metric}",
+                f"regression = {regression}",
+                f"r (transformed) = {r_value:.3f}",
+                f"Spearman rho = {spearman_r:.3f}",
+                f"Kendall tau = {kendall_tau:.3f}",
                 f"slope = {slope:.3f}",
                 f"intercept = {intercept:.3f}",
-                f"N = {len(merged_current)}",
+                f"N primary = {int(primary_mask.sum())}",
+                f"N total = {len(merged_current)}",
             ]
-            ax.text(
-                0.03,
-                0.97,
-                "\n".join(stat_lines),
-                transform=ax.transAxes,
-                ha="left",
-                va="top",
-                fontsize=9,
-                family="monospace",
-                bbox=dict(
-                    boxstyle="round,pad=0.4",
-                    facecolor="white",
-                    edgecolor="0.7",
-                    linewidth=0.6,
-                    alpha=0.9,
-                ),
+            ax_scatter.text(
+                0.03, 0.97, "\n".join(stat_lines),
+                transform=ax_scatter.transAxes, ha="left", va="top",
+                fontsize=9, family="monospace",
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
+                          edgecolor="0.7", linewidth=0.6, alpha=0.9),
             )
+            scatter_xlabel = (
+                f"{base_sample} ({metric})" if metric != "raw_count"
+                else f"{base_sample} ({column})"
+            )
+            scatter_ylabel = (
+                f"{sample_name} ({metric})" if metric != "raw_count"
+                else f"{sample_name} ({column})"
+            )
+            ax_scatter.set_xlabel(scatter_xlabel, fontsize=11)
+            ax_scatter.set_ylabel(scatter_ylabel, fontsize=11)
+            ax_scatter.set_title("A. Codon density scatter", fontsize=12, fontweight="bold")
+            ax_scatter.grid(True, which="major", alpha=0.25, linewidth=0.6)
+            ax_scatter.legend(
+                title="Category", title_fontsize=10, fontsize=9,
+                loc="lower right", frameon=True, framealpha=0.9, edgecolor="0.7",
+            )
+
+            # Panel B — MA plot
+            for category, group in merged_current.groupby("Category", sort=False):
+                ax_ma.scatter(
+                    group["mean_log2_density"],
+                    group["log2_fold_change"],
+                    s=36,
+                    alpha=np.where(group["include_primary"], 0.85, 0.25),
+                    color=colour_map[str(category)],
+                    edgecolor="white",
+                    linewidth=0.5,
+                    label=str(category),
+                )
+            ax_ma.axhline(0.0, color="0.5", linestyle=":", linewidth=1.0)
+            ax_ma.axhline(1.0, color="#D55E00", linestyle="--", linewidth=0.8, alpha=0.7)
+            ax_ma.axhline(-1.0, color="#D55E00", linestyle="--", linewidth=0.8, alpha=0.7)
+            ax_ma.set_xlabel("Mean log2 density (A)", fontsize=11)
+            ax_ma.set_ylabel("log2 fold change (M)", fontsize=11)
+            ax_ma.set_title("B. MA / Bland-Altman", fontsize=12, fontweight="bold")
+            ax_ma.grid(True, which="major", alpha=0.25, linewidth=0.6)
+
+            # Panel C — residuals
+            ax_resid.scatter(
+                merged_current["base_metric"],
+                merged_current["robust_residual"],
+                s=30,
+                alpha=np.where(primary_mask, 0.85, 0.25),
+                color="#0072B2",
+                edgecolor="white",
+                linewidth=0.4,
+            )
+            ax_resid.axhline(0.0, color="0.5", linestyle=":", linewidth=1.0)
+            ax_resid.set_xlabel(scatter_xlabel, fontsize=11)
+            ax_resid.set_ylabel("Residual (sample - fit)", fontsize=11)
+            ax_resid.set_title("C. Robust residuals", fontsize=12, fontweight="bold")
+            ax_resid.grid(True, which="major", alpha=0.25, linewidth=0.6)
 
             title_suffix = "all codons" if version == "all" else "outlier-masked"
-            ax.set_title(
-                f"Codon usage: {base_sample} vs {sample_name} ({title_suffix})",
-                fontsize=12,
-                fontweight="bold",
-                pad=12,
+            fig.suptitle(
+                f"Codon density: {base_sample} vs {sample_name} ({title_suffix})",
+                fontsize=14, fontweight="bold",
             )
-            ax.set_xlabel(f"{base_sample}  ({column})", fontsize=11)
-            ax.set_ylabel(f"{sample_name}  ({column})", fontsize=11)
-            ax.grid(True, which="major", alpha=0.25, linewidth=0.6)
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
-            ax.legend(
-                title="Category",
-                title_fontsize=10,
-                fontsize=9,
-                loc="lower right",
-                frameon=True,
-                framealpha=0.9,
-                edgecolor="0.7",
-            )
-            fig.tight_layout()
+            fig.tight_layout(rect=(0, 0, 1, 0.95))
 
-            out_svg = os.path.join(
-                output_dir, f"{base_sample}_vs_{sample_name}_{version}.svg"
+            plot_dir = (
+                Path(output_dir) / "raw_count_qc"
+                if (raw_metric and str(raw_panel).lower() == "qc_only")
+                else Path(output_dir)
             )
-            out_png = os.path.join(
-                output_dir, f"{base_sample}_vs_{sample_name}_{version}.png"
-            )
+            plot_dir.mkdir(parents=True, exist_ok=True)
+            out_svg = plot_dir / f"{base_sample}_vs_{sample_name}_{version}.svg"
+            out_png = plot_dir / f"{base_sample}_vs_{sample_name}_{version}.png"
             fig.savefig(out_svg)
             fig.savefig(out_png, dpi=300)
             plt.close(fig)
@@ -422,15 +736,64 @@ def run_codon_correlation(
             corr_records.append({
                 "Base_Sample": base_sample,
                 "Other_Sample": sample_name,
+                "Site": site_label,
                 "Version": version,
-                "Pearson_r": r_value,
-                "NumPoints": len(merged_current)
+                "Metric": metric,
+                "Regression": regression,
+                "Pseudocount": float(pc),
+                "Pearson_r_metric": r_value,
+                "Spearman_r": spearman_r,
+                "Kendall_tau": kendall_tau,
+                "RobustSlope": slope,
+                "RobustIntercept": intercept,
+                "NumCodons": len(merged_current),
+                "NumCodonsPrimary": int(primary_mask.sum()),
+                "PseudocountResolved": float(pc),
             })
+
+    if metrics_records:
+        metrics_df = pd.concat(metrics_records, ignore_index=True)
+        # Friendly column ordering for the long-format TSV.
+        ordered = [
+            "site", "base_sample", "compare_sample", "version",
+            "Codon", "AA", "Category",
+            "base_val", "sample_val",
+            "base_metric", "sample_metric",
+            "log2_fold_change", "mean_log2_density",
+            "support_min_raw", "support_total_raw",
+            "predicted", "robust_residual", "residual",
+            "label_score", "include_primary", "exclusion_reason",
+        ]
+        ordered = [c for c in ordered if c in metrics_df.columns]
+        metrics_df = metrics_df[ordered + [c for c in metrics_df.columns if c not in ordered]]
+        metrics_path = os.path.join(output_dir, "codon_correlation_metrics.tsv")
+        metrics_df.to_csv(metrics_path, sep="\t", index=False)
+        log_info("COR", f"Wrote codon correlation metrics => {metrics_path}")
 
     cor_df = pd.DataFrame(corr_records)
     out_summary = os.path.join(output_dir, f"codon_correlation_summary_{base_sample}.csv")
     cor_df.to_csv(out_summary, index=False)
     log_info("COR", f"Correlation summary saved => {out_summary}")
+
+    metadata_payload = {
+        "metric": metric,
+        "regression": regression,
+        "support_min_raw": int(support_min_raw),
+        "label_top_n": int(label_top_n),
+        "raw_panel": str(raw_panel),
+        "site": site_label,
+        "base_sample": base_sample,
+        "compare_samples": [s for s in samples if s != base_sample],
+        "primary_column": column,
+        "warnings": (
+            [W_CODON_RAW_COUNT_PRIMARY] if raw_metric else []
+        ),
+    }
+    metadata_path = os.path.join(output_dir, "codon_correlation.metadata.json")
+    Path(metadata_path).write_text(
+        json.dumps(metadata_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     log_info("COR", "Done correlation for all samples.")
 
 # Example usage:

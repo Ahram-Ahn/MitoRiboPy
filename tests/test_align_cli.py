@@ -543,16 +543,32 @@ def test_end_to_end_picks_up_umi_dedup_when_umi_present(
 # ---------- --max-parallel-samples concurrency ----------------------------
 
 
-def test_max_parallel_samples_default_is_one() -> None:
+def test_max_parallel_samples_default_is_auto() -> None:
+    """The publication-readiness refactor (ref-5) made 'auto' the
+    default: the resolved plan is computed at runtime, so the parser
+    sees ``None`` and the resource_plan layer treats that as 'auto'."""
     parser = build_parser()
     ns = parser.parse_args([])
-    assert ns.max_parallel_samples == 1
+    assert ns.max_parallel_samples is None
+    assert ns.single_sample_mode is False
 
 
 def test_max_parallel_samples_parses_value() -> None:
     parser = build_parser()
     ns = parser.parse_args(["--max-parallel-samples", "4"])
-    assert ns.max_parallel_samples == 4
+    assert ns.max_parallel_samples == "4"
+
+
+def test_single_sample_mode_flag_parses() -> None:
+    parser = build_parser()
+    ns = parser.parse_args(["--single-sample-mode"])
+    assert ns.single_sample_mode is True
+
+
+def test_max_parallel_samples_accepts_auto_string() -> None:
+    parser = build_parser()
+    ns = parser.parse_args(["--max-parallel-samples", "auto"])
+    assert ns.max_parallel_samples == "auto"
 
 
 def test_max_parallel_samples_help_mentions_threads_division() -> None:

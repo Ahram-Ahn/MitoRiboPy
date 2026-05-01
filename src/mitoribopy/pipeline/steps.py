@@ -966,6 +966,16 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
                         else None
                     ),
                     site=site,
+                    metric=getattr(context.args, "cor_metric", "log2_density_rpm"),
+                    regression=getattr(context.args, "cor_regression", "theil_sen"),
+                    support_min_raw=int(
+                        getattr(context.args, "cor_support_min_raw", 10)
+                    ),
+                    label_top_n=int(
+                        getattr(context.args, "cor_label_top_n", 10)
+                    ),
+                    pseudocount=getattr(context.args, "cor_pseudocount", "auto"),
+                    raw_panel=getattr(context.args, "cor_raw_panel", "qc_only"),
                 )
                 ran_sites.append("P-site" if site == "p" else "A-site")
             if ran_sites:

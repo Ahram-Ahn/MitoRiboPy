@@ -52,6 +52,7 @@ specified by `args.cap_percentile` (defaults to 0.999).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import copy
@@ -122,7 +123,66 @@ def _build_codon_binned_map(
 # Okabe-Ito colorblind-safe palette (frame 0 / 1 / 2).
 # https://jfly.uni-koeln.de/color/
 _FRAME_COLORS = ("#E69F00", "#56B4E9", "#009E73")
-_FRAME_LABELS = ("Frame 0 (codon-locked)", "Frame 1", "Frame 2")
+# Frame labels make the coordinate system explicit so a reviewer does
+# not have to read source to know what 'frame 1' means in a plot.
+_FRAME_LABELS = (
+    "Frame 0: annotated CDS frame",
+    "Frame +1: shifted +1 nt from CDS frame",
+    "Frame +2: shifted +2 nt from CDS frame",
+)
+
+
+def _write_coverage_frame_metadata(
+    *,
+    frame_dir: Path,
+    site: str,
+    normalization: str,
+    offset_type: str,
+    offset_site: str,
+    included_read_lengths: list[int] | None = None,
+) -> Path:
+    """Write a ``coverage_plot.metadata.json`` sidecar describing the frame plot.
+
+    Every frame-coloured coverage figure references one annotated CDS
+    coordinate system. Recording it next to the figures eliminates the
+    most common reviewer confusion: 'what does frame 0 actually mean?'
+
+    Returns the written path.
+    """
+    frame_dir = Path(frame_dir)
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    site_label = "P-site" if str(site).lower() == "p" else "A-site"
+    site_letter = str(site).lower()
+    if site_letter == "p":
+        frame_formula = "(P_site_nt - CDS_start_nt) % 3"
+        frame_0_definition = (
+            "assigned P-site lies in the annotated coding frame"
+        )
+    else:
+        frame_formula = "(A_site_nt - CDS_start_nt) % 3, where A-site = P-site + 3 nt"
+        frame_0_definition = (
+            "assigned A-site (P-site + 3 nt) lies in the annotated coding frame"
+        )
+    payload = {
+        "plot_type": "coverage_by_frame",
+        "site": site_label,
+        "coordinate_system": "transcript-local 0-based nt coordinate",
+        "frame_formula": frame_formula,
+        "frame_0_definition": frame_0_definition,
+        "frame_labels": list(_FRAME_LABELS),
+        "frame_colors": list(_FRAME_COLORS),
+        "offset_type": str(offset_type),
+        "offset_site": str(offset_site),
+        "normalization": normalization,
+        "included_read_lengths": (
+            sorted(int(x) for x in included_read_lengths)
+            if included_read_lengths
+            else None
+        ),
+    }
+    path = frame_dir / "coverage_plot.metadata.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 def _build_cds_nt_slice_map(
@@ -489,6 +549,17 @@ def run_coverage_profile_plots(
     # ``p_site_density_rpm/``, ``a_site_density_raw/`` etc. The legacy
     # layout (``<output>/p/site_density_rpm/``) is gone.
     site_density_dirs: Dict[str, Dict[str, Path]] = {}
+    included_lengths_for_metadata: list[int] | None = None
+    if isinstance(selected_offsets_df, pd.DataFrame) and not selected_offsets_df.empty:
+        if "Read Length" in selected_offsets_df.columns:
+            included_lengths_for_metadata = sorted(
+                int(x)
+                for x in pd.to_numeric(
+                    selected_offsets_df["Read Length"], errors="coerce"
+                )
+                .dropna()
+                .unique()
+            )
     for site in sites_to_emit:
         site_prefix = "p_site" if site == "p" else "a_site"
         site_density_dirs[site] = {
@@ -501,6 +572,25 @@ def run_coverage_profile_plots(
         }
         for d in site_density_dirs[site].values():
             d.mkdir(parents=True, exist_ok=True)
+        # Frame-coloured plots reference the annotated CDS coordinate
+        # system; emit a sidecar so reviewers can look up the exact
+        # frame formula and offset settings without reading source.
+        _write_coverage_frame_metadata(
+            frame_dir=site_density_dirs[site]["rpm_frame"],
+            site=site,
+            normalization="RPM",
+            offset_type=str(offset_type),
+            offset_site=placement_site,
+            included_read_lengths=included_lengths_for_metadata,
+        )
+        _write_coverage_frame_metadata(
+            frame_dir=site_density_dirs[site]["raw_frame"],
+            site=site,
+            normalization="raw_counts",
+            offset_type=str(offset_type),
+            offset_site=placement_site,
+            included_read_lengths=included_lengths_for_metadata,
+        )
 
     if write_read_coverage_rpm:
         read_dir_rpm.mkdir(parents=True, exist_ok=True)
@@ -681,9 +771,13 @@ def run_coverage_profile_plots(
             if row == 0:
                 ax.legend(loc="upper right", framealpha=0.9, fontsize=10)
 
+        # Annotate the frame coordinate system inline so the figure is
+        # interpretable without reading the metadata sidecar.
         fig.suptitle(
-            f"{sequence_display_map.get(tr, tr)} - {title_suffix}",
-            fontsize=16,
+            f"{sequence_display_map.get(tr, tr)} - {title_suffix}\n"
+            "Frame = (assigned-site nt - CDS-start nt) mod 3; "
+            "Frame 0 = annotated CDS frame.",
+            fontsize=13,
             fontweight="bold",
         )
         fig.tight_layout()

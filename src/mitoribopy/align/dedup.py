@@ -1,32 +1,60 @@
 """Deduplication step for the ``mitoribopy align`` pipeline.
 
-Two strategies are supported. The legacy ``mark-duplicates`` (picard
-MarkDuplicates) option was removed in v0.4.5 because coordinate-only
-deduplication is biologically wrong for ribo-seq: ribosomes translating
-the same codon naturally produce reads at the same transcript
-coordinate, and there is no way to distinguish those genuine biological
-duplicates from PCR artefacts without UMI information. The TACO1-KO
-regression in ``docs/validation/taco1_ko_regression.md`` is the
-empirical evidence that motivated removal — coordinate-only dedup
-flattens the polyproline stall signal to baseline.
+Pipeline contract
+-----------------
 
-* ``umi-tools``  UMI-aware collapse; the only correct choice when UMIs
-                 are present. Uses ``--method=unique`` by default so
-                 reads collapse only on exact coordinate AND UMI
-                 match — directional clustering over-collapses in the
-                 low-complexity mt-mRNA regime.
+UMI handling is a two-step process spread across the align pipeline:
+
+1. **UMI extraction** happens BEFORE alignment in
+   :mod:`mitoribopy.align.trim`. The cutadapt invocation removes the
+   UMI bases from the biological insert and writes the UMI into the
+   read name (``QNAME_UMI`` separator). This is mandatory: without
+   extraction, the UMI bases would be aligned as if they were
+   biological sequence and the per-read coordinate would be wrong.
+
+2. **UMI deduplication** happens AFTER alignment, here. Collapsing PCR
+   duplicates requires both the UMI sequence AND the aligned
+   coordinate, because two reads with the same UMI but different
+   alignment coordinates are genuinely distinct molecules. Coordinate-
+   only deduplication is biologically wrong for ribo-seq: ribosomes
+   translating the same codon naturally produce reads at the same
+   transcript coordinate, and there is no way to distinguish those
+   genuine biological duplicates from PCR artefacts without UMI
+   information. The TACO1-KO regression in
+   ``docs/validation/taco1_ko_regression.md`` is the empirical evidence
+   that motivated removal of the legacy ``mark-duplicates`` strategy —
+   coordinate-only dedup flattens the polyproline stall signal to
+   baseline.
+
+Strategies
+----------
+
+* ``umi-tools``  UMI-aware coordinate+UMI collapse. The only correct
+                 choice when UMIs are present. Uses ``--method=unique``
+                 by default so reads collapse only on exact coordinate
+                 AND UMI match — directional clustering over-collapses
+                 in the low-complexity mt-mRNA regime.
 
 * ``skip``       no deduplication. The required default for UMI-less
                  mt-Ribo-seq libraries.
 
 * ``auto``       resolves to ``umi-tools`` if ``umi_length > 0`` else
                  ``skip``. Default.
+
+QC output
+---------
+
+After every align run :func:`write_umi_qc_tsv` aggregates the per-
+sample :class:`DedupResult`s into ``umi_qc.tsv`` so a reviewer can see
+at a glance how many reads each sample had pre-/post-dedup and how
+much PCR duplication was inferred.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pysam
@@ -34,6 +62,142 @@ import pysam
 from ._types import DedupResult, DedupStrategy
 from .bam_utils import count_mapped_reads as _count_mapped_reads
 from .tool_check import ToolNotFoundError
+
+
+# UMI-tools method recommendation thresholds. These pick a default
+# method based on UMI length and observed duplication, mirroring the
+# guidance in the publication-readiness review:
+#   * UMI length >= 8 nt + duplication > 0.20  -> 'directional'
+#   * UMI length < 8 nt OR low duplication     -> 'unique'
+_UMI_METHOD_LENGTH_THRESHOLD = 8
+_UMI_METHOD_DUPLICATION_THRESHOLD = 0.20
+
+
+def recommend_umi_method(umi_length: int, duplicate_fraction: float) -> tuple[str, str]:
+    """Return ``(method, warning_code)`` for an observed sample.
+
+    A pure helper exposed so the CLI / sample-resolver can use the same
+    rule when emitting per-sample warnings. ``warning_code`` is a stable
+    short identifier suitable for inclusion in ``warnings.tsv`` (e.g.
+    ``"short_umi_collision_risk"``); ``"none"`` signals no warning.
+    """
+    umi_length = int(umi_length or 0)
+    if umi_length <= 0:
+        return ("skip", "no_umi")
+    if umi_length < _UMI_METHOD_LENGTH_THRESHOLD:
+        return ("unique", "short_umi_collision_risk")
+    if duplicate_fraction > _UMI_METHOD_DUPLICATION_THRESHOLD:
+        return ("directional", "none")
+    return ("unique", "none")
+
+
+@dataclass(frozen=True)
+class UmiQCRow:
+    """One row of ``umi_qc.tsv``."""
+
+    sample_id: str
+    umi_present: bool
+    umi_length: int
+    umi_position: str | None
+    n_reads_pre_dedup: int
+    n_reads_post_dedup: int
+    duplicate_fraction: float
+    dedup_method: str
+    dedup_strategy: str
+    warning_code: str
+
+    def as_row(self) -> dict[str, object]:
+        return {
+            "sample_id": self.sample_id,
+            "umi_present": "true" if self.umi_present else "false",
+            "umi_length": int(self.umi_length),
+            "umi_position": self.umi_position or "",
+            "n_reads_pre_dedup": int(self.n_reads_pre_dedup),
+            "n_reads_post_dedup": int(self.n_reads_post_dedup),
+            "duplicate_fraction": f"{float(self.duplicate_fraction):.6g}",
+            "dedup_strategy": self.dedup_strategy,
+            "dedup_method": self.dedup_method,
+            "warning_code": self.warning_code,
+        }
+
+
+_UMI_QC_COLUMNS = (
+    "sample_id",
+    "umi_present",
+    "umi_length",
+    "umi_position",
+    "n_reads_pre_dedup",
+    "n_reads_post_dedup",
+    "duplicate_fraction",
+    "dedup_strategy",
+    "dedup_method",
+    "warning_code",
+)
+
+
+def build_umi_qc_row(
+    *,
+    sample_id: str,
+    umi_length: int,
+    umi_position: str | None,
+    dedup_strategy: str,
+    dedup_method: str,
+    pre_count: int,
+    post_count: int,
+) -> UmiQCRow:
+    """Assemble one :class:`UmiQCRow` from observed counts.
+
+    Returns the recommended-method warning when the chosen method is
+    not the recommended one; the row is still written so a reviewer
+    sees the discrepancy.
+    """
+    umi_present = bool(umi_length and int(umi_length) > 0)
+    pre_count = int(pre_count or 0)
+    post_count = int(post_count or 0)
+    duplicate_fraction = (
+        0.0 if pre_count <= 0 else max(0.0, 1.0 - (post_count / pre_count))
+    )
+    if umi_present:
+        recommended, recommend_warn = recommend_umi_method(
+            umi_length, duplicate_fraction
+        )
+        if dedup_strategy == "skip":
+            warning = "umi_present_but_skipped"
+        elif dedup_method != recommended and recommend_warn == "none":
+            warning = "method_off_recommended"
+        else:
+            warning = recommend_warn
+    else:
+        warning = "no_umi"
+    return UmiQCRow(
+        sample_id=str(sample_id),
+        umi_present=umi_present,
+        umi_length=int(umi_length or 0),
+        umi_position=umi_position,
+        n_reads_pre_dedup=pre_count,
+        n_reads_post_dedup=post_count,
+        duplicate_fraction=duplicate_fraction,
+        dedup_method=str(dedup_method),
+        dedup_strategy=str(dedup_strategy),
+        warning_code=warning,
+    )
+
+
+def write_umi_qc_tsv(rows: list[UmiQCRow], path: Path) -> Path:
+    """Write a publication-grade UMI QC table.
+
+    Columns match the names used in the publication-readiness review
+    (one row per sample). Always overwrites; callers are expected to
+    invoke this once per align run after every sample has finished.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as h:
+        h.write("\t".join(_UMI_QC_COLUMNS) + "\n")
+        for row in rows:
+            d = row.as_row()
+            h.write("\t".join(str(d[col]) for col in _UMI_QC_COLUMNS) + "\n")
+    return path
 
 
 # ---------------------------------------------------------------------------
