@@ -41,6 +41,36 @@ GENE_ID_CONVENTIONS: tuple[str, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Spec-aligned note codes for TE / dTE rows (§5).
+#
+# These are part of the public TSV contract: a downstream filter that
+# greps for ``insufficient_replicates`` should keep working across
+# minor releases. Add new codes additively; do not silently rename.
+# ---------------------------------------------------------------------------
+
+
+NOTE_PUBLICATION_GRADE = "publication_grade"
+NOTE_EXPLORATORY_MT_ONLY = "exploratory_mt_only"
+NOTE_PSEUDO_REPLICATE_NO_STATISTICS = "pseudo_replicate_no_statistics"
+NOTE_INSUFFICIENT_REPLICATES = "insufficient_replicates"
+NOTE_MISSING_RNA_GENE = "missing_rna_gene"
+NOTE_MISSING_RPF_GENE = "missing_rpf_gene"
+NOTE_ZERO_COUNT_IN_CONDITION = "zero_count_in_condition"
+NOTE_GENE_ID_UNMATCHED = "gene_id_unmatched"
+
+CANONICAL_NOTE_CODES: tuple[str, ...] = (
+    NOTE_PUBLICATION_GRADE,
+    NOTE_EXPLORATORY_MT_ONLY,
+    NOTE_PSEUDO_REPLICATE_NO_STATISTICS,
+    NOTE_INSUFFICIENT_REPLICATES,
+    NOTE_MISSING_RNA_GENE,
+    NOTE_MISSING_RPF_GENE,
+    NOTE_ZERO_COUNT_IN_CONDITION,
+    NOTE_GENE_ID_UNMATCHED,
+)
+
+
+# ---------------------------------------------------------------------------
 # DE table abstraction
 # ---------------------------------------------------------------------------
 
@@ -105,28 +135,77 @@ class DeTable:
 
 
 # ---------------------------------------------------------------------------
-# TE / delta-TE result rows
+# TE / delta-TE result rows (§5 spec schema)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class TeRow:
-    """One per sample per gene, emitted into ``te.tsv``."""
+    """One per (sample, gene) pair, emitted into ``te.tsv``.
 
-    sample: str
+    §5 spec columns: ``sample_id, condition, assay, gene, rpf_count,
+    rna_abundance, te, log2_te, note``. The dataclass field names match
+    those columns 1:1; the writer in ``cli/rnaseq.py`` is the only
+    place that converts to TSV.
+
+    Backward-compatible properties ``sample`` and ``mrna_abundance``
+    keep older callers / plotting helpers working without an immediate
+    rewrite.
+    """
+
+    sample_id: str
     gene: str
     rpf_count: int
-    mrna_abundance: float
+    rna_abundance: float
     te: float
+    log2_te: float | None = None
+    condition: str | None = None
+    assay: str = "ribo"
+    note: str = ""
+
+    # ----- backward-compat aliases -----------------------------------------
+    @property
+    def sample(self) -> str:  # noqa: D401
+        """Deprecated alias for :attr:`sample_id`."""
+        return self.sample_id
+
+    @property
+    def mrna_abundance(self) -> float:  # noqa: D401
+        """Deprecated alias for :attr:`rna_abundance`."""
+        return self.rna_abundance
 
 
 @dataclass(frozen=True)
 class DTeRow:
-    """One per gene, emitted into ``delta_te.tsv``."""
+    """One per gene, emitted into ``delta_te.tsv``.
+
+    §5 spec columns: ``gene, base_condition, compare_condition,
+    mrna_log2fc, rpf_log2fc, delta_te_log2, padj_mrna, padj_rpf,
+    padj_delta_te, method, note``.
+
+    The previous schema had a single ``padj`` field that carried the
+    DE table's mRNA padj; that value now lives in ``padj_mrna`` and is
+    exposed under the legacy attribute name as a back-compat property
+    so existing plotting code keeps working.
+    """
 
     gene: str
-    mrna_log2fc: float | None
-    rpf_log2fc: float | None
-    delta_te_log2: float | None
-    padj: float | None
+    base_condition: str | None = None
+    compare_condition: str | None = None
+    mrna_log2fc: float | None = None
+    rpf_log2fc: float | None = None
+    delta_te_log2: float | None = None
+    padj_mrna: float | None = None
+    padj_rpf: float | None = None
+    padj_delta_te: float | None = None
+    method: str = ""
     note: str = ""
+
+    # ----- backward-compat aliases -----------------------------------------
+    @property
+    def padj(self) -> float | None:  # noqa: D401
+        """Deprecated alias: the legacy single ``padj`` column carried
+        the DE table's mRNA padj for the gene. New code should pick
+        between :attr:`padj_mrna`, :attr:`padj_rpf`, and
+        :attr:`padj_delta_te` explicitly."""
+        return self.padj_mrna

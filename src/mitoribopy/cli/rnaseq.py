@@ -75,10 +75,12 @@ RNASEQ_SUBCOMMAND_HELP = (
 
 # Explicit mode names. de_table is the publication-grade flow (external
 # full-transcriptome DE table); from_fastq is the in-tree exploratory
-# flow (mt-only pyDESeq2). 'none' means the rnaseq stage is configured
-# but no inputs were supplied -- typically used by `mitoribopy all` to
-# record "stage section present, intentionally inert".
-RNASEQ_MODES: tuple[str, ...] = ("de_table", "from_fastq", "none")
+# flow (mt-only pyDESeq2); rna_only emits an mt-mRNA count matrix
+# from RNA FASTQs without computing TE (useful when RPF data is not
+# available yet). 'none' means the rnaseq stage is configured but no
+# inputs were supplied — typically used by `mitoribopy all` to record
+# "stage section present, intentionally inert".
+RNASEQ_MODES: tuple[str, ...] = ("de_table", "from_fastq", "rna_only", "none")
 
 
 def _normalize_mode(value: str | None) -> str | None:
@@ -541,35 +543,89 @@ def _load_condition_map(path: Path | None) -> dict[str, str]:
     return mapping
 
 
+_TE_TSV_COLUMNS: tuple[str, ...] = (
+    "sample_id",
+    "condition",
+    "assay",
+    "gene",
+    "rpf_count",
+    "rna_abundance",
+    "te",
+    "log2_te",
+    "note",
+)
+
+
+_DELTA_TE_TSV_COLUMNS: tuple[str, ...] = (
+    "gene",
+    "base_condition",
+    "compare_condition",
+    "mrna_log2fc",
+    "rpf_log2fc",
+    "delta_te_log2",
+    "padj_mrna",
+    "padj_rpf",
+    "padj_delta_te",
+    "method",
+    "note",
+)
+
+
+def _fmt_optional(value, fmt: str = ".6g") -> str:
+    if value is None:
+        return ""
+    return format(value, fmt)
+
+
 def _write_te_table(rows: Iterable[TeRow], path: Path) -> None:
+    """Write ``te.tsv`` (schema 2.0, §5 spec)."""
     from ..io.schema_versions import schema_header_line
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         handle.write(schema_header_line("te.tsv"))
-        handle.write("sample\tgene\trpf_count\tmrna_abundance\tte\n")
+        handle.write("\t".join(_TE_TSV_COLUMNS) + "\n")
         for row in rows:
+            cells = {
+                "sample_id": row.sample_id,
+                "condition": row.condition or "",
+                "assay": row.assay,
+                "gene": row.gene,
+                "rpf_count": str(row.rpf_count),
+                "rna_abundance": _fmt_optional(row.rna_abundance),
+                "te": _fmt_optional(row.te),
+                "log2_te": _fmt_optional(row.log2_te),
+                "note": row.note,
+            }
             handle.write(
-                f"{row.sample}\t{row.gene}\t{row.rpf_count}\t"
-                f"{row.mrna_abundance:.6g}\t{row.te:.6g}\n"
+                "\t".join(cells[c] for c in _TE_TSV_COLUMNS) + "\n"
             )
 
 
 def _write_delta_te_table(rows: Iterable[DTeRow], path: Path) -> None:
+    """Write ``delta_te.tsv`` (schema 2.0, §5 spec)."""
     from ..io.schema_versions import schema_header_line
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         handle.write(schema_header_line("delta_te.tsv"))
-        handle.write("gene\tmrna_log2fc\trpf_log2fc\tdelta_te_log2\tpadj\tnote\n")
+        handle.write("\t".join(_DELTA_TE_TSV_COLUMNS) + "\n")
         for row in rows:
+            cells = {
+                "gene": row.gene,
+                "base_condition": row.base_condition or "",
+                "compare_condition": row.compare_condition or "",
+                "mrna_log2fc": _fmt_optional(row.mrna_log2fc),
+                "rpf_log2fc": _fmt_optional(row.rpf_log2fc),
+                "delta_te_log2": _fmt_optional(row.delta_te_log2),
+                "padj_mrna": _fmt_optional(row.padj_mrna),
+                "padj_rpf": _fmt_optional(row.padj_rpf),
+                "padj_delta_te": _fmt_optional(row.padj_delta_te),
+                "method": row.method,
+                "note": row.note,
+            }
             handle.write(
-                f"{row.gene}\t"
-                f"{'' if row.mrna_log2fc is None else f'{row.mrna_log2fc:.6g}'}\t"
-                f"{'' if row.rpf_log2fc is None else f'{row.rpf_log2fc:.6g}'}\t"
-                f"{'' if row.delta_te_log2 is None else f'{row.delta_te_log2:.6g}'}\t"
-                f"{'' if row.padj is None else f'{row.padj:.6g}'}\t"
-                f"{row.note}\n"
+                "\t".join(cells[c] for c in _DELTA_TE_TSV_COLUMNS) + "\n"
             )
 
 
@@ -1415,17 +1471,34 @@ def run(argv: Iterable[str]) -> int:
         for row in de_table.rows
         if row["basemean"] is not None
     }
-    te_rows = compute_te(ribo_counts, mrna_abundances)
-
     condition_map = _load_condition_map(
         Path(args.condition_map) if args.condition_map else None
     )
+    # When the from_fastq orchestrator built `de_table.tsv` itself we
+    # want the TE/dTE rows to be tagged ``exploratory_mt_only``, NOT
+    # ``publication_grade``. The orchestrator sets ``_from_fastq`` /
+    # ``_pseudo_replicate_mode`` on args before falling through to
+    # this de_table-style writer.
+    is_from_fastq = bool(getattr(args, "_from_fastq", False))
+    pseudo_rep = bool(getattr(args, "_pseudo_replicate_mode", False))
+    te_mode = "from_fastq" if is_from_fastq else "de_table"
+    te_rows = compute_te(
+        ribo_counts,
+        mrna_abundances,
+        condition_map=condition_map or None,
+        assay="ribo",
+        mode=te_mode,
+        pseudo_replicate=pseudo_rep,
+    )
+
     dte_rows = compute_delta_te(
         ribo_counts,
         de_table,
         condition_map=condition_map or None,
-        condition_a=args.condition_a,
-        condition_b=args.condition_b,
+        base_condition=args.condition_a,
+        compare_condition=args.condition_b,
+        mode=te_mode,
+        pseudo_replicate=pseudo_rep,
     )
 
     # --- Write outputs --------------------------------------------------

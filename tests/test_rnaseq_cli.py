@@ -138,8 +138,17 @@ def test_rnaseq_end_to_end_produces_te_and_delta_te(tmp_path) -> None:
     raw_te = (out_dir / "te.tsv").read_text().splitlines()
     assert raw_te[0].startswith("# schema_version:")
     te_lines = [line for line in raw_te if not line.startswith("#")]
+    # P5.5: te.tsv schema 2.0 — assessment §5 column set.
     assert te_lines[0].split("\t") == [
-        "sample", "gene", "rpf_count", "mrna_abundance", "te"
+        "sample_id",
+        "condition",
+        "assay",
+        "gene",
+        "rpf_count",
+        "rna_abundance",
+        "te",
+        "log2_te",
+        "note",
     ]
     assert len(te_lines) - 1 >= 6  # 4 ND1 rows + 2 CO1 rows
 

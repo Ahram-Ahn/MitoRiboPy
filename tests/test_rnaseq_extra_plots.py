@@ -66,10 +66,10 @@ def _make_te_rows() -> list[TeRow]:
         for gene, base in (("ND1", 1.5), ("CO1", 6.0), ("ND6", 0.8)):
             rows.append(
                 TeRow(
-                    sample=sample,
+                    sample_id=sample,
                     gene=gene,
                     rpf_count=int(base * 100),
-                    mrna_abundance=base * 50.0,
+                    rna_abundance=base * 50.0,
                     te=base * te_factor,
                 )
             )

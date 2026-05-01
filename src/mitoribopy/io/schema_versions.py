@@ -35,8 +35,8 @@ OUTPUT_SCHEMA_VERSIONS: dict[str, str] = {
     "rpf_counts.tsv":     "1.0",
     "rpf_counts_matrix.tsv": "1.0",
     "rna_counts.tsv":     "1.0",
-    "te.tsv":             "1.0",
-    "delta_te.tsv":       "1.0",
+    "te.tsv":             "2.0",  # P5.5: + condition, assay, log2_te, note
+    "delta_te.tsv":       "2.0",  # P5.5: + base/compare_condition, padj_*, method, note
     "summary_qc.tsv":     "1.0",
     "warnings.tsv":       "2.0",  # P5.8: column rename to assessment §8 spec
     "outputs_index.tsv":  "1.0",

@@ -231,8 +231,45 @@ def test_compute_te_produces_rows_for_each_sample_gene_pair() -> None:
     mrna = {"MT-ND1": 1000.0, "MT-CO1": 2000.0}
     rows = compute_te(ribo, mrna)
     assert len(rows) == 3
-    by_key = {(r.sample, r.gene): r for r in rows}
+    # The legacy ``sample`` attribute is still exposed; new code
+    # should prefer ``sample_id``.
+    by_key = {(r.sample_id, r.gene): r for r in rows}
     assert by_key[("A", "MT-ND1")].te == pytest.approx((100 + 0.5) / (1000 + 0.5))
+    # P5.5: log2_te is populated alongside te.
+    import math as _m
+    assert by_key[("A", "MT-ND1")].log2_te == pytest.approx(
+        _m.log2((100 + 0.5) / (1000 + 0.5))
+    )
+    # rna_abundance / mrna_abundance alias both resolve to the same value.
+    assert by_key[("A", "MT-ND1")].rna_abundance == 1000.0
+    assert by_key[("A", "MT-ND1")].mrna_abundance == 1000.0
+
+
+def test_compute_te_threads_condition_and_assay(tmp_path) -> None:
+    ribo = {"MT-ND1": {"A": 100, "B": 80}}
+    mrna = {"MT-ND1": 1000.0}
+    rows = compute_te(
+        ribo,
+        mrna,
+        condition_map={"A": "WT", "B": "KO"},
+        assay="ribo",
+        mode="de_table",
+    )
+    by_sample = {r.sample_id: r for r in rows}
+    assert by_sample["A"].condition == "WT"
+    assert by_sample["B"].condition == "KO"
+    assert by_sample["A"].assay == "ribo"
+    # P5.5: de_table mode tags rows publication_grade.
+    assert by_sample["A"].note == "publication_grade"
+
+
+def test_compute_te_from_fastq_mode_tags_exploratory() -> None:
+    rows = compute_te(
+        {"MT-ND1": {"A": 100}},
+        {"MT-ND1": 1000.0},
+        mode="from_fastq",
+    )
+    assert rows[0].note == "exploratory_mt_only"
 
 
 def test_compute_te_skips_genes_missing_from_de() -> None:
@@ -263,9 +300,13 @@ def test_compute_delta_te_single_replicate_records_note() -> None:
     ])
     dte = compute_delta_te(ribo, de)
     assert len(dte) == 1
-    assert dte[0].note == "single_replicate_no_statistics"
+    # P5.5: spec note set; legacy padj alias maps to padj_mrna.
+    assert dte[0].note == "insufficient_replicates"
     assert dte[0].rpf_log2fc is None
     assert dte[0].mrna_log2fc == pytest.approx(0.5)
+    assert dte[0].padj_mrna == pytest.approx(0.01)
+    assert dte[0].padj == pytest.approx(0.01)  # legacy alias
+    assert dte[0].method == "single_sample_log2fc"
 
 
 def test_compute_delta_te_with_replicates() -> None:
@@ -277,8 +318,9 @@ def test_compute_delta_te_with_replicates() -> None:
         ribo,
         de,
         condition_map={"A1": "A", "A2": "A", "B1": "B", "B2": "B"},
-        condition_a="A",
-        condition_b="B",
+        base_condition="A",
+        compare_condition="B",
+        mode="de_table",
     )
     assert dte[0].rpf_log2fc is not None
     # B/A ~= 2 -> log2 ~= 1
@@ -287,11 +329,36 @@ def test_compute_delta_te_with_replicates() -> None:
     assert dte[0].delta_te_log2 == pytest.approx(
         dte[0].rpf_log2fc - dte[0].mrna_log2fc, abs=1e-6
     )
+    assert dte[0].base_condition == "A"
+    assert dte[0].compare_condition == "B"
+    assert dte[0].method == "internal_mean_log2fc"
+    # de_table mode + sufficient replicates → publication_grade tag.
+    assert dte[0].note == "publication_grade"
+
+
+def test_compute_delta_te_legacy_condition_a_b_kwargs_still_work() -> None:
+    """The pre-P5.5 kwargs ``condition_a`` / ``condition_b`` are kept as
+    aliases so existing callers / tests don't have to update in lockstep.
+    """
+    ribo = {"MT-ND1": {"A1": 10, "B1": 20}}
+    de = _synthetic_de_table([
+        {"gene_id": "MT-ND1", "log2fc": 0.0, "padj": 0.5, "basemean": 1.0},
+    ])
+    dte = compute_delta_te(
+        ribo,
+        de,
+        condition_map={"A1": "A", "B1": "B"},
+        condition_a="A",
+        condition_b="B",
+    )
+    assert dte[0].base_condition == "A"
+    assert dte[0].compare_condition == "B"
 
 
 def test_compute_delta_te_flags_gene_missing_from_de() -> None:
     ribo = {"MT-NOVEL": {"A": 10, "B": 20}}
     de = _synthetic_de_table([])
     dte = compute_delta_te(ribo, de)
-    assert dte[0].note == "missing_from_de_table"
+    # P5.5: spec note for "gene present in RPF but not in DE/RNA table".
+    assert dte[0].note == "missing_rna_gene"
     assert dte[0].mrna_log2fc is None

@@ -156,7 +156,19 @@ def test_te_and_delta_te_writers_emit_schema_header(tmp_path: Path) -> None:
 
     te_path = tmp_path / "te.tsv"
     _write_te_table(
-        [TeRow(sample="A", gene="MT-ND1", rpf_count=10, mrna_abundance=5.0, te=2.0)],
+        [
+            TeRow(
+                sample_id="A",
+                gene="MT-ND1",
+                rpf_count=10,
+                rna_abundance=5.0,
+                te=2.0,
+                log2_te=1.0,
+                condition="WT",
+                assay="ribo",
+                note="publication_grade",
+            )
+        ],
         te_path,
     )
     text = te_path.read_text()
@@ -169,11 +181,14 @@ def test_te_and_delta_te_writers_emit_schema_header(tmp_path: Path) -> None:
         [
             DTeRow(
                 gene="MT-ND1",
+                base_condition="WT",
+                compare_condition="KO",
                 mrna_log2fc=0.1,
                 rpf_log2fc=0.5,
                 delta_te_log2=0.4,
-                padj=0.01,
-                note="ok",
+                padj_mrna=0.01,
+                method="external_de_table",
+                note="publication_grade",
             )
         ],
         dte_path,
