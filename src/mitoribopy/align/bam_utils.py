@@ -1,14 +1,13 @@
 """BAM-level utilities used by ``mitoribopy align`` - MAPQ filtering,
 BAM -> BED6 conversion, and primary-mapped read counting. Implemented
-with pysam per the Phase 3.6 decision so we do not depend on samtools or
-bedtools being on PATH.
+with pysam so we do not depend on samtools or bedtools being on PATH.
 
 Why BED6 and not BED3
 ---------------------
 The rpf pipeline's BED ingest already tolerates BED6 (strand column is
 column 6). Producing BED6 preserves the ``--library-strandedness``
-decision made at alignment time. On Path A (transcriptome reference)
-every transcript is a separate FASTA record so the ``+`` / ``-`` column
+decision made at alignment time. With a transcriptome reference every
+transcript is a separate FASTA record so the ``+`` / ``-`` column
 records the read orientation relative to the mRNA; that lets downstream
 QC flag any reverse-complement contamination if the ``--norc``/``--nofw``
 strand guard ever failed.
@@ -72,7 +71,7 @@ def filter_bam_mapq(
     The primary use of MAPQ filtering on mt-Ribo-seq is NUMT cross-talk
     suppression: pseudogenized copies of mt-mRNAs in the nuclear genome
     accept a small fraction of reads at low MAPQ, and filtering at
-    ``--mapq 10`` (the Phase 3 default) drops most of them without
+    ``--mapq 10`` (the package default) drops most of them without
     losing genuine mt reads.
 
     Returns

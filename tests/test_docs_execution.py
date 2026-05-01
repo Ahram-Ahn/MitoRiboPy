@@ -52,6 +52,7 @@ _ORCHESTRATOR_OWNED_KEYS: set[str] = {
     "align",
     "rpf",
     "rnaseq",
+    "execution",   # v0.6.2: top-level resource-plan declaration
 }
 
 
@@ -74,7 +75,12 @@ def _parser_dests(stage: str) -> set[str]:
     """Set of argparse `dest` names for the stage's parser.
 
     Includes both underscore- and hyphen-form keys to match the YAML
-    key normalization rules in `_dict_to_argv`.
+    key normalization rules in `_dict_to_argv`. Also includes the
+    long option strings (with the leading ``--`` stripped) so YAML
+    keys that match the public flag name (instead of the shorter
+    argparse `dest`) are accepted — e.g.
+    ``allow_pseudo_replicates_for_demo_not_publication`` whose dest
+    is the shorter ``allow_pseudo_replicates``.
     """
     parser = _stage_parser(stage)
     dests: set[str] = set()
@@ -82,6 +88,11 @@ def _parser_dests(stage: str) -> set[str]:
         if action.dest and action.dest != "help":
             dests.add(action.dest)
             dests.add(action.dest.replace("_", "-"))
+        for opt in action.option_strings:
+            if opt.startswith("--"):
+                bare = opt[2:]
+                dests.add(bare)
+                dests.add(bare.replace("-", "_"))
     return dests
 
 

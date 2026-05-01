@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MitoRiboPy rnaseq -- exhaustive shell-script template (rnaseq stage only).
-# Compatible with: MitoRiboPy 0.6.0+
+# Compatible with: MitoRiboPy 0.6.2+
 #
 # `mitoribopy rnaseq` has TWO mutually-exclusive flows:
 #

@@ -6,9 +6,10 @@ before touching user data. If any required tool is missing, we raise
 Optional tools (``fastqc``, ``umi_tools`` in no-UMI runs) are reported
 but do not block a run.
 
-Phase 3.1 of the v0.3.0 refactor mandates **fail-loud** behavior here:
-never silently skip, never replace a missing tool with a default no-op,
-never continue with partial data.
+``mitoribopy align`` is **fail-loud** by design: never silently skip,
+never replace a missing tool with a default no-op, never continue with
+partial data. A missing required tool aborts the run with a bioconda
+install hint.
 """
 
 from __future__ import annotations

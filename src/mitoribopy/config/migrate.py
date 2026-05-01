@@ -17,8 +17,10 @@ from typing import Iterable
 
 
 __all__ = [
+    "DEDUP_STRATEGY_VALUE_REWRITES",
     "KIT_PRESET_LEGACY",
     "LEGACY_ALIGN_TOPLEVEL",
+    "LEGACY_RNASEQ_TOPLEVEL",
     "LEGACY_RPF_TOPLEVEL",
     "STRAIN_SHORTCUTS",
     "migrate",
@@ -66,6 +68,25 @@ KIT_PRESET_LEGACY: dict[str, str] = {
 # The KEY itself does not change; only the VALUE.
 OFFSET_PICK_VALUE_REWRITES: dict[str, str] = {
     "selected_site": "reported_site",
+}
+
+
+# `dedup_strategy` value rewrite: implementation name -> statistical
+# operation name. The KEY itself does not change; only the VALUE.
+# Mirrors :data:`mitoribopy.align.dedup._DEDUP_STRATEGY_ALIASES`; keep
+# the two in sync.
+DEDUP_STRATEGY_VALUE_REWRITES: dict[str, str] = {
+    "umi-tools": "umi_coordinate",
+    "umi_tools": "umi_coordinate",
+}
+
+
+# Legacy rnaseq YAML keys -> canonical names. The
+# `allow_pseudo_replicates` key is the only legacy spelling that
+# requires special handling (it serialises to a never-existed CLI
+# flag); migrate it to the long, intentionally-non-publication form.
+LEGACY_RNASEQ_TOPLEVEL: dict[str, str] = {
+    "allow_pseudo_replicates": "allow_pseudo_replicates_for_demo_not_publication",
 }
 
 
@@ -166,6 +187,36 @@ def _rewrite_rnaseq_mode(
     return out
 
 
+def _rewrite_dedup_strategy(
+    section: dict, *, log: list[str], path: str
+) -> dict:
+    out = dict(section)
+    val = out.get("dedup_strategy")
+    if isinstance(val, str) and val in DEDUP_STRATEGY_VALUE_REWRITES:
+        new = DEDUP_STRATEGY_VALUE_REWRITES[val]
+        log.append(f"{path}.dedup_strategy: '{val}' -> '{new}'")
+        out["dedup_strategy"] = new
+    # Per-sample overrides under align.samples[*].dedup_strategy too.
+    samples = out.get("samples")
+    if isinstance(samples, list):
+        new_samples = []
+        for index, entry in enumerate(samples):
+            if (
+                isinstance(entry, dict)
+                and isinstance(entry.get("dedup_strategy"), str)
+                and entry["dedup_strategy"] in DEDUP_STRATEGY_VALUE_REWRITES
+            ):
+                replacement = DEDUP_STRATEGY_VALUE_REWRITES[entry["dedup_strategy"]]
+                log.append(
+                    f"{path}.samples[{index}].dedup_strategy: "
+                    f"'{entry['dedup_strategy']}' -> '{replacement}'"
+                )
+                entry = {**entry, "dedup_strategy": replacement}
+            new_samples.append(entry)
+        out["samples"] = new_samples
+    return out
+
+
 def migrate(raw_config: dict) -> tuple[dict, list[str]]:
     """Return ``(canonical_config, change_log)`` for a parsed YAML config.
 
@@ -184,6 +235,9 @@ def migrate(raw_config: dict) -> tuple[dict, list[str]]:
         cfg["align"] = _rewrite_kit_preset(
             cfg["align"], log=log, path="align"
         )
+        cfg["align"] = _rewrite_dedup_strategy(
+            cfg["align"], log=log, path="align"
+        )
     if "rpf" in cfg and isinstance(cfg["rpf"], dict):
         cfg["rpf"] = _rename_keys(
             cfg["rpf"], LEGACY_RPF_TOPLEVEL, log=log, path="rpf"
@@ -193,6 +247,9 @@ def migrate(raw_config: dict) -> tuple[dict, list[str]]:
             cfg["rpf"], log=log, path="rpf"
         )
     if "rnaseq" in cfg and isinstance(cfg["rnaseq"], dict):
+        cfg["rnaseq"] = _rename_keys(
+            cfg["rnaseq"], LEGACY_RNASEQ_TOPLEVEL, log=log, path="rnaseq"
+        )
         cfg["rnaseq"] = _rewrite_rnaseq_mode(
             cfg["rnaseq"], log=log, path="rnaseq"
         )
@@ -202,9 +259,11 @@ def migrate(raw_config: dict) -> tuple[dict, list[str]]:
     if not any(k in cfg for k in ("align", "rpf", "rnaseq")):
         cfg = _rename_keys(cfg, LEGACY_ALIGN_TOPLEVEL, log=log, path="")
         cfg = _rename_keys(cfg, LEGACY_RPF_TOPLEVEL, log=log, path="")
+        cfg = _rename_keys(cfg, LEGACY_RNASEQ_TOPLEVEL, log=log, path="")
         cfg = _rewrite_strain(cfg, log=log, path="")
         cfg = _rewrite_kit_preset(cfg, log=log, path="")
         cfg = _rewrite_offset_pick_reference(cfg, log=log, path="")
         cfg = _rewrite_rnaseq_mode(cfg, log=log, path="")
+        cfg = _rewrite_dedup_strategy(cfg, log=log, path="")
 
     return cfg, log

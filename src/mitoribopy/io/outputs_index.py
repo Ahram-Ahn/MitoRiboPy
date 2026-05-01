@@ -150,6 +150,44 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
         description="Resolved rpf-stage configuration and tool versions.",
         recommended_for="reviewer-spot-check",
     ),
+    OutputDescriptor(
+        output_type="periodicity_qc_summary",
+        stage="rpf",
+        relative_path="rpf/periodicity/qc_summary.tsv",
+        description=(
+            "Per-sample 3-nt periodicity QC: best read length, "
+            "expected/dominant frame fractions, entropy bias, and an "
+            "overall good/warn/poor/low_depth call."
+        ),
+        recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="periodicity_qc_summary_md",
+        stage="rpf",
+        relative_path="rpf/periodicity/qc_summary.md",
+        description="Human-readable companion to periodicity/qc_summary.tsv.",
+        recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="frame_counts_by_sample_length",
+        stage="rpf",
+        relative_path="rpf/periodicity/frame_counts_by_sample_length.tsv",
+        description=(
+            "Per-(sample, read length) frame fractions, frame "
+            "enrichment, entropy bias, and qc_call."
+        ),
+        recommended_for="downstream-scripting",
+    ),
+    OutputDescriptor(
+        output_type="gene_periodicity",
+        stage="rpf",
+        relative_path="rpf/periodicity/gene_periodicity.tsv",
+        description=(
+            "Per-(sample, gene) frame fractions and qc_call; optional "
+            "phase_score column when --phase-score is enabled."
+        ),
+        recommended_for="downstream-scripting",
+    ),
     # rnaseq --------------------------------------------------------------
     OutputDescriptor(
         output_type="te_table",
@@ -203,7 +241,31 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
         description=(
             "Top-level run provenance: schema, versions, git commit, "
             "config canonicalisation, sample-sheet hash, tools, "
-            "warnings, outputs."
+            "warnings, outputs, resource plan."
+        ),
+        recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="resource_plan",
+        stage="all",
+        relative_path="resource_plan.json",
+        description=(
+            "Resolved execution plan (threads, parallel-sample budget, "
+            "memory, single-sample mode, scheduler, reason). Mirror of "
+            "the manifest's `resource_plan` block, written before any "
+            "stage runs so it survives a mid-pipeline crash."
+        ),
+        recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="canonical_config",
+        stage="all",
+        relative_path="canonical_config.yaml",
+        description=(
+            "The fully-resolved config that drove the run (auto-wiring "
+            "+ sample-sheet expansion + execution-block cascade + "
+            "rnaseq-mode resolution applied). Diff this against your "
+            "input config to see what the orchestrator decided."
         ),
         recommended_for="reviewer-spot-check",
     ),

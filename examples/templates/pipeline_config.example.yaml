@@ -1,5 +1,5 @@
 # MitoRiboPy -- exhaustive pipeline_config example (end-to-end `mitoribopy all`).
-# Compatible with: MitoRiboPy 0.6.0+
+# Compatible with: MitoRiboPy 0.6.2+
 #
 # Every flag from `mitoribopy align --help`, `mitoribopy rpf --help`,
 # and `mitoribopy rnaseq --help` is listed here with its default value
@@ -23,6 +23,32 @@
 #
 #   mitoribopy <subcommand> --help
 #   mitoribopy all --show-stage-help <align|rpf|rnaseq>
+
+
+# ============================================================================
+# execution (v0.6.2) — single resource budget for the whole run.
+# ============================================================================
+# These values cascade into align/rnaseq stage keys when those are unset.
+# Stage-specific overrides still win. The orchestrator also writes
+# <output>/resource_plan.json recording how `auto` resolved.
+execution:
+  threads: auto                            # int | auto. CLI `mitoribopy all
+                                           # --threads N` populates this when
+                                           # YAML leaves it as auto.
+  memory_gb: auto                          # float | auto. RAM ceiling for the
+                                           # auto parallelism scheduler.
+  parallel_samples: auto                   # int | auto. min(n_samples,
+                                           # threads/min_per_sample,
+                                           # memory_gb/est_per_sample).
+  single_sample_mode: false                # true forces serial align workers.
+  min_threads_per_sample: 2                # auto lower bound; used by the
+                                           # parallelism planner.
+  estimated_memory_per_sample_gb: 4.0      # used to size memory-bound
+                                           # auto parallelism.
+  scheduler: local                         # local | lsf | slurm (planning
+                                           # hint; HPC submission still
+                                           # requires the corresponding
+                                           # examples/templates/run_pipeline.* sh).
 
 
 # ============================================================================
@@ -84,8 +110,11 @@ align:
   seed: 42                                 # bowtie2 --seed (deterministic output)
 
   # --- Deduplication --------------------------------------------------------
-  dedup_strategy: auto                     # auto | umi-tools | skip
-                                           # auto -> umi-tools when UMIs present, skip otherwise.
+  dedup_strategy: auto                     # auto | umi_coordinate | skip
+                                           # (canonical names; legacy `umi-tools` /
+                                           # `umi_tools` still accepted and rewritten
+                                           # to `umi_coordinate` by migrate-config).
+                                           # auto -> umi_coordinate when UMIs present, skip otherwise.
                                            # When the resolved strategy is `skip`, the orchestrator
                                            # wires aligned/<sample>.mapq.bam straight into BED
                                            # conversion -- no duplicate dedup.bam is written.
@@ -103,16 +132,17 @@ align:
                                            # whose .sample_done/<sample>.json marker exists.
 
   # --- Concurrency ---------------------------------------------------------
-  # threads: 8                             # forwarded to cutadapt + bowtie2.
-                                           # `mitoribopy all --threads N` is
-                                           # NOT auto-forwarded into the per-
-                                           # stage argv -- set it under each
-                                           # stage section instead.
-  # max_parallel_samples: 1                # >1 runs samples concurrently; the
-                                           # `threads:` value above is divided
-                                           # across workers (max(1, threads // N)
-                                           # threads per tool). The joint
-                                           # `mitoribopy rpf` stage is unaffected.
+  # As of v0.6.2 the recommended way to set thread / parallelism budgets
+  # is the top-level `execution:` block at the top of this file. Values
+  # there cascade into align (threads / max_parallel_samples /
+  # single_sample_mode / memory_gb) when the per-stage keys below are
+  # unset. Setting them explicitly here still wins.
+  # threads: 8                             # explicit per-stage override.
+                                           # When unset, inherits from
+                                           # execution.threads above.
+  # max_parallel_samples: auto             # explicit per-stage override.
+                                           # When unset, inherits from
+                                           # execution.parallel_samples.
 
   # --- Timing output ------------------------------------------------------
   # No knobs here -- timing is on by default. Each per-sample stage
@@ -284,13 +314,22 @@ rpf:
 #   # bowtie2_index: null                     # optional pre-built bt2 prefix;
 #   #                                         # skips bowtie2-build
 #   # workdir: null                           # scratch; default <output>/work
-#   align_threads: 4                          # threads for cutadapt + bowtie2
-#   allow_pseudo_replicates: false            # default false (fail-fast on
+#   align_threads: 4                          # threads for cutadapt + bowtie2;
+#                                             # inherits execution.threads when unset.
+#   allow_pseudo_replicates_for_demo_not_publication: false
+#                                             # CANONICAL key (matches the CLI
+#                                             # flag `--allow-pseudo-replicates-
+#                                             # for-demo-not-publication`).
+#                                             # Default false (fail-fast on
 #                                             # n=1 conditions). Set true ONLY
 #                                             # for demo/tutorial smoke tests:
 #                                             # FASTQs split by record parity,
 #                                             # padj is NOT publication-grade,
 #                                             # EXPLORATORY.md sidecar written.
+#                                             # The shorter `allow_pseudo_replicates:`
+#                                             # spelling is auto-rewritten to
+#                                             # this canonical form by
+#                                             # `mitoribopy migrate-config`.
 #
 #   # --- Alternative-flow keys (--de-table; delete when using --rna-fastq) ---
 #

@@ -9,6 +9,91 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 (no changes pending)
 
+## [0.6.2] - 2026-05-01
+
+### Publication-readiness — fourth-edit cleanup
+
+Bug-fix + reproducibility release on top of v0.6.0. Every change is
+software-engineering hygiene; no biological logic change.
+
+### Added
+- **Top-level `execution:` config block.** Resource-planning lives in
+  one place at the run root. Keys: `threads`, `memory_gb`,
+  `parallel_samples`, `single_sample_mode`, `min_threads_per_sample`,
+  `estimated_memory_per_sample_gb`. The values cascade into `align`
+  and `rnaseq` (`align_threads` / `max_parallel_samples` /
+  `single_sample_mode` / `memory_gb`) when those stage keys are
+  unset; explicit stage values still win. The `mitoribopy all
+  --threads N` CLI flag now populates `execution.threads` so the
+  global budget is honoured by every stage.
+- **`<run_root>/resource_plan.json`** is written by `mitoribopy all`
+  for every real run. It records the resolved thread budget,
+  per-sample worker count, single-sample mode, scheduler, and the
+  reason auto-mode picked those values. Embedded into
+  `run_manifest.json` under `resource_plan`. Already-existing
+  `<run_root>/align/resource_plan.json` continues to record the
+  align-stage view.
+- **Periodicity QC bundle extension.** `analysis.periodicity` now
+  emits a top-level `qc_summary.tsv` (best read length, expected /
+  dominant frame fraction, entropy bias, per-call totals,
+  `overall_qc_call`) and a `qc_summary.md` companion under
+  `<run_root>/rpf/periodicity/`. Per-length frame tables also gain a
+  `expected_frame_enrichment` column. Optional `--phase-score` and
+  `--fft-period3` add ribotricer-style consistency and FFT period-3
+  power columns. Default thresholds:
+  `good_frame_fraction=0.60`, `warn_frame_fraction=0.50`,
+  `min_reads_per_length=1000`. QC labels: `good`, `warn`, `poor`,
+  `low_depth`.
+- **Stable warning-/error-code registry.** `docs/reference/warning_codes.md`
+  enumerates every code emitted via `mitoribopy.io.warnings_log`
+  (severity, stage, sample-id requirement, remediation). The
+  `WARNING_CODES` Python registry in
+  `src/mitoribopy/io/warning_codes.py` is the single source of
+  truth; each `record(...)` call validates `code` against it (in
+  test mode) so a typo cannot ship a new alias silently.
+- **Release checklist.** `docs/developer/release_checklist.md` is the
+  mandatory gate for every PyPI cut: version-source agreement,
+  template validation, toy-data run, sdist/wheel build, TestPyPI
+  smoke, PyPI upload, Zenodo archive, manuscript-version pin.
+- **Architecture-history doc.** `docs/developer/architecture_history.md`
+  collects the refactor-era design notes that previously lived in
+  module docstrings (Phase 6 v0.3.0, etc.).
+
+### Changed
+- **`dedup_strategy` canonical value is `umi_coordinate`.** The legacy
+  `umi-tools` / `umi_tools` strings are accepted and rewritten to
+  `umi_coordinate` by `migrate-config`; the resolved value in
+  `canonical_config.yaml` and the run manifest is always
+  `umi_coordinate`. CLI help (`mitoribopy align --help`) lists the
+  three canonical choices `auto | umi_coordinate | skip`. The
+  underlying implementation is still UMI-aware coordinate-collapse
+  via `umi_tools`; only the public name changed to describe the
+  statistical operation rather than the tool.
+- **`mitoribopy all --threads N` propagates.** The top-level CLI flag
+  now writes into `execution.threads` and cascades into every stage
+  whose own `threads:` (or `align_threads:`) is unset. The previous
+  template comment instructing users to copy `threads:` into every
+  stage section is removed. Explicit stage settings still take
+  precedence.
+- **YAML `allow_pseudo_replicates:` rewritten by `migrate-config`.**
+  The legacy template key now serialises to the real CLI flag
+  `--allow-pseudo-replicates-for-demo-not-publication` instead of
+  the never-existed `--allow-pseudo-replicates`. The migration is
+  silent for `false` (the safe default) and emits a clearly named
+  warning code when set to `true`.
+- **Public module docstrings.** Phase / refactor / "v0.3.0" tags
+  removed from every module docstring under `src/mitoribopy/`. The
+  history is preserved in the new
+  `docs/developer/architecture_history.md`.
+
+### Fixed
+- `examples/templates/pipeline_config.example.yaml` rnaseq section
+  no longer carries the misnamed `allow_pseudo_replicates: false`
+  comment without a migration note. The template is now strict-mode
+  clean.
+- `_dict_to_argv` now serialises `dedup_strategy: umi_coordinate`
+  and `allow_pseudo_replicates: true` to the canonical CLI flags.
+
 ## [0.6.0] - 2026-05-01
 
 ### Publication-readiness freeze (refactor-4)

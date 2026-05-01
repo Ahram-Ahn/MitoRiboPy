@@ -84,10 +84,11 @@ _KNOWN_TOP_LEVEL_SECTIONS: frozenset[str] = frozenset(
         "align",
         "rpf",
         "rnaseq",
-        "samples",  # P0.1: unified sample sheet pointer.
-        "all",      # orchestrator-level overrides.
-        "shared",   # cross-stage shared knobs (bam_mapq, threads, ...).
-        "resume",   # resume-guard knobs.
+        "samples",     # unified sample sheet pointer.
+        "execution",   # v0.6.2: top-level resource-plan declaration.
+        "all",         # orchestrator-level overrides.
+        "shared",      # cross-stage shared knobs (bam_mapq, threads, ...).
+        "resume",      # resume-guard knobs.
     }
 )
 

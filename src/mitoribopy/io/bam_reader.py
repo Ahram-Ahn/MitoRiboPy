@@ -1,4 +1,4 @@
-"""BAM input preprocessor for ``mitoribopy rpf`` (Phase 4).
+"""BAM input preprocessor for ``mitoribopy rpf``.
 
 Converts BAM alignment files to BED6 so they can flow through the
 existing BED-centric rpf pipeline unchanged. Implemented with pysam
@@ -14,23 +14,23 @@ secondary, 0x800 supplementary) produces one BED6 line:
 ========  ===========================================================
 BED col   Source
 ========  ===========================================================
-chrom     ``read.reference_name`` (on Path A, the mt-transcript id
-          that matches the annotation CSV's ``sequence_name`` column)
+chrom     ``read.reference_name`` (the mt-transcript id that matches
+          the annotation CSV's ``sequence_name`` column)
 start     ``read.reference_start`` - already 0-based in htslib, no
           adjustment
 end       ``read.reference_end``   - already half-open in htslib
 name      ``read.query_name`` (carries the UMI tail after ``_`` when
-          cutadapt extracted one in Phase 3 Step B)
+          cutadapt extracted one upstream)
 score     ``max(0, min(1000, read.mapping_quality))`` - clamped into
           the BED spec's [0, 1000] range; MAPQ is [0, 255] in practice
 strand    ``"-"`` if ``read.is_reverse`` else ``"+"``
 ========  ===========================================================
 
-Strand preservation matters even though Phase 3's Path A
-(transcriptome reference) already enforces polarity via bowtie2
-``--norc``/``--nofw``: any reverse-strand rows in the resulting BED6
-flag a library-prep mismatch that QC can surface downstream. Stripping
-the strand column (emitting BED3) silently erases that signal.
+Strand preservation matters even though the transcriptome reference
+already enforces polarity via bowtie2 ``--norc``/``--nofw``: any
+reverse-strand rows in the resulting BED6 flag a library-prep mismatch
+that QC can surface downstream. Stripping the strand column (emitting
+BED3) silently erases that signal.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def convert_bam_to_bed(
     mapq_threshold:
         MAPQ cutoff applied before conversion. ``0`` disables filtering.
         Default matches ``mitoribopy align --mapq`` (10 in the orchestrator),
-        which is the NUMT-suppression level recommended in Phase 3.1.
+        which is the recommended NUMT-suppression level.
 
     Returns
     -------
@@ -99,8 +99,8 @@ def prepare_bam_inputs(
 
     If both ``<sample>.bam`` and ``<sample>.bed`` exist in
     ``input_dir`` (name conflict), the BAM is skipped with a warning so
-    the user's explicit BED wins. This matches the Phase 4 decision
-    documented in the CHANGELOG.
+    the user's explicit BED wins. This matches the rpf BAM-input
+    decision documented in the CHANGELOG.
 
     An empty list is returned when ``input_dir`` contains no BAM files;
     the caller can then fall back to the unchanged BED-only path.

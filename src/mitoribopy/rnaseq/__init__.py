@@ -1,10 +1,15 @@
-"""Phase 5 RNA-seq integration for MitoRiboPy.
+"""RNA-seq integration for MitoRiboPy.
 
 Consumes a pre-computed differential-expression table (DESeq2 / Xtail /
 Anota2Seq) plus a prior ``mitoribopy rpf`` run and produces TE and
 delta-TE tables + plots. A SHA256 reference-consistency gate ensures
 Ribo-seq and RNA-seq were aligned to the SAME transcript set - a hard
 requirement for TE comparisons.
+
+The from-FASTQ flow (``--rna-fastq``) additionally runs cutadapt +
+bowtie2 + pyDESeq2 inside the subcommand and is exploratory only;
+publication-grade DE belongs in an external full-transcriptome run
+fed back via ``--de-table``.
 """
 
 from ._types import (

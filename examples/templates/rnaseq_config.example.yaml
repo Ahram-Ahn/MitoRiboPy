@@ -1,5 +1,5 @@
 # MitoRiboPy rnaseq -- exhaustive config example for `mitoribopy rnaseq --config`.
-# Compatible with: MitoRiboPy 0.6.0+
+# Compatible with: MitoRiboPy 0.6.2+
 #
 # This is a FLAT YAML (no `rnaseq:` wrapper). Pass it to the standalone
 # rnaseq subcommand:
@@ -88,7 +88,10 @@ align_threads: 4                        # threads passed to cutadapt + bowtie2
 # <output>/condition_map.augmented.tsv, run_settings.json carries
 # `pseudo_replicate_mode: true`, and EXPLORATORY.md is written to the
 # output dir listing the fields not to cite.
-allow_pseudo_replicates: false
+allow_pseudo_replicates_for_demo_not_publication: false   # canonical key
+                                                          # (matches the CLI flag);
+                                                          # legacy `allow_pseudo_replicates`
+                                                          # still parses via migrate-config.
 
 # Notes on the default flow:
 # - PE + UMI is currently NotImplementedError. Preprocess UMIs into the

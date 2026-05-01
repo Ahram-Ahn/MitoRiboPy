@@ -205,6 +205,31 @@ def write_umi_qc_tsv(rows: list[UmiQCRow], path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+# Legacy aliases for the canonical strategy names. Accepted on input
+# (CLI / YAML / TSV sample-overrides) and rewritten to the canonical
+# value as the very first step inside :func:`resolve_dedup_strategy`.
+# Keep these in sync with the ``--dedup-strategy`` argparse choices
+# and with :data:`mitoribopy.config.migrate.DEDUP_STRATEGY_VALUE_REWRITES`.
+_DEDUP_STRATEGY_ALIASES: dict[str, str] = {
+    "umi-tools": "umi_coordinate",
+    "umi_tools": "umi_coordinate",
+}
+
+
+def canonicalize_dedup_strategy(strategy: str) -> str:
+    """Return the canonical name for a dedup-strategy string.
+
+    Lowercases the input and rewrites the legacy ``umi-tools`` /
+    ``umi_tools`` aliases to ``umi_coordinate``. Returns the unmodified
+    input when no alias matches; downstream validation still rejects
+    truly unknown values.
+    """
+    if not isinstance(strategy, str):
+        return strategy  # type: ignore[return-value]
+    norm = strategy.strip().lower()
+    return _DEDUP_STRATEGY_ALIASES.get(norm, norm)
+
+
 def resolve_dedup_strategy(
     strategy: DedupStrategy,
     umi_length: int,
@@ -214,35 +239,42 @@ def resolve_dedup_strategy(
     Parameters
     ----------
     strategy:
-        One of ``auto``, ``umi-tools``, ``skip``.
+        One of ``auto``, ``umi_coordinate`` (canonical) / ``umi-tools``
+        / ``umi_tools`` (deprecated aliases), ``skip``.
     umi_length:
         The ResolvedKit umi_length. Drives the ``auto`` branch and
-        validates that ``umi-tools`` has UMIs to work with.
+        validates that ``umi_coordinate`` has UMIs to work with.
 
     Returns
     -------
     The effective strategy, never ``auto``. The caller can then dispatch
-    directly.
+    directly. The returned value is one of the IMPLEMENTATION-level
+    strings ``umi-tools`` and ``skip`` so existing call sites keep
+    working; the canonical public name (``umi_coordinate``) is used in
+    config + manifest output, not in the runtime dispatcher.
 
     Raises
     ------
     ValueError
-        when ``umi-tools`` is selected without UMIs.
+        when ``umi_coordinate`` is selected without UMIs.
     """
-    if strategy == "auto":
+    canonical = canonicalize_dedup_strategy(strategy) if isinstance(strategy, str) else strategy
+
+    if canonical == "auto":
         return "umi-tools" if umi_length > 0 else "skip"
 
-    if strategy == "umi-tools":
+    if canonical == "umi_coordinate":
         if umi_length <= 0:
             raise ValueError(
-                "--dedup-strategy umi-tools requires --umi-length > 0; "
-                "cutadapt must have extracted UMIs into the read name. "
-                "Either set a kit preset / --umi-length > 0, or pick "
+                "--dedup-strategy umi_coordinate (or legacy umi-tools) "
+                "requires --umi-length > 0; cutadapt must have "
+                "extracted UMIs into the read name. Either set a kit "
+                "preset / --umi-length > 0, or pick "
                 "--dedup-strategy skip."
             )
         return "umi-tools"
 
-    if strategy == "skip":
+    if canonical == "skip":
         return "skip"
 
     raise ValueError(  # pragma: no cover - literal guarded

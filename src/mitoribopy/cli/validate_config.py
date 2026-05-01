@@ -130,7 +130,9 @@ def _check_paths(
 def _check_unknown_top_level_keys(
     cfg: dict, errors: list[str]
 ) -> None:
-    known = {"samples", "align", "rpf", "rnaseq"}
+    # Keep in sync with
+    # :data:`mitoribopy.config.canonical._KNOWN_TOP_LEVEL_SECTIONS`.
+    known = {"samples", "align", "rpf", "rnaseq", "execution", "all", "shared", "resume"}
     unknown = sorted(set(cfg) - known)
     if unknown:
         errors.append(

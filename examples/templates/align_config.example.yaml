@@ -69,8 +69,10 @@ mapq: 10                               # MAPQ threshold (NUMT suppression)
 seed: 42                               # bowtie2 --seed (deterministic output)
 
 # --- Deduplication -----------------------------------------------------
-dedup_strategy: auto                   # auto | umi-tools | skip
-                                       # auto -> umi-tools when UMIs present, skip otherwise.
+dedup_strategy: auto                   # auto | umi_coordinate | skip
+                                       # (canonical names; legacy `umi-tools` /
+                                       # `umi_tools` still parse via migrate-config).
+                                       # auto -> umi_coordinate when UMIs present, skip otherwise.
                                        # When the resolved strategy is `skip`, the
                                        # pipeline wires aligned/<sample>.mapq.bam
                                        # straight into BED conversion -- no duplicate

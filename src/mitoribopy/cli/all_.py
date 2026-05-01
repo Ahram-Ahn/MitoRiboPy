@@ -1,6 +1,6 @@
 """``mitoribopy all`` subcommand - align -> rpf -> (optional) rnaseq.
 
-Phase 6 of the v0.3.0 refactor. Runs the three per-stage subcommands in
+End-to-end orchestrator. Runs the three per-stage subcommands in
 sequence with a single shared config file and writes a composed
 ``run_manifest.json`` at the run root that records every parameter,
 tool version, and input/output hash so a reviewer can reproduce the
@@ -51,7 +51,7 @@ from ._resume_guard import (
 # breaks downstream consumers (added fields are minor; renamed or
 # removed fields are major). Read it from your own scripts to gate on a
 # compatible manifest shape.
-MANIFEST_SCHEMA_VERSION = "1.2.0"  # 1.2: + outputs, runtime_seconds, platform, python_version
+MANIFEST_SCHEMA_VERSION = "1.3.0"  # 1.3: + resource_plan (top-level execution audit, v0.6.2)
 
 
 ALL_SUBCOMMAND_HELP = (
@@ -563,6 +563,156 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Top-level `execution:` block (v0.6.2)
+# ---------------------------------------------------------------------------
+
+
+# Recognised keys inside the optional top-level `execution:` section.
+# Unknown keys are reported by validate-config; nothing here is silently
+# ignored. Matches the cascade rules documented in the README.
+_EXECUTION_BLOCK_KEYS: tuple[str, ...] = (
+    "threads",
+    "memory_gb",
+    "parallel_samples",
+    "single_sample_mode",
+    "min_threads_per_sample",
+    "estimated_memory_per_sample_gb",
+    "scheduler",
+)
+
+
+def _apply_execution_block(
+    config: dict,
+    *,
+    cli_threads: int | None,
+) -> dict:
+    """Cascade the top-level ``execution:`` block into stage configs.
+
+    The orchestrator-level CLI flag ``--threads N`` populates
+    ``execution.threads`` when the YAML did not already pin it. Stage-
+    specific keys (``align.threads``, ``align.max_parallel_samples``,
+    ``align.single_sample_mode``, ``align.memory_gb``,
+    ``rnaseq.align_threads``) win when set; otherwise the cascade fills
+    them from ``execution.*``.
+
+    Returns the (resolved) ``execution`` dict so the caller can persist
+    it to ``resource_plan.json`` / the manifest. Mutates ``config`` in
+    place to keep call-sites simple.
+    """
+    raw = config.get("execution") or {}
+    if not isinstance(raw, dict):
+        # Caller surfaces typed errors; here we just normalise.
+        raw = {}
+    execution: dict = {k: raw.get(k) for k in _EXECUTION_BLOCK_KEYS}
+
+    # CLI --threads at the orchestrator level overrides nothing the user
+    # explicitly pinned in YAML. Otherwise it becomes the global budget.
+    if cli_threads is not None and execution.get("threads") in (None, "auto"):
+        execution["threads"] = int(cli_threads)
+
+    align_cfg = config.get("align")
+    rnaseq_cfg = config.get("rnaseq")
+
+    def _cascade(stage_cfg, stage_key, exec_key):
+        if not isinstance(stage_cfg, dict):
+            return
+        if stage_cfg.get(stage_key) in (None, "auto"):
+            value = execution.get(exec_key)
+            if value is not None:
+                stage_cfg[stage_key] = value
+
+    if isinstance(align_cfg, dict):
+        _cascade(align_cfg, "threads", "threads")
+        _cascade(align_cfg, "max_parallel_samples", "parallel_samples")
+        _cascade(align_cfg, "single_sample_mode", "single_sample_mode")
+        _cascade(align_cfg, "memory_gb", "memory_gb")
+    if isinstance(rnaseq_cfg, dict):
+        # rnaseq's per-stage 'threads' is named align_threads and
+        # only applies to its bowtie2 subprocess. Cascade if unset.
+        _cascade(rnaseq_cfg, "align_threads", "threads")
+
+    config["execution"] = {
+        k: v for k, v in execution.items() if v is not None
+    }
+    return config["execution"]
+
+
+def _resolve_and_write_run_root_resource_plan(
+    config: dict,
+    *,
+    run_root: Path,
+    n_samples: int,
+) -> Path | None:
+    """Plan resources at the orchestrator level and persist the result.
+
+    Writes ``<run_root>/resource_plan.json`` derived from the resolved
+    ``execution`` block (after cascade). Returns the path written, or
+    ``None`` when the plan could not be computed (e.g. zero samples
+    detected and nothing useful to record).
+    """
+    from ..pipeline.resource_plan import plan_parallelism, write_resource_plan
+
+    execution = config.get("execution") or {}
+    if n_samples < 1:
+        # Still record the orchestrator's view so reviewers have an
+        # artifact even on align-skip / dry-runs.
+        n_samples = 1
+    plan = plan_parallelism(
+        n_samples=n_samples,
+        requested_threads=execution.get("threads", "auto"),
+        requested_parallel=execution.get("parallel_samples", "auto"),
+        memory_gb=execution.get("memory_gb", "auto"),
+        min_threads_per_sample=int(
+            execution.get("min_threads_per_sample") or 2
+        ),
+        estimated_memory_per_sample_gb=float(
+            execution.get("estimated_memory_per_sample_gb") or 4.0
+        ),
+    )
+    return write_resource_plan(plan, run_root)
+
+
+def _count_samples_from_config(config: dict) -> int:
+    """Best-effort sample count for the run-root resource_plan.
+
+    Looks at the unified `samples:` sheet first, falls back to
+    `align.fastq:` (list or directory), and otherwise returns 1 so the
+    plan is still written.
+    """
+    samples_block = config.get("samples")
+    sheet_path: str | None = None
+    if isinstance(samples_block, str):
+        sheet_path = samples_block
+    elif isinstance(samples_block, dict):
+        sheet_path = samples_block.get("table") or samples_block.get("path")
+    if sheet_path and Path(sheet_path).exists():
+        try:
+            from ..sample_sheet import load_sample_sheet
+
+            sheet = load_sample_sheet(sheet_path)
+            ribo_count = len(sheet.by_assay("ribo"))
+            if ribo_count:
+                return ribo_count
+            return max(1, len(sheet.rows))
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+    align_cfg = config.get("align") or {}
+    fastq = align_cfg.get("fastq")
+    if isinstance(fastq, list):
+        return max(1, len(fastq))
+    if isinstance(fastq, str):
+        directory = Path(fastq)
+        if directory.is_dir():
+            patterns = ("*.fq.gz", "*.fastq.gz", "*.fq", "*.fastq")
+            n = 0
+            for pattern in patterns:
+                n += sum(1 for _ in directory.glob(pattern))
+            if n:
+                return n
+    return 1
+
+
 # Per-stage config-template comment, also used by --print-config-template.
 _CONFIG_TEMPLATE = """\
 # mitoribopy all --config pipeline_config.yaml --output results/
@@ -967,6 +1117,18 @@ def _write_manifest(
     write_outputs_index(output_dir)
     outputs_rows = build_outputs_index_rows(output_dir)
 
+    # v0.6.2: lift resource_plan.json into the manifest so a downstream
+    # script does not have to re-read the sidecar file. The path is
+    # written by the orchestrator before any stage runs; we tolerate a
+    # missing file (e.g. permissions issues) and just record null.
+    resource_plan_blob: dict | None = None
+    plan_path = output_dir / "resource_plan.json"
+    if plan_path.is_file():
+        try:
+            resource_plan_blob = json.loads(plan_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            resource_plan_blob = None
+
     manifest: dict = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "subcommand": "all",
@@ -1009,6 +1171,10 @@ def _write_manifest(
         ),
         "platform": platform.platform(),
         "python_version": platform.python_version(),
+        # v0.6.2: orchestrator-level resource plan (mirrors
+        # <run_root>/resource_plan.json). null when the orchestrator
+        # could not write the sidecar.
+        "resource_plan": resource_plan_blob,
     }
 
     # Promote rpf's reference_checksum so future rnaseq invocations
@@ -1343,6 +1509,31 @@ def run(argv: Iterable[str]) -> int:
         has_de_table=has_de_table,
         has_fastq_mode=has_fastq_mode,
     )
+
+    # v0.6.2: cascade the top-level `execution:` block into stage
+    # configs so a single thread / memory budget is honoured by every
+    # stage. Stage-specific overrides still win.
+    _apply_execution_block(
+        config, cli_threads=getattr(args, "threads", None),
+    )
+
+    # v0.6.2: write the run-root resource_plan.json EARLY so reviewers
+    # have an audit artifact even if a downstream stage crashes. The
+    # plan is recomputed by the per-stage align CLI under
+    # <run_root>/align/resource_plan.json — those values may differ
+    # because the align CLI sees the actual sample list resolution.
+    if not args.dry_run and args.output:
+        try:
+            _resolve_and_write_run_root_resource_plan(
+                config,
+                run_root=run_root,
+                n_samples=_count_samples_from_config(config),
+            )
+        except Exception as exc:  # pragma: no cover - belt-and-braces
+            sys.stderr.write(
+                "[mitoribopy all] WARNING: could not write "
+                f"resource_plan.json: {exc}\n"
+            )
 
     # Refactor-4 (report §3.5.C): canonical_config.yaml is now a
     # first-class output of every real run. Write it as soon as the

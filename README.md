@@ -114,21 +114,21 @@ Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no N
 
 | What | Value |
 |---|---|
-| Manuscript-target version | **v0.6.0** (publication freeze) |
-| Minimum supported version | v0.6.0 |
+| Manuscript-target version | **v0.6.2** (publication freeze) |
+| Minimum supported version | v0.6.2 |
 | Verify installed version | `mitoribopy --version` |
-| Git tag | `v0.6.0` |
+| Git tag | `v0.6.2` |
 
-The README, CLI help, and `examples/templates/` in this repository all describe the **v0.6.0** interface. Older PyPI builds (≤ v0.5.1) shipped a different rpf flag style and a now-removed no-subcommand fallback; do not pin to those for a publication-grade reanalysis.
+The README, CLI help, and `examples/templates/` in this repository all describe the **v0.6.2** interface. v0.6.2 is the fourth-edit cleanup release: it adds a top-level `execution:` resource-planning block, run-root `resource_plan.json`, an extended periodicity QC bundle (`qc_summary.tsv` + gene-level / phase-score / FFT metrics), a stable warning-code registry, and canonicalises `dedup_strategy: umi_coordinate` (legacy `umi-tools` still accepted). Older PyPI builds (≤ v0.5.1) shipped a different rpf flag style and a now-removed no-subcommand fallback; do not pin to those for a publication-grade reanalysis.
 
 ### From source (recommended for the manuscript build)
 
 ```bash
 git clone https://github.com/Ahram-Ahn/MitoRiboPy.git
 cd MitoRiboPy
-git checkout v0.6.0          # exact manuscript version; omit for HEAD
+git checkout v0.6.2          # exact manuscript version; omit for HEAD
 python -m pip install -e .
-mitoribopy --version          # MUST print 0.6.0 or later
+mitoribopy --version          # MUST print 0.6.2 or later
 ```
 
 This pulls every Python dependency (`numpy`, `pandas`, `matplotlib`, `seaborn`, `biopython`, `scipy`, `PyYAML`, `pysam`) automatically. The external bioinformatics tools (`cutadapt`, `bowtie2`, `umi_tools`, …) still need to be on `$PATH` separately — see [External tool dependencies](#external-tool-dependencies) below.
@@ -142,10 +142,10 @@ python -m pip install -e ".[dev]"
 ### From PyPI
 
 ```bash
-python -m pip install 'mitoribopy>=0.6.0'
+python -m pip install 'mitoribopy>=0.6.2'
 ```
 
-The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). Pin the lower bound (`>=0.6.0`) so a stale PyPI cache cannot install a pre-publication-freeze build.
+The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). Pin the lower bound (`>=0.6.2`) so a stale PyPI cache cannot install a pre-publication-freeze build.
 
 ### Verify the install
 
@@ -211,7 +211,7 @@ Use this recipe for any run that backs a manuscript, preprint, or shared dataset
 
 ```bash
 # 0. Pin the manuscript version
-python -m pip install 'mitoribopy>=0.6.0'
+python -m pip install 'mitoribopy>=0.6.2'
 mitoribopy --version
 
 # 1. Optional pre-flights (also run automatically by --strict below)

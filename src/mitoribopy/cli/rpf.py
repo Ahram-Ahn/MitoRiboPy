@@ -1,12 +1,11 @@
 """``mitoribopy rpf`` subcommand.
 
-Runs the Ribo-seq analysis pipeline from BED (and, starting in v0.3.0
-Phase 4, BAM) inputs. Internally delegates to
-:func:`mitoribopy.pipeline.runner.run_pipeline_cli`; this module peels
-the common flags (``--dry-run``, ``--threads``, ``--log-level``) off
-the argv before handing the remainder to the pipeline parser so that
-``--config``, ``-f``, ``-s``, ``-rpf``, and the rest of the rpf flags
-continue to be owned by ``pipeline.runner``.
+Runs the Ribo-seq analysis pipeline from BED or BAM inputs. Internally
+delegates to :func:`mitoribopy.pipeline.runner.run_pipeline_cli`; this
+module peels the common flags (``--dry-run``, ``--threads``,
+``--log-level``) off the argv before handing the remainder to the
+pipeline parser so that ``--config``, ``-f``, ``-s``, ``-rpf``, and
+the rest of the rpf flags continue to be owned by ``pipeline.runner``.
 """
 
 from __future__ import annotations

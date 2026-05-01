@@ -1,12 +1,12 @@
 """``mitoribopy align`` subcommand - FASTQ -> BAM + BED + read counts.
 
-End-to-end orchestrator for Phase 3. For every input FASTQ:
+End-to-end per-sample orchestrator. For every input FASTQ:
 
 1. cutadapt trim (kit-aware; optional UMI extraction)
 2. bowtie2 contaminant subtraction (user-supplied index; fails loudly if missing)
-3. bowtie2 mt-transcriptome alignment (Path A; end-to-end --very-sensitive -L 18)
+3. bowtie2 mt-transcriptome alignment (end-to-end --very-sensitive -L 18)
 4. MAPQ filter (pysam; default 10 to suppress NUMT cross-talk)
-5. deduplication (umi_tools / skip)
+5. deduplication (umi_coordinate / skip)
 6. BAM -> BED6 (strand-aware)
 
 Writes ``read_counts.tsv`` and ``run_settings.json`` at the run root for
@@ -395,13 +395,34 @@ def build_parser() -> argparse.ArgumentParser:
     dedup = parser.add_argument_group("Deduplication")
     dedup.add_argument(
         "--dedup-strategy",
-        choices=["auto", "umi-tools", "skip"],
+        # Public choices describe the statistical operation
+        # (`umi_coordinate`) rather than the implementation tool.
+        # `umi-tools` / `umi_tools` continue to parse as deprecated
+        # aliases; they normalise to `umi_coordinate` at parse time.
+        choices=[
+            "auto",
+            "umi_coordinate",
+            "umi-tools",
+            "umi_tools",
+            "skip",
+        ],
         default="auto",
+        type=lambda v: (
+            "umi_coordinate"
+            if str(v).lower() in {"umi-tools", "umi_tools"}
+            else str(v)
+        ),
         help=(
-            "'auto' (default) -> umi-tools when UMIs are present, else "
-            "skip. The legacy 'mark-duplicates' option was removed in "
-            "v0.4.5: coordinate-only dedup destroys codon-occupancy "
-            "signal on low-complexity mt-Ribo-seq libraries."
+            "Canonical: auto | umi_coordinate | skip. 'auto' (default) "
+            "-> umi_coordinate when UMIs are present, else skip. "
+            "umi_coordinate collapses reads on (coordinate, UMI); the "
+            "implementation calls into umi_tools but the statistical "
+            "operation is coordinate+UMI dedup. The legacy aliases "
+            "'umi-tools' / 'umi_tools' are accepted and rewritten to "
+            "'umi_coordinate' (canonical_config.yaml records the "
+            "canonical name). The earlier 'mark-duplicates' option was "
+            "removed in v0.4.5: coordinate-only dedup destroys codon-"
+            "occupancy signal on low-complexity mt-Ribo-seq libraries."
         ),
     )
     dedup.add_argument(

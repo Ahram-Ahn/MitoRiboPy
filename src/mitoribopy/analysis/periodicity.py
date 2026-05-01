@@ -823,6 +823,45 @@ def run_periodicity_qc(
         by_length_dir / "length_inclusion_decisions.tsv",
     )
 
+    # v0.6.2: emit the publication-grade QC bundle
+    # (frame_counts_by_sample_length.tsv + qc_summary.tsv +
+    # qc_summary.md + gene_periodicity.tsv) alongside the
+    # by_length/* legacy outputs.
+    from .periodicity_qc import run_periodicity_qc_bundle as _qc_bundle
+
+    bed_with_psite_concat: pd.DataFrame | None = None
+    if frame_by_length_tables:
+        # Re-run compute_p_site_positions per sample and stack so the
+        # gene-level table has the per-read coordinates.
+        psite_frames: list[pd.DataFrame] = []
+        for sample in samples:
+            psite = compute_p_site_positions(
+                bed_df,
+                sample=sample,
+                selected_offsets_by_sample=selected_offsets_by_sample,
+                selected_offsets_combined=selected_offsets_combined,
+                offset_type=offset_type,
+                offset_site=offset_site,
+            )
+            if not psite.empty:
+                psite_frames.append(psite)
+        if psite_frames:
+            bed_with_psite_concat = pd.concat(psite_frames, ignore_index=True)
+
+    combined_frame_by_length = (
+        pd.concat(frame_by_length_tables, ignore_index=True)
+        if frame_by_length_tables
+        else pd.DataFrame()
+    )
+    _qc_bundle(
+        frame_by_length=combined_frame_by_length,
+        bed_with_psite=bed_with_psite_concat,
+        annotation_df=annotation_df,
+        samples=samples,
+        output_dir=output_dir,
+        site_type=str(offset_site).lower() or "p",
+    )
+
     # Persist the thresholds the inclusion calls were made under so a
     # reviewer can verify them from disk without re-running the CLI.
     by_length_dir.mkdir(parents=True, exist_ok=True)

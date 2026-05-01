@@ -1,20 +1,21 @@
-"""bowtie2 alignment to the mt-transcriptome reference (Phase 3 Path A).
+"""bowtie2 alignment to the mt-transcriptome reference.
 
-Step E of the ``mitoribopy align`` pipeline. Aligns the non-contaminant
-FASTQ from Step D to a bowtie2 index built over the mt-mRNA
-transcriptome (per Phase 3.3's Path A decision). The output is a
-coordinate-sorted, indexed BAM that drops into downstream MAPQ filtering
-and BAM -> BED conversion without further shell glue.
+Aligns the non-contaminant FASTQ to a bowtie2 index built over the
+mt-mRNA transcriptome. The output is a coordinate-sorted, indexed BAM
+that drops into downstream MAPQ filtering and BAM -> BED conversion
+without further shell glue.
 
-Why a transcriptome reference and not the whole mtDNA: see
-``docs/reports/v0.3.0/phase0_cli_and_api_surface.md`` and the Phase 3.3
-ToT decision. Path A sidesteps the ND5 / ND6 antisense overlap at the
-genome level because each mt-mRNA is a separate FASTA record; strand
-polarity is enforced at alignment time via ``--norc`` / ``--nofw``.
+Why a transcriptome reference and not the whole mtDNA: aligning to
+per-transcript FASTA records sidesteps the ND5 / ND6 antisense
+overlap at the genome level (each mt-mRNA is a separate FASTA record);
+strand polarity is enforced at alignment time via ``--norc`` / ``--nofw``.
 
 sort/index use pysam.sort and pysam.index rather than shelling out to
 samtools. pysam wheels bundle htslib, so mt-transcriptome sort + index
 do not add a PATH dependency.
+
+Historical design notes (Path A vs Path B, ToT decision tables) live in
+``docs/developer/architecture_history.md``.
 """
 
 from __future__ import annotations
