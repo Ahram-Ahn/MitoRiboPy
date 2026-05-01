@@ -463,3 +463,159 @@ def test_all_respects_skip_rpf_flag(tmp_path, monkeypatch) -> None:
     assert exit_code == 0
     assert "align" in calls
     assert "rpf" not in calls
+
+
+def test_all_runs_rnaseq_in_from_fastq_mode(tmp_path, monkeypatch) -> None:
+    """rnaseq must execute when the section configures the from-FASTQ
+    flow (rna_fastq), even without a de_table."""
+    calls: list[str] = []
+    captured_argv: dict[str, list[str]] = {}
+
+    def fake_align_run(argv):
+        calls.append("align")
+        out = Path(tmp_path / "results" / "align")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "read_counts.tsv").write_text("sample\n")
+        (out / "run_settings.json").write_text('{"subcommand":"align"}')
+        return 0
+
+    def fake_rpf_run(argv):
+        calls.append("rpf")
+        out = Path(tmp_path / "results" / "rpf")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "rpf_counts.tsv").write_text("sample\tgene\tcount\n")
+        (out / "run_settings.json").write_text(
+            '{"subcommand":"rpf","reference_checksum":"abc"}'
+        )
+        return 0
+
+    def fake_rnaseq_run(argv):
+        calls.append("rnaseq")
+        captured_argv["rnaseq"] = list(argv)
+        out = Path(tmp_path / "results" / "rnaseq")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "delta_te.tsv").write_text("gene\n")
+        (out / "run_settings.json").write_text('{"subcommand":"rnaseq"}')
+        return 0
+
+    from mitoribopy.cli import align as align_cli
+    from mitoribopy.cli import rnaseq as rnaseq_cli
+    from mitoribopy.cli import rpf as rpf_cli
+
+    monkeypatch.setattr(align_cli, "run", fake_align_run)
+    monkeypatch.setattr(rpf_cli, "run", fake_rpf_run)
+    monkeypatch.setattr(rnaseq_cli, "run", fake_rnaseq_run)
+
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "align:\n  kit_preset: truseq_smallrna\n"
+        "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
+        "rnaseq:\n"
+        "  rna_fastq:\n"
+        "    - rna1.fq.gz\n"
+        "    - rna2.fq.gz\n"
+        "  ribo_fastq:\n"
+        "    - ribo1.fq.gz\n"
+        "  gene_id_convention: hgnc\n"
+        "  condition_map: cond.tsv\n"
+    )
+    results = tmp_path / "results"
+    exit_code = cli.main([
+        "all",
+        "--config", str(cfg),
+        "--output", str(results),
+    ])
+    assert exit_code == 0
+    assert calls == ["align", "rpf", "rnaseq"]
+
+    rnaseq_argv = captured_argv["rnaseq"]
+    # rnaseq.output auto-wired from --output.
+    assert "--output" in rnaseq_argv
+    assert rnaseq_argv[rnaseq_argv.index("--output") + 1] == str(results / "rnaseq")
+    # reference_fasta auto-wired from rpf.fasta when not explicitly set.
+    assert "--reference-fasta" in rnaseq_argv
+    assert rnaseq_argv[rnaseq_argv.index("--reference-fasta") + 1] == "/tmp/tx.fa"
+    # ribo-dir is NOT wired in from-FASTQ mode (uses --ribo-fastq instead).
+    assert "--ribo-dir" not in rnaseq_argv
+
+    manifest = json.loads((results / "run_manifest.json").read_text())
+    assert "rnaseq" in manifest["stages_run"]
+
+
+def test_all_rejects_rnaseq_with_both_de_table_and_rna_fastq(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The two rnaseq flows are mutually exclusive; fail fast at the
+    orchestrator instead of letting the rnaseq CLI error mid-run."""
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "rnaseq:\n"
+        "  de_table: de.tsv\n"
+        "  rna_fastq:\n    - rna1.fq.gz\n"
+        "  gene_id_convention: hgnc\n"
+    )
+    exit_code = cli.main([
+        "all",
+        "--config", str(cfg),
+        "--output", str(tmp_path / "results"),
+    ])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "mutually exclusive" in err
+
+
+def test_all_keeps_explicit_rnaseq_reference_override(tmp_path, monkeypatch) -> None:
+    """User-specified rnaseq.reference_fasta must NOT be clobbered by
+    rpf.fasta auto-wiring (RNA-seq may use a different transcriptome)."""
+    captured_argv: dict[str, list[str]] = {}
+
+    def fake_align_run(argv):
+        out = Path(tmp_path / "results" / "align")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "read_counts.tsv").write_text("sample\n")
+        (out / "run_settings.json").write_text('{"subcommand":"align"}')
+        return 0
+
+    def fake_rpf_run(argv):
+        out = Path(tmp_path / "results" / "rpf")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "rpf_counts.tsv").write_text("sample\tgene\tcount\n")
+        (out / "run_settings.json").write_text('{"subcommand":"rpf"}')
+        return 0
+
+    def fake_rnaseq_run(argv):
+        captured_argv["rnaseq"] = list(argv)
+        out = Path(tmp_path / "results" / "rnaseq")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "delta_te.tsv").write_text("gene\n")
+        (out / "run_settings.json").write_text('{"subcommand":"rnaseq"}')
+        return 0
+
+    from mitoribopy.cli import align as align_cli
+    from mitoribopy.cli import rnaseq as rnaseq_cli
+    from mitoribopy.cli import rpf as rpf_cli
+
+    monkeypatch.setattr(align_cli, "run", fake_align_run)
+    monkeypatch.setattr(rpf_cli, "run", fake_rpf_run)
+    monkeypatch.setattr(rnaseq_cli, "run", fake_rnaseq_run)
+
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "align:\n  kit_preset: truseq_smallrna\n"
+        "rpf:\n  strain: h\n  fasta: /tmp/rpf.fa\n"
+        "rnaseq:\n"
+        "  rna_fastq:\n    - rna1.fq.gz\n"
+        "  reference_fasta: /tmp/rnaseq_specific.fa\n"
+        "  gene_id_convention: hgnc\n"
+    )
+    exit_code = cli.main([
+        "all",
+        "--config", str(cfg),
+        "--output", str(tmp_path / "results"),
+    ])
+    assert exit_code == 0
+    rnaseq_argv = captured_argv["rnaseq"]
+    assert "--reference-fasta" in rnaseq_argv
+    idx = rnaseq_argv.index("--reference-fasta")
+    # rpf.fasta did NOT clobber the explicit rnaseq.reference_fasta.
+    assert rnaseq_argv[idx + 1] == "/tmp/rnaseq_specific.fa"

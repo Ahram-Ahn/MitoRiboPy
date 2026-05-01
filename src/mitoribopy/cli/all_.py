@@ -14,7 +14,9 @@ The YAML (or JSON / TOML) config has three optional sections::
 
     align:   { kit_preset: truseq_smallrna, fastq_dir: fastqs/, ... }
     rpf:     { strain: h.sapiens, rpf: [29, 34], ... }
-    rnaseq:  { de_table: de.tsv, gene_id_convention: hgnc, ... }
+    rnaseq:  # one of:
+             { rna_fastq: rna/, reference_fasta: tx.fa, condition_map: ..., ... }
+             { de_table: de.tsv, ribo_dir: rpf/, reference_gtf: ..., ... }
 
 Each section's keys correspond to the CLI flag names of the matching
 subcommand with dashes replaced by underscores. ``mitoribopy all``
@@ -38,9 +40,10 @@ from . import common
 
 ALL_SUBCOMMAND_HELP = (
     "End-to-end orchestrator: align + rpf, plus rnaseq when the config "
-    "carries an 'rnaseq' section with --de-table. Writes a composed "
-    "run_manifest.json with tool versions, parameters, and input/output "
-    "hashes across all three stages."
+    "carries an 'rnaseq' section configured for either flow "
+    "(from-FASTQ via 'rna_fastq' + 'reference_fasta', or external-DE "
+    "via 'de_table'). Writes a composed run_manifest.json with tool "
+    "versions, parameters, and input/output hashes across all three stages."
 )
 
 
@@ -453,11 +456,24 @@ rpf:
   base_sample: null
 
 # ---- rnaseq (optional) -----------------------------------------------------
-# Uncomment + populate de_table to enable the translation-efficiency stage.
+# Uncomment ONE of the two mutually exclusive flows below to enable the
+# translation-efficiency stage. Both produce te.tsv, delta_te.tsv, and plots.
+#
+# Default flow: from raw FASTQ (rna_fastq + reference_fasta).
+# rnaseq:
+#   rna_fastq: /path/to/rnaseq/                # dir or list of FASTQs
+#   ribo_fastq: /path/to/riboseq/              # optional; reuses align/ when omitted
+#   reference_fasta: /path/to/transcriptome.fa # auto-wired from rpf.fasta if unset
+#   condition_map: /path/to/conditions.tsv
+#   condition_a: control
+#   condition_b: knockdown
+#   gene_id_convention: hgnc                   # hgnc | ensembl | refseq | bare
+#
+# Alternative flow: bring your own DE table.
 # rnaseq:
 #   de_table: /path/to/de_table.tsv
-#   gene_id_convention: hgnc       # hgnc | ensembl | refseq | entrez
-#   reference_gtf: /path/to/reference.fa  # must match align's --mt-index source
+#   gene_id_convention: hgnc
+#   reference_gtf: /path/to/reference.fa       # must match align's --mt-index source
 #   condition_map: /path/to/conditions.tsv
 #   condition_a: control
 #   condition_b: knockdown
@@ -539,6 +555,7 @@ def _auto_wire_paths(
     has_rpf: bool,
     has_rnaseq: bool,
     has_de_table: bool,
+    has_fastq_mode: bool,
 ) -> None:
     """Set stage-specific --output defaults and cross-stage wiring.
 
@@ -546,8 +563,13 @@ def _auto_wire_paths(
     * ``config['align']['output']``  defaults to ``<run_root>/align``.
     * ``config['rpf']['output']``    defaults to ``<run_root>/rpf``.
     * ``config['rpf']['directory']`` defaults to the align BED dir.
-    * ``config['rnaseq']['output']`` defaults to ``<run_root>/rnaseq``.
-    * ``config['rnaseq']['ribo_dir']`` defaults to the rpf output.
+    * ``config['rnaseq']['output']`` defaults to ``<run_root>/rnaseq`` whenever
+      either rnaseq mode is active (de_table or from-FASTQ).
+    * ``config['rnaseq']['ribo_dir']`` defaults to the rpf output (de_table flow only).
+    * ``config['rnaseq']['reference_fasta']`` defaults to ``rpf.fasta``
+      when from-FASTQ mode is active and the user did not set one
+      explicitly. Override by setting ``rnaseq.reference_fasta`` when
+      RNA-seq uses a different transcriptome reference.
     """
     align_cfg = config.setdefault("align", {}) if has_align else {}
     rpf_cfg = config.setdefault("rpf", {}) if has_rpf else {}
@@ -565,10 +587,20 @@ def _auto_wire_paths(
                 "read_counts_file", str(run_root / "align" / "read_counts.tsv")
             )
 
-    if has_rnaseq and has_de_table:
+    if has_rnaseq and (has_de_table or has_fastq_mode):
         rnaseq_cfg.setdefault("output", str(run_root / "rnaseq"))
-        if has_rpf:
+        # de_table flow consumes the rpf run dir; from-FASTQ flow uses
+        # --ribo-fastq instead and ignores --ribo-dir.
+        if has_de_table and has_rpf:
             rnaseq_cfg.setdefault("ribo-dir", str(run_root / "rpf"))
+        if has_fastq_mode:
+            user_reference = (
+                rnaseq_cfg.get("reference_fasta")
+                or rnaseq_cfg.get("reference-fasta")
+            )
+            rpf_fasta = config.get("rpf", {}).get("fasta") if has_rpf else None
+            if rpf_fasta and not user_reference:
+                rnaseq_cfg["reference_fasta"] = rpf_fasta
 
 
 def _should_skip_align(output: Path) -> bool:
@@ -643,8 +675,20 @@ def run(argv: Iterable[str]) -> int:
     has_align = bool(config.get("align")) and not args.skip_align
     has_rpf = bool(config.get("rpf")) and not args.skip_rpf
     has_rnaseq = bool(config.get("rnaseq")) and not args.skip_rnaseq
-    has_de_table = has_rnaseq and bool(config.get("rnaseq", {}).get("de_table")
-                                       or config.get("rnaseq", {}).get("de-table"))
+    rnaseq_section = config.get("rnaseq", {}) if has_rnaseq else {}
+    has_de_table = has_rnaseq and bool(
+        rnaseq_section.get("de_table") or rnaseq_section.get("de-table")
+    )
+    has_fastq_mode = has_rnaseq and bool(
+        rnaseq_section.get("rna_fastq") or rnaseq_section.get("rna-fastq")
+    )
+    if has_de_table and has_fastq_mode:
+        print(
+            "[mitoribopy all] ERROR: rnaseq section has both 'de_table' and "
+            "'rna_fastq'; the two flows are mutually exclusive. Drop one.",
+            file=sys.stderr,
+        )
+        return 2
 
     _auto_wire_paths(
         config,
@@ -653,6 +697,7 @@ def run(argv: Iterable[str]) -> int:
         has_rpf=has_rpf,
         has_rnaseq=has_rnaseq,
         has_de_table=has_de_table,
+        has_fastq_mode=has_fastq_mode,
     )
 
     if args.dry_run:
@@ -681,7 +726,7 @@ def run(argv: Iterable[str]) -> int:
                     )
                 )
             )
-        if has_rnaseq and has_de_table:
+        if has_rnaseq and (has_de_table or has_fastq_mode):
             plan.append(
                 "rnaseq: "
                 + " ".join(_dict_to_argv(config.get("rnaseq", {}), flag_style="hyphen"))
@@ -751,7 +796,10 @@ def run(argv: Iterable[str]) -> int:
         stages_skipped.append("rpf")
 
     # --- rnaseq (optional) ---------------------------------------------
-    if has_rnaseq and has_de_table:
+    # Run when either flow is configured: from-FASTQ (rna_fastq +
+    # reference_fasta) or external DE table (de_table). The two are
+    # mutually exclusive and validated above.
+    if has_rnaseq and (has_de_table or has_fastq_mode):
         if args.resume and _should_skip_rnaseq(run_root):
             stages_skipped.append("rnaseq")
         else:
