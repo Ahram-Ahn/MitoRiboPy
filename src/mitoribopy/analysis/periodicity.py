@@ -657,9 +657,9 @@ def _plot_frame_by_length_heatmap(
     # tight_layout warns when a colorbar is attached; subplots_adjust
     # gets the same effect without the warning.
     fig.subplots_adjust(top=0.88, right=0.88)
-    fig.savefig(out_path, dpi=300)
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
     if out_path.suffix.lower() == ".png":
-        fig.savefig(out_path.with_suffix(".svg"))
+        fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")
     plt.close(fig)
 
 
@@ -729,12 +729,18 @@ def _plot_metagene_panels(
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
     if axes[0][0].get_visible():
-        axes[0][0].legend(loc="upper right", frameon=False)
+        # Anchor the legend to the right of the top-row plot so frame
+        # bars stay readable; bbox_inches="tight" preserves the legend
+        # in the saved figure.
+        axes[0][0].legend(
+            loc="upper left", bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0.0, frameon=False,
+        )
 
     fig.tight_layout()
-    fig.savefig(out_path, dpi=300)
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
     if out_path.suffix.lower() == ".png":
-        fig.savefig(out_path.with_suffix(".svg"))
+        fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")
     plt.close(fig)
 
 

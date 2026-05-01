@@ -33,6 +33,7 @@ import platform
 import subprocess
 import sys
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
@@ -1169,6 +1170,18 @@ def _auto_wire_paths(
                     "upstream_rpf_counts",
                     str(run_root / "rpf" / "rpf_counts.tsv"),
                 )
+            # Parallel align-only path: the orchestrator will run
+            # `rnaseq --align-only` concurrently with `align`, producing
+            # rna_counts.tsv before rpf even starts. The DE/TE
+            # invocation at the end picks up the prebuilt matrix via
+            # --upstream-rna-counts and skips re-alignment. Setting the
+            # default here keeps the wiring symmetric with the Ribo
+            # side and makes the canonical_config.yaml emitted at the
+            # run root reflect the actual stage inputs.
+            rnaseq_cfg.setdefault(
+                "upstream_rna_counts",
+                str(run_root / "rnaseq" / "rna_counts.tsv"),
+            )
 
 
 def _should_skip_align(output: Path) -> bool:
@@ -1351,6 +1364,26 @@ def run(argv: Iterable[str]) -> int:
 
     if args.dry_run:
         plan: list[str] = []
+        # When rnaseq is configured in from-FASTQ mode, the orchestrator
+        # kicks off `rnaseq --align-only` in parallel with the align
+        # stage so RNA cutadapt + bowtie2 happens concurrently with
+        # Ribo align. The dry-run plan reflects this so users see the
+        # new ordering at a glance.
+        if has_rnaseq and has_fastq_mode:
+            rnaseq_align_only_cfg = dict(config.get("rnaseq", {}))
+            rnaseq_align_only_cfg["align_only"] = True
+            for k in (
+                "upstream_rpf_counts", "upstream-rpf-counts",
+                "upstream_rna_counts", "upstream-rna-counts",
+                "ribo_fastq", "ribo-fastq",
+            ):
+                rnaseq_align_only_cfg.pop(k, None)
+            plan.append(
+                "rnaseq (align-only, parallel with align): "
+                + " ".join(
+                    _dict_to_argv(rnaseq_align_only_cfg, flag_style="hyphen")
+                )
+            )
         if has_align:
             # Honour `mitoribopy all --strict` in the dry-run plan too,
             # so the printed argv matches what the real run would emit.
@@ -1493,7 +1526,70 @@ def run(argv: Iterable[str]) -> int:
     def _emit_resume_skip(stage: str, reason: str) -> None:
         progress_mgr.resume_skip(stage=stage, reason=reason)
 
-    # --- align ----------------------------------------------------------
+    # --- align (Ribo) ‖ rnaseq align-only (RNA) -------------------------
+    #
+    # Historically these ran serially: align (Ribo only), then rpf, then
+    # rnaseq (which did its own RNA cutadapt + bowtie2 internally before
+    # DE/TE). For from-FASTQ rnaseq runs, the RNA alignment is the
+    # second-largest CPU sink in the pipeline and there is no
+    # data-dependency between Ribo align and RNA align — they read
+    # disjoint FASTQs, write disjoint outputs, and only converge in the
+    # DE/TE phase. Running them concurrently turns the wall time from
+    # roughly (Ribo + RNA) into roughly max(Ribo, RNA), which matters
+    # most when the pipeline is invoked on a multi-core box (default
+    # since the auto-parallelism refactor).
+    #
+    # When rnaseq is configured AND in from_fastq mode, we kick off a
+    # `rnaseq --align-only` worker concurrently with the align stage.
+    # The worker writes `rna_counts.tsv` (and optionally
+    # `rpf_counts.tsv` / `rpf_counts_matrix.tsv` if Ribo FASTQs were
+    # supplied directly to rnaseq, though the orchestrator's default
+    # path defers Ribo counting to the rpf stage). The DE/TE phase then
+    # runs at the end with --upstream-rna-counts pointing at the
+    # prebuilt matrix.
+    rna_align_only_active = (
+        has_rnaseq
+        and has_fastq_mode
+        and not (resume_active and _should_skip_rnaseq(run_root))
+    )
+    rna_align_only_future: "Future | None" = None
+    rna_align_only_executor: "ThreadPoolExecutor | None" = None
+    rna_align_only_t0: float | None = None
+
+    def _build_align_only_argv() -> list[str]:
+        """Argv for the parallel `rnaseq --align-only` invocation."""
+        rnaseq_align_only_cfg = dict(config["rnaseq"])
+        rnaseq_align_only_cfg["output"] = str(run_root / "rnaseq")
+        rnaseq_align_only_cfg["align_only"] = True
+        # Do NOT propagate --upstream-rpf-counts to the align-only
+        # invocation. We don't want the worker to try to load the rpf
+        # counts file (it does not exist yet — rpf hasn't run) and there
+        # is no Ribo work for the align-only worker to do anyway: the
+        # orchestrator's default flow keeps Ribo counting in the rpf
+        # stage. The worker only handles RNA FASTQs.
+        rnaseq_align_only_cfg.pop("upstream_rpf_counts", None)
+        rnaseq_align_only_cfg.pop("upstream-rpf-counts", None)
+        # The auto-wire step set upstream_rna_counts to the same file
+        # this worker is about to write. Pop it so the worker actually
+        # runs alignment (otherwise reuse_upstream_rna would short-
+        # circuit the worker and produce no counts).
+        rnaseq_align_only_cfg.pop("upstream_rna_counts", None)
+        rnaseq_align_only_cfg.pop("upstream-rna-counts", None)
+        # Drop any Ribo FASTQ inputs the user happened to set on the
+        # rnaseq stage; the rpf stage owns those.
+        rnaseq_align_only_cfg.pop("ribo_fastq", None)
+        rnaseq_align_only_cfg.pop("ribo-fastq", None)
+        return _dict_to_argv(rnaseq_align_only_cfg, flag_style="hyphen")
+
+    if rna_align_only_active:
+        rna_align_only_executor = ThreadPoolExecutor(max_workers=1)
+        rna_align_only_t0 = time.monotonic()
+        rna_align_only_argv = _build_align_only_argv()
+        progress_mgr.stage_start("rnaseq_prealign")
+        rna_align_only_future = rna_align_only_executor.submit(
+            rnaseq_cli.run, rna_align_only_argv,
+        )
+
     if has_align:
         if resume_active and _should_skip_align(run_root):
             stages_skipped.append("align")
@@ -1532,6 +1628,13 @@ def run(argv: Iterable[str]) -> int:
                     elapsed_seconds=runtimes["align"],
                     reason=f"exit_code={rc}",
                 )
+                # Cancel / drain any in-flight RNA align-only worker so
+                # we don't keep cutadapt + bowtie2 running for an aborted
+                # pipeline.
+                if rna_align_only_future is not None:
+                    rna_align_only_future.cancel()
+                if rna_align_only_executor is not None:
+                    rna_align_only_executor.shutdown(wait=False, cancel_futures=True)
                 # Re-flush warnings.tsv + outputs_index so they always
                 # reflect the partial state the run produced before
                 # the failure.
@@ -1557,6 +1660,49 @@ def run(argv: Iterable[str]) -> int:
             skip_reasons["align"] = "--skip-align flag set"
         # Otherwise: no align section -> stage is "not_configured"
         # in the manifest (we leave it out of stages_skipped).
+
+    # Wait for the parallel RNA align-only worker to finish before
+    # entering rpf. Its outputs are not consumed by rpf, but joining
+    # here gives the user a clean stage boundary in the progress log
+    # and surfaces RNA-stage errors before the rpf stage runs and
+    # blames itself for resource pressure.
+    if rna_align_only_future is not None:
+        try:
+            rc_rna_align = rna_align_only_future.result()
+        except Exception as exc:  # noqa: BLE001 — surface anything cleanly
+            rc_rna_align = -1
+            sys.stderr.write(
+                f"[mitoribopy all] RNA align-only worker raised: {exc}\n"
+            )
+        finally:
+            if rna_align_only_executor is not None:
+                rna_align_only_executor.shutdown(wait=False)
+        if rna_align_only_t0 is not None:
+            runtimes["rnaseq_prealign"] = time.monotonic() - rna_align_only_t0
+        if rc_rna_align != 0:
+            progress_mgr.stage_end(
+                "rnaseq_prealign", status="error",
+                elapsed_seconds=runtimes.get("rnaseq_prealign"),
+                reason=f"exit_code={rc_rna_align}",
+            )
+            _flush_warnings_tsv(run_root / "warnings.tsv")
+            _write_outputs_index(run_root)
+            progress_mgr.run_end(
+                status="error",
+                elapsed_seconds=time.monotonic() - t_total_start,
+            )
+            progress_mgr.close()
+            print(
+                "[mitoribopy all] RNA align-only worker failed with "
+                f"exit code {rc_rna_align}.",
+                file=sys.stderr,
+            )
+            return int(rc_rna_align) if rc_rna_align >= 0 else 2
+        stages_run.append("rnaseq_prealign")
+        progress_mgr.stage_end(
+            "rnaseq_prealign", status="done",
+            elapsed_seconds=runtimes.get("rnaseq_prealign"),
+        )
 
     # --- rpf ------------------------------------------------------------
     if has_rpf:

@@ -672,9 +672,15 @@ def run_codon_correlation(
             ax_scatter.set_ylabel(scatter_ylabel, fontsize=11)
             ax_scatter.set_title("A. Codon density scatter", fontsize=12, fontweight="bold")
             ax_scatter.grid(True, which="major", alpha=0.25, linewidth=0.6)
+            # Place the legend OUTSIDE the data axes (to the right of
+            # panel A) so it cannot occlude data points or labels.
+            # bbox_inches="tight" on savefig (below) keeps the figure
+            # framing snug around the legend.
             ax_scatter.legend(
                 title="Category", title_fontsize=10, fontsize=9,
-                loc="lower right", frameon=True, framealpha=0.9, edgecolor="0.7",
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, frameon=True, framealpha=0.9,
+                edgecolor="0.7",
             )
 
             # Panel B — MA plot
@@ -728,8 +734,8 @@ def run_codon_correlation(
             plot_dir.mkdir(parents=True, exist_ok=True)
             out_svg = plot_dir / f"{base_sample}_vs_{sample_name}_{version}.svg"
             out_png = plot_dir / f"{base_sample}_vs_{sample_name}_{version}.png"
-            fig.savefig(out_svg)
-            fig.savefig(out_png, dpi=300)
+            fig.savefig(out_svg, bbox_inches="tight")
+            fig.savefig(out_png, dpi=300, bbox_inches="tight")
             plt.close(fig)
             log_info("COR", f"Plot saved => {out_svg} (+ 300 dpi PNG)")
 

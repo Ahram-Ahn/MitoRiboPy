@@ -502,12 +502,24 @@ def test_all_runs_rnaseq_in_from_fastq_mode(tmp_path, monkeypatch) -> None:
         return 0
 
     def fake_rnaseq_run(argv):
-        calls.append("rnaseq")
-        captured_argv["rnaseq"] = list(argv)
-        out = Path(tmp_path / "results" / "rnaseq")
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "delta_te.tsv").write_text("gene\n")
-        (out / "run_settings.json").write_text('{"subcommand":"rnaseq"}')
+        argv_list = list(argv)
+        # The orchestrator now runs the rnaseq stage TWICE in from-FASTQ
+        # mode: once with --align-only (parallel to the Ribo align stage,
+        # to produce rna_counts.tsv) and once at the end for DE/TE.
+        # Differentiate by inspecting the argv.
+        if "--align-only" in argv_list:
+            calls.append("rnaseq_prealign")
+            captured_argv["rnaseq_prealign"] = argv_list
+            out = Path(tmp_path / "results" / "rnaseq")
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "rna_counts.tsv").write_text("gene\tS1\n")
+        else:
+            calls.append("rnaseq")
+            captured_argv["rnaseq"] = argv_list
+            out = Path(tmp_path / "results" / "rnaseq")
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "delta_te.tsv").write_text("gene\n")
+            (out / "run_settings.json").write_text('{"subcommand":"rnaseq"}')
         return 0
 
     from mitoribopy.cli import align as align_cli
@@ -538,7 +550,20 @@ def test_all_runs_rnaseq_in_from_fastq_mode(tmp_path, monkeypatch) -> None:
         "--output", str(results),
     ])
     assert exit_code == 0
-    assert calls == ["align", "rpf", "rnaseq"]
+    # The new ordering is:
+    #   1. rnaseq --align-only (kicked off in parallel with align)
+    #   2. align (Ribo)
+    #   3. rpf
+    #   4. rnaseq DE/TE
+    # Step 1 may finish before or after step 2 depending on scheduling;
+    # step 1's stage_start always precedes step 2's though, and the
+    # orchestrator joins on step 1 before step 3 starts.
+    assert "rnaseq_prealign" in calls
+    # rpf must come AFTER both align and rnaseq_prealign.
+    assert calls.index("rpf") > calls.index("align")
+    assert calls.index("rpf") > calls.index("rnaseq_prealign")
+    # Final DE rnaseq comes last.
+    assert calls[-1] == "rnaseq"
 
     rnaseq_argv = captured_argv["rnaseq"]
     # rnaseq.output auto-wired from --output.
@@ -549,6 +574,15 @@ def test_all_runs_rnaseq_in_from_fastq_mode(tmp_path, monkeypatch) -> None:
     assert rnaseq_argv[rnaseq_argv.index("--reference-fasta") + 1] == "/tmp/tx.fa"
     # ribo-dir is NOT wired in from-FASTQ mode (uses --ribo-fastq instead).
     assert "--ribo-dir" not in rnaseq_argv
+    # The DE invocation gets --upstream-rna-counts pointing at the
+    # matrix the align-only worker just wrote.
+    assert "--upstream-rna-counts" in rnaseq_argv
+
+    # The align-only invocation must NOT carry the upstream-rna-counts
+    # flag (otherwise it would short-circuit and produce no counts).
+    align_only_argv = captured_argv["rnaseq_prealign"]
+    assert "--align-only" in align_only_argv
+    assert "--upstream-rna-counts" not in align_only_argv
 
     manifest = json.loads((results / "run_manifest.json").read_text())
     assert manifest["stages"]["rnaseq"]["status"] == "completed"

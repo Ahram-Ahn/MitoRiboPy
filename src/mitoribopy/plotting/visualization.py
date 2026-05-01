@@ -77,7 +77,10 @@ def plot_read_length_distribution(
                 zorder=0,
                 label=f"RPF range {rpf_lo}-{rpf_hi} nt",
             )
-            ax.legend(loc="upper right", framealpha=0.9, fontsize=10)
+            ax.legend(
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, framealpha=0.9, fontsize=10,
+            )
 
     ax.set_xlabel("Read Length (nt)", fontsize=13, fontweight="bold")
     ax.set_ylabel("Read Count", fontsize=13, fontweight="bold")
@@ -356,12 +359,15 @@ def plot_offset_enrichment(
                 selected_offsets,
                 read_length=read_length,
             )
-            ax.legend()
+            ax.legend(
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, fontsize=8,
+            )
 
         plt.tight_layout()
         lineplot_filename = f"offset_enrichment_combined_lineplots_{align_to}.{plot_format}"
         lineplot_path = os.path.join(plot_dir, lineplot_filename)
-        plt.savefig(lineplot_path)
+        plt.savefig(lineplot_path, bbox_inches="tight")
         plt.close()
         log_info("VIS", f"Combined offset line plots saved => {lineplot_path}")
     elif line_plot_style == "separate":
@@ -394,13 +400,16 @@ def plot_offset_enrichment(
                 selected_offsets,
                 read_length=read_length,
             )
-            ax.legend()
+            ax.legend(
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, fontsize=9,
+            )
 
             lineplot_filename = (
                 f"offset_enrichment_lineplot_read_{read_length}_{align_to}.{plot_format}"
             )
             lineplot_path = os.path.join(plot_dir, lineplot_filename)
-            plt.savefig(lineplot_path)
+            plt.savefig(lineplot_path, bbox_inches="tight")
             plt.close()
             log_info("VIS", f"Offset line plot for read length {read_length} saved => {lineplot_path}")
     else:

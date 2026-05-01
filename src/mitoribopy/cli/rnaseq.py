@@ -308,6 +308,29 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,  # internal; set by `mitoribopy all` orchestrator
     )
     fastq.add_argument(
+        "--upstream-rna-counts",
+        dest="upstream_rna_counts",
+        default=None,
+        metavar="PATH",
+        help=argparse.SUPPRESS,  # internal; set by `mitoribopy all` orchestrator
+    )
+    fastq.add_argument(
+        "--align-only",
+        dest="align_only",
+        action="store_true",
+        default=False,
+        help=(
+            "Run only the FASTQ-trim + bowtie2 + counts phase and exit "
+            "before DESeq2 / TE / plots. Used by `mitoribopy all` to "
+            "kick off RNA-seq alignment in parallel with the Ribo-seq "
+            "align stage so total wall time is dominated by the slower "
+            "of the two assays instead of the sum. Writes "
+            "`rna_counts.tsv` (and `rpf_counts.tsv` if Ribo FASTQs are "
+            "supplied) to the output dir; subsequent rnaseq invocations "
+            "with --upstream-rna-counts pick up the prebuilt matrix."
+        ),
+    )
+    fastq.add_argument(
         "--allow-pseudo-replicates-for-demo-not-publication",
         dest="allow_pseudo_replicates",
         action="store_true",
@@ -759,6 +782,61 @@ def _provenance_entry(result) -> dict:
     }
 
 
+def _synth_rna_results_from_upstream_counts(
+    counts_path: Path,
+) -> "list":
+    """Synthesise per-sample RNA `SampleAlignmentResult`s from rna counts.
+
+    Mirrors :func:`_synth_ribo_results_from_upstream_counts` but for the
+    RNA assay. Used by ``mitoribopy all`` when it has already produced
+    ``rna_counts.tsv`` in a prior parallel align-only invocation: the
+    rnaseq DE stage skips bowtie2 entirely and consumes the matrix
+    directly. The matrix is wide (genes × samples) and we pivot to the
+    per-sample dict shape ``SampleAlignmentResult.counts`` expects.
+    """
+    import pandas as pd
+
+    from ..align._types import ResolvedKit
+    from ..rnaseq.alignment import SampleAlignmentResult
+
+    counts_path = Path(counts_path)
+    df = pd.read_csv(counts_path, sep="\t")
+    if df.empty:
+        return []
+    # Conventional layout: first column is gene id, remaining columns
+    # are samples. We tolerate either 'gene' or 'gene_id' as the index.
+    gene_col = df.columns[0]
+    sample_cols = [c for c in df.columns[1:] if c.lower() != "gene_id"]
+
+    sentinel_kit = ResolvedKit(
+        kit="upstream-rna-counts",
+        adapter=None,
+        umi_length=0,
+        umi_position="5p",
+    )
+    sentinel_bam = Path(str(counts_path))
+
+    results: list = []
+    for sample in sample_cols:
+        per_sample: dict[str, int] = {
+            str(g): int(v)
+            for g, v in zip(df[gene_col].astype(str), df[sample].fillna(0))
+        }
+        total = sum(per_sample.values())
+        results.append(
+            SampleAlignmentResult(
+                sample=str(sample),
+                bam_path=sentinel_bam,
+                counts=per_sample,
+                paired=False,
+                total_reads=total,
+                aligned_reads=total,
+                resolved_kit=sentinel_kit,
+            )
+        )
+    return results
+
+
 def _synth_ribo_results_from_upstream_counts(
     counts_path: Path,
 ) -> "list":
@@ -850,8 +928,37 @@ def _run_from_fastq(args, output_dir: Path) -> int:
     workdir = Path(args.workdir) if args.workdir else output_dir / "work"
     workdir.mkdir(parents=True, exist_ok=True)
 
-    rna_paths = enumerate_fastqs(args.rna_fastq)
-    rna_samples = detect_samples(rna_paths)
+    upstream_rna_counts = getattr(args, "upstream_rna_counts", None)
+    align_only = bool(getattr(args, "align_only", False))
+    reuse_upstream_rna = bool(upstream_rna_counts) and not align_only
+
+    if reuse_upstream_rna:
+        # The orchestrator (`mitoribopy all`) handed us the prebuilt
+        # rna_counts.tsv from a parallel align-only invocation. Skip
+        # FASTQ enumeration entirely and synthesise the result objects.
+        rna_paths = []
+        rna_samples = []
+        sys.stderr.write(
+            "[mitoribopy rnaseq] reusing upstream rna counts "
+            f"({upstream_rna_counts}); skipping RNA-FASTQ re-alignment.\n"
+        )
+        # The align-only worker writes condition_map.augmented.tsv next
+        # to rna_counts.tsv when it had to split pseudo-replicates.
+        # Prefer that augmented map over the user-supplied one so the
+        # DE step sees the rep1/rep2 entries the count matrix is keyed
+        # on.
+        augmented_map = output_dir / "condition_map.augmented.tsv"
+        if augmented_map.is_file() and (
+            not args.condition_map or Path(args.condition_map) != augmented_map
+        ):
+            sys.stderr.write(
+                "[mitoribopy rnaseq] using augmented condition map "
+                f"{augmented_map} (written by upstream align-only step).\n"
+            )
+            args.condition_map = str(augmented_map)
+    else:
+        rna_paths = enumerate_fastqs(args.rna_fastq)
+        rna_samples = detect_samples(rna_paths)
 
     upstream_rpf_counts = getattr(args, "upstream_rpf_counts", None)
     recount = bool(getattr(args, "recount_ribo_fastq", False))
@@ -951,15 +1058,20 @@ def _run_from_fastq(args, output_dir: Path) -> int:
         )
 
     rna_results: list[SampleAlignmentResult] = []
-    for s in rna_samples:
-        rna_results.append(
-            align_sample(
-                s,
-                bt2_index=bt2_index,
-                workdir=workdir / "rna",
-                threads=args.align_threads,
-            )
+    if reuse_upstream_rna:
+        rna_results = _synth_rna_results_from_upstream_counts(
+            Path(upstream_rna_counts)
         )
+    else:
+        for s in rna_samples:
+            rna_results.append(
+                align_sample(
+                    s,
+                    bt2_index=bt2_index,
+                    workdir=workdir / "rna",
+                    threads=args.align_threads,
+                )
+            )
 
     ribo_results: list[SampleAlignmentResult] = []
     if reuse_upstream_rpf:
@@ -980,7 +1092,7 @@ def _run_from_fastq(args, output_dir: Path) -> int:
                 )
             )
 
-    if rna_results:
+    if rna_results and not reuse_upstream_rna:
         write_counts_matrix(rna_results, output_dir / "rna_counts.tsv")
     if ribo_results and not reuse_upstream_rpf:
         # In the normal (non-reuse) path we materialise rpf_counts.tsv
@@ -990,6 +1102,23 @@ def _run_from_fastq(args, output_dir: Path) -> int:
         # point args.ribo_counts at it directly below.
         write_counts_matrix(ribo_results, output_dir / "rpf_counts_matrix.tsv")
         write_long_counts(ribo_results, output_dir / "rpf_counts.tsv")
+
+    if align_only:
+        # The `mitoribopy all` orchestrator launched us in parallel with
+        # the Ribo align stage solely to produce the counts matrices it
+        # needs for the downstream DE/TE step. Exit cleanly before
+        # touching pyDESeq2 / pseudo-replicate logic / plots.
+        sys.stderr.write(
+            "[mitoribopy rnaseq] --align-only complete; wrote "
+            f"{output_dir / 'rna_counts.tsv'}"
+            + (
+                f" + {output_dir / 'rpf_counts.tsv'}"
+                if (ribo_results and not reuse_upstream_rpf)
+                else ""
+            )
+            + ". Skipping DE/TE/plots.\n"
+        )
+        return 0
 
     samples, counts_df, metadata_df = build_sample_sheet(
         rna_results, ribo_results, condition_map

@@ -637,9 +637,14 @@ def _plot_offset_drift(
         ax.set_xlabel("Read length (nt)")
         ax.set_ylabel("Offset (nt)")
         ax.grid(True, alpha=0.2)
-    ax3.legend(loc="best", fontsize=8)
+    # Anchor the legend outside the plot area so per-sample lines stay
+    # readable even when many samples crowd the curve.
+    ax3.legend(
+        loc="upper left", bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0, fontsize=8,
+    )
     fig.tight_layout()
-    fig.savefig(str(output_path), format=plot_format)
+    fig.savefig(str(output_path), format=plot_format, bbox_inches="tight")
     plt.close(fig)
     return output_path
 

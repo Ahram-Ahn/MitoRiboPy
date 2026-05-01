@@ -128,14 +128,16 @@ def _save_figure(
 
     # Always write the file the caller named first. Use 300 dpi for
     # PNG so slides / Markdown render crisply; SVG is vector.
-    fig.savefig(output_path, dpi=300)
+    # bbox_inches="tight" keeps any out-of-axes legend in the saved
+    # figure instead of clipping it.
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     primary_suffix = output_path.suffix.lower().lstrip(".")
     for fmt in formats:
         fmt = fmt.lower()
         if fmt == primary_suffix:
             continue
         sidecar = output_path.with_suffix(f".{fmt}")
-        fig.savefig(sidecar, format=fmt)
+        fig.savefig(sidecar, format=fmt, bbox_inches="tight")
     plt.close(fig)
 
     if metadata is not None:
@@ -392,7 +394,10 @@ def plot_mrna_vs_rpf_scatter(
         ax.set_xlabel("log2FC mRNA  (RNA-seq)")
         ax.set_ylabel("log2FC RPF  (Ribo-seq)")
         ax.set_title(title)
-        ax.legend(loc="lower left", fontsize=8)
+        ax.legend(
+            loc="upper left", bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0.0, fontsize=8,
+        )
 
         return _save_figure(fig, output_path)
 
@@ -531,8 +536,11 @@ def plot_delta_te_volcano(
         )
         legend_handles, legend_labels = ax.get_legend_handles_labels()
         if legend_handles:
-            ax.legend(legend_handles, legend_labels,
-                      loc="lower left", fontsize=8)
+            ax.legend(
+                legend_handles, legend_labels,
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, fontsize=8,
+            )
         return _save_figure(
             fig,
             output_path,
@@ -691,14 +699,17 @@ def plot_de_volcano(
             + ("  (no padj column — y axis is zero)"
                if n_no_padj == len(rows) else "")
         )
-        # Legend lives in the (typically empty) lower-left corner so
-        # it never collides with the gene cluster at the top of a
-        # volcano. Skip empty bins so the legend doesn't promise dot
-        # colours that aren't on the plot.
+        # Legend is anchored OUTSIDE the data axes (right of the
+        # volcano cloud) so it never collides with gene labels or the
+        # significant-hit cluster. Skip empty bins so the legend
+        # doesn't promise dot colours that aren't on the plot.
         legend_handles, legend_labels = ax.get_legend_handles_labels()
         if legend_handles:
-            ax.legend(legend_handles, legend_labels,
-                      loc="lower left", fontsize=8)
+            ax.legend(
+                legend_handles, legend_labels,
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, fontsize=8,
+            )
         n_total = len(xs_up) + len(xs_dn) + len(xs_ns)
         return _save_figure(
             fig,
@@ -838,7 +849,10 @@ def plot_te_compare_scatter(
         ax.set_xlabel(f"log2(TE) — {base}")
         ax.set_ylabel(f"log2(TE) — {compare}")
         ax.set_title(title or f"Per-gene log2(TE): {base} vs {compare}")
-        ax.legend(loc="lower right", fontsize=8)
+        ax.legend(
+            loc="upper left", bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0.0, fontsize=8,
+        )
 
         return _save_figure(fig, output_path)
 
@@ -941,7 +955,11 @@ def plot_te_log2fc_bar(
             plt.Rectangle((0, 0), 1, 1, color=_C_DOWN,
                           label=f"TE down in {compare}"),
         ]
-        ax.legend(handles=legend_handles, loc="best", fontsize=8)
+        ax.legend(
+            handles=legend_handles,
+            loc="upper left", bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0.0, fontsize=8,
+        )
 
         return _save_figure(fig, output_path)
 
@@ -1016,7 +1034,10 @@ def plot_ma(
         ax.set_ylabel("log2FoldChange")
         ax.set_title(title)
         if xs_ns or xs_up or xs_dn:
-            ax.legend(loc="best", fontsize=8)
+            ax.legend(
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, fontsize=8,
+            )
         return _save_figure(fig, output_path)
 
 
@@ -1125,8 +1146,11 @@ def plot_te_bar_grouped(
         ax.set_xticklabels(genes, rotation=40, ha="right")
         ax.set_ylabel("log2(TE)" if log2 else "TE")
         ax.set_title(title)
-        ax.legend(loc="best", fontsize=9, title="condition",
-                  title_fontsize=9)
+        ax.legend(
+            loc="upper left", bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0.0, fontsize=9,
+            title="condition", title_fontsize=9,
+        )
         return _save_figure(fig, output_path)
 
 
@@ -1363,14 +1387,21 @@ def plot_pca(
                        markeredgewidth=0.55)
             for a in unique_assays
         ]
+        # Anchor both legends OUTSIDE the data axes (right of the
+        # scatter) so they cannot overlap PCA points or sample labels.
+        # Two legends stacked vertically: condition on top, assay below.
         cond_legend = ax.legend(
-            handles=cond_handles, loc="upper left",
+            handles=cond_handles,
+            loc="upper left", bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0.0,
             title="condition", fontsize=8, title_fontsize=9,
         )
         ax.add_artist(cond_legend)
         if len(unique_assays) > 1:
             ax.legend(
-                handles=assay_handles, loc="lower left",
+                handles=assay_handles,
+                loc="upper left", bbox_to_anchor=(1.02, 0.55),
+                borderaxespad=0.0,
                 title="assay", fontsize=8, title_fontsize=9,
             )
 

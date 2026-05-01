@@ -769,7 +769,12 @@ def run_coverage_profile_plots(
             if row == len(sample_list) - 1:
                 ax.set_xlabel("CDS Nucleotide Position", fontsize=14, fontweight="bold")
             if row == 0:
-                ax.legend(loc="upper right", framealpha=0.9, fontsize=10)
+                # Anchor the frame legend to the right of the top panel
+                # so it never overlaps the bars.
+                ax.legend(
+                    loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                    borderaxespad=0.0, framealpha=0.9, fontsize=10,
+                )
 
         # Annotate the frame coordinate system inline so the figure is
         # interpretable without reading the metadata sidecar.
@@ -782,7 +787,7 @@ def run_coverage_profile_plots(
         )
         fig.tight_layout()
         out_path = out_dir / f"{tr}_{title_suffix.replace(' ', '_').lower()}.{plot_format}"
-        fig.savefig(out_path)
+        fig.savefig(out_path, bbox_inches="tight")
         plt.close(fig)
         return out_path
 
