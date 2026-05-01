@@ -36,14 +36,19 @@ def test_record_appends_to_collected_list(capsys) -> None:
     rec = warnings_log.record(
         "RNASEQ",
         "boom",
-        sample="S1",
+        sample="S1",  # legacy alias still accepted
         code="UMI_INFERRED_NO_DECLARATION",
     )
+    # Canonical attribute names (P5.8).
+    assert rec.stage == "RNASEQ"
+    assert rec.sample_id == "S1"
+    # Backward-compat aliases still resolve.
     assert rec.component == "RNASEQ"
-    assert rec.code == "UMI_INFERRED_NO_DECLARATION"
     assert rec.sample == "S1"
+    assert rec.code == "UMI_INFERRED_NO_DECLARATION"
     assert rec.severity == "warn"
     assert rec.message == "boom"
+    assert rec.suggested_action is None
 
     all_records = warnings_log.collected()
     assert len(all_records) == 1
@@ -93,21 +98,37 @@ def test_clear_resets_records() -> None:
 
 
 def test_flush_tsv_writes_header_and_one_row_per_record(tmp_path: Path) -> None:
-    warnings_log.record("RNASEQ", "boom", sample="S1", code="UMI")
+    warnings_log.record(
+        "RNASEQ",
+        "boom",
+        sample_id="S1",
+        code="UMI",
+        suggested_action="declare umi_length in samples.tsv",
+    )
     warnings_log.record("ALIGN", "halt", code="DEDUP")
     out = warnings_log.flush_tsv(tmp_path / "warnings.tsv")
     assert out.exists()
     raw = out.read_text().splitlines()
-    assert raw[0].startswith("# schema_version: ")  # P1.12
+    assert raw[0].startswith("# schema_version: ")
     rows = [r for r in raw if not r.startswith("#")]
     header = rows[0].split("\t")
-    assert header == ["timestamp", "component", "severity", "sample", "code", "message"]
+    # P5.8: assessment §8 spec — no timestamp; suggested_action added.
+    assert header == [
+        "stage",
+        "sample_id",
+        "severity",
+        "code",
+        "message",
+        "suggested_action",
+    ]
     body = [r.split("\t") for r in rows[1:]]
     assert len(body) == 2
-    assert body[0][1] == "RNASEQ"
-    assert body[0][3] == "S1"
-    assert body[0][4] == "UMI"
-    assert body[1][1] == "ALIGN"
+    assert body[0][0] == "RNASEQ"
+    assert body[0][1] == "S1"
+    assert body[0][3] == "UMI"
+    assert body[0][5] == "declare umi_length in samples.tsv"
+    assert body[1][0] == "ALIGN"
+    assert body[1][5] == ""
 
 
 def test_flush_tsv_creates_header_only_file_when_no_warnings(tmp_path: Path) -> None:
@@ -115,7 +136,9 @@ def test_flush_tsv_creates_header_only_file_when_no_warnings(tmp_path: Path) -> 
     raw = out.read_text().splitlines()
     rows = [r for r in raw if not r.startswith("#")]
     assert len(rows) == 1  # header only
-    assert "component" in rows[0]
+    assert "stage" in rows[0]
+    assert "sample_id" in rows[0]
+    assert "suggested_action" in rows[0]
 
 
 def test_flush_tsv_strips_tabs_and_newlines_from_messages(tmp_path: Path) -> None:
@@ -127,9 +150,14 @@ def test_flush_tsv_strips_tabs_and_newlines_from_messages(tmp_path: Path) -> Non
     # header + one data row
     assert len(rows) == 2
     cells = rows[1].split("\t")
-    assert "\n" not in cells[-1]
-    # tab-replacement: the original "first\tsecond" becomes "first second"
-    assert cells[-1] == "first second third"
+    # P5.8: columns are stage, sample_id, severity, code, message,
+    # suggested_action — message is index 4.
+    assert "\n" not in cells[4]
+    # tab-replacement: the original "first\tsecond\nthird" becomes
+    # "first second third".
+    assert cells[4] == "first second third"
+    # Empty suggested_action still scrubbed cleanly.
+    assert cells[5] == ""
 
 
 # ---------- end-to-end via mitoribopy all -----------------------------------

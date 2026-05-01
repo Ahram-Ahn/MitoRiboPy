@@ -444,8 +444,12 @@ def align_sample(
                 "sample sheet to make the run reproducible. The "
                 "inferred value is still applied to this run."
             ),
-            sample=sample.sample,
+            sample_id=sample.sample,
             code="UMI_INFERRED_NO_DECLARATION",
+            suggested_action=(
+                "Add umi_length and umi_position columns for this "
+                "sample to your sample sheet."
+            ),
         )
 
     bam_out = sample_dir / f"{sample.sample}.bam"

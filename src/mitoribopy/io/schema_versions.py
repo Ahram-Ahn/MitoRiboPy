@@ -38,7 +38,8 @@ OUTPUT_SCHEMA_VERSIONS: dict[str, str] = {
     "te.tsv":             "1.0",
     "delta_te.tsv":       "1.0",
     "summary_qc.tsv":     "1.0",
-    "warnings.tsv":       "1.0",
+    "warnings.tsv":       "2.0",  # P5.8: column rename to assessment §8 spec
+    "outputs_index.tsv":  "1.0",
 }
 
 

@@ -50,7 +50,7 @@ from ._resume_guard import (
 # breaks downstream consumers (added fields are minor; renamed or
 # removed fields are major). Read it from your own scripts to gate on a
 # compatible manifest shape.
-MANIFEST_SCHEMA_VERSION = "1.1.0"  # 1.1: + output_schemas, + warnings (real)
+MANIFEST_SCHEMA_VERSION = "1.2.0"  # 1.2: + outputs, runtime_seconds, platform, python_version
 
 
 ALL_SUBCOMMAND_HELP = (
@@ -852,6 +852,7 @@ def _write_manifest(
     command_argv: list[str],
     runtimes: dict[str, float],
     skip_reasons: dict[str, str],
+    total_runtime_seconds: float | None = None,
 ) -> Path:
     """Write the v1.0.0 ``run_manifest.json`` for an ``all`` run.
 
@@ -881,18 +882,37 @@ def _write_manifest(
                                 copies (kept as-is for back-compat).
     * ``tools``                — flat ``{tool: version}`` map lifted
                                  from per-stage settings.
-    * ``warnings``             — placeholder for future structured
-                                 warnings; always an empty list in v1.
+    * ``warnings``             — structured warnings collected by
+                                 ``mitoribopy.io.warnings_log`` during
+                                 the run, mirrored to ``warnings.tsv``.
+    * ``outputs``              — outputs_index rows (output_type,
+                                 stage, path, description,
+                                 recommended_for, schema_version).
+                                 Same data is also written to
+                                 ``outputs_index.tsv`` (P5.8).
+    * ``runtime_seconds``      — total wall time for the orchestrator;
+                                 per-stage values live under
+                                 ``stages.<stage>.runtime_seconds`` (P5.8).
+    * ``platform``             — :func:`platform.platform` string (P5.8).
+    * ``python_version``       — running Python version (P5.8).
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    from ..io.outputs_index import (
+        build_outputs_index_rows,
+        write_outputs_index,
+    )
     from ..io.schema_versions import OUTPUT_SCHEMA_VERSIONS
     from ..io.warnings_log import collected as _collected_warnings
     from ..io.warnings_log import flush_tsv as _flush_warnings_tsv
 
     structured_warnings = [w.as_dict() for w in _collected_warnings()]
     _flush_warnings_tsv(output_dir / "warnings.tsv")
+    # P5.8: write outputs_index.tsv before the manifest so the manifest
+    # can reference the same row set under "outputs".
+    write_outputs_index(output_dir)
+    outputs_rows = build_outputs_index_rows(output_dir)
 
     manifest: dict = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -924,6 +944,18 @@ def _write_manifest(
         # during the run; mirrored to <output>/warnings.tsv for diff-friendly
         # consumption.
         "warnings": structured_warnings,
+        # P5.8: outputs_index — same rows as outputs_index.tsv. Lets a
+        # script depending on the manifest alone enumerate every TSV /
+        # plot / sidecar the run advertised.
+        "outputs": outputs_rows,
+        # P5.8: top-level runtime + platform metadata required by §8.
+        "runtime_seconds": (
+            float(total_runtime_seconds)
+            if total_runtime_seconds is not None
+            else sum(runtimes.values())
+        ),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
     }
 
     # Promote rpf's reference_checksum so future rnaseq invocations
@@ -1267,6 +1299,8 @@ def run(argv: Iterable[str]) -> int:
     stages_skipped: list[str] = []
     runtimes: dict[str, float] = {}
     skip_reasons: dict[str, str] = {}
+    # P5.8: top-level wall clock for the manifest's runtime_seconds.
+    t_total_start = time.monotonic()
 
     # Resume hash guard.
     #
@@ -1449,6 +1483,7 @@ def run(argv: Iterable[str]) -> int:
         command_argv=list(argv),
         runtimes=runtimes,
         skip_reasons=skip_reasons,
+        total_runtime_seconds=time.monotonic() - t_total_start,
     )
 
     # P1.6 + P1.8: emit SUMMARY.md and summary_qc.tsv automatically so
