@@ -784,7 +784,8 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=None,
         help=(
             "Window (nt) for the Fourier metagene per region (orf_start, "
-            "orf_stop). Default: 99 (33 codons, Wakigawa-recommended)."
+            "orf_stop). Default: 99 (33 codons; multiple of 3 for clean "
+            "period-3 bin alignment)."
         ),
     )
     optional_group.add_argument(

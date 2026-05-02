@@ -42,7 +42,7 @@ OUTPUT_SCHEMA_VERSIONS: dict[str, str] = {
     "warnings.tsv":       "2.0",  # column rename to publication-readiness spec
     "outputs_index.tsv":  "1.0",
     "figure_qc.tsv":      "1.0",  # per-plot mechanical QC (overlap / counts / SVG)
-    # Wakigawa metagene Fourier periodicity bundle (v0.8.0).
+    # Metagene Fourier periodicity bundle (v0.8.0).
     "fourier_spectrum_combined.tsv":      "1.0",
     "fourier_period3_score_combined.tsv": "1.0",
 }

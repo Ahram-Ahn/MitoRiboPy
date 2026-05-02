@@ -167,8 +167,8 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
         stage="rpf",
         relative_path="rpf/qc/fourier_spectrum_combined.tsv",
         description=(
-            "Per-(sample, read_length, gene_set, region) Wakigawa "
-            "metagene amplitude curve over period 2-10 nt. "
+            "Per-(sample, read_length, gene_set, region) metagene "
+            "amplitude curve over period 2-10 nt. "
             "gene_set in {combined, ATP86, ND4L4}; region in {orf_start, "
             "orf_stop}."
         ),

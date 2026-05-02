@@ -13,13 +13,13 @@ The package is built around four pipeline subcommands plus six utilities. Pass `
 | Subcommand | What it does | Typical use |
 |---|---|---|
 | `mitoribopy align` | FASTQ → BAM → BED6 (cutadapt + bowtie2 + umi_tools + pysam) | "I only want trimming + alignment" |
-| `mitoribopy rpf` | BED/BAM → offsets, translation profile, codon usage, coverage plots, Wakigawa Fourier QC | "I already have aligned BEDs" |
+| `mitoribopy rpf` | BED/BAM → offsets, translation profile, codon usage, coverage plots, metagene Fourier QC | "I already have aligned BEDs" |
 | `mitoribopy rnaseq` | Translation efficiency from paired RNA-seq + Ribo-seq. `--rna-fastq` runs trimming → bowtie2 → counting → pyDESeq2 → TE/ΔTE end-to-end (needs `pip install 'mitoribopy[fastq]'`); `--de-table` accepts an external DE table + a prior rpf run (SHA256-gated). | "TE / ΔTE" |
 | `mitoribopy all` | End-to-end orchestrator (align + rpf + optional rnaseq from one YAML); writes a composed `run_manifest.json`. `--resume` is hash-validated against the prior manifest. | "I have raw FASTQ and want everything" |
 | `mitoribopy validate-config` | Parse + canonicalise + check paths + validate `rnaseq.mode`. Exit 0 / 2. | Before long cluster jobs |
 | `mitoribopy validate-reference` | Pre-flight a custom mt-transcriptome FASTA + annotation pair. Exit 0 / 2. | Custom organisms |
 | `mitoribopy validate-figures` | Mechanically QC every plot under a finished run; writes `figure_qc.tsv`. Exit 0 / 1 / 2 (`--strict` upgrades warn → fail). | After a run |
-| `mitoribopy periodicity` | Standalone Wakigawa metagene Fourier QC on a saved site table. | Re-tune Fourier window without re-running offsets |
+| `mitoribopy periodicity` | Standalone metagene Fourier QC on a saved site table. | Re-tune Fourier window without re-running offsets |
 | `mitoribopy summarize` | Regenerate `SUMMARY.md` from `run_manifest.json`. Auto-invoked by `all`. | Re-render an old run's summary |
 | `mitoribopy benchmark` | Time + RSS + disk for a `mitoribopy all` invocation. `--subsample N` reservoir-samples each FASTQ. | Cluster sizing |
 
@@ -90,7 +90,7 @@ Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no N
 
 ## Installation
 
-The README and `examples/templates/` describe the current **v0.8.0** interface. Verify with `mitoribopy --version`. See [CHANGELOG.md](CHANGELOG.md) for breaking-change notes between releases — most notably the v0.8.0 retirement of the frame-fraction QC bundle in favour of a Wakigawa-faithful metagene Fourier analysis.
+The README and `examples/templates/` describe the current **v0.8.0** interface. Verify with `mitoribopy --version`. See [CHANGELOG.md](CHANGELOG.md) for breaking-change notes between releases — most notably the v0.8.0 retirement of the frame-fraction QC bundle in favour of a metagene Fourier analysis.
 
 ### From source (recommended)
 
@@ -583,7 +583,7 @@ FASTQ → BAM → BED6 per sample: adapter detection → cutadapt → bowtie2 (c
 
 ### `mitoribopy rpf`
 
-Runs the Ribo-seq analysis against a directory of BED (or BAM) files: filter BED on the RPF length window → offset enrichment → per-sample offset selection → translation profile → coverage plots → Wakigawa metagene Fourier QC. `mitoribopy rpf --help` lists every flag; what follows is the publication-grade highlights.
+Runs the Ribo-seq analysis against a directory of BED (or BAM) files: filter BED on the RPF length window → offset enrichment → per-sample offset selection → translation profile → coverage plots → metagene Fourier QC. `mitoribopy rpf --help` lists every flag; what follows is the publication-grade highlights.
 
 **Required**: `-f FASTA`, `-d BED_DIR`, `-o OUTPUT_DIR`. `-s {h.sapiens,s.cerevisiae,custom}` (default `h.sapiens`); `--footprint_class {monosome,disome,custom}` picks `-rpf MIN MAX` defaults (h.sapiens monosome → 28-34). `--strain custom` requires `--annotation_file` and `-rpf MIN MAX`.
 
@@ -692,17 +692,17 @@ When a from-FASTQ flow run is launched with `--allow-pseudo-replicates-for-demo-
 
 ### 3-nt periodicity QC
 
-The bundle under `<output>/rpf/qc/` is a faithful re-implementation of the metagene Fourier method published in Wakigawa et al. 2025 (bioRxiv 2025.05.03.652009). The frame-fraction QC bundle (`qc_summary.tsv`, `frame_counts_*.tsv`, `gene_periodicity.tsv`, frame heatmaps, phase score) was retired in v0.8.0 — the Wakigawa `spectral_ratio_3nt` + `snr_call` columns now carry the headline QC verdict.
+The bundle under `<output>/rpf/qc/` runs an aggregate-then-DFT metagene Fourier analysis: per-gene tracks are unit-mean-normalised, mean-centred, and Hann-windowed, then averaged into a single metagene before a direct DFT is evaluated at exactly period 3.0. The frame-fraction QC bundle (`qc_summary.tsv`, `frame_counts_*.tsv`, `gene_periodicity.tsv`, frame heatmaps, phase score) was retired in v0.8.0 — the `spectral_ratio_3nt` + `snr_call` columns now carry the headline QC verdict.
 
 | Output | What it answers |
 |---|---|
 | `metagene_start.tsv` / `metagene_stop.tsv` + `metagene_{start,stop}_<site>_site.svg` | Start- and stop-anchored P-site density profiles. The community-standard "show me 3-nt phasing" sanity check, used to verify offset assignment. |
 | `fourier_spectrum_combined.tsv` | Per-(sample, read_length, gene_set, region) metagene amplitude curve over period 2-10 nt. `gene_set ∈ {combined, ATP86, ND4L4}`; `region ∈ {orf_start, orf_stop}`. |
-| `fourier_period3_score_combined.tsv` | Per-(sample, read_length, gene_set, region) headline 3-nt spectral ratio. Columns: `amp_at_3nt`, `background_amp_median`, `spectral_ratio_3nt`, `snr_call ∈ {excellent, healthy, modest, broken, no_signal}` (Wakigawa thresholds: ≥10× / ≥5× / ≥2× / <2× / NaN), `transcripts` (semicolon-joined list of contributing transcripts). |
+| `fourier_period3_score_combined.tsv` | Per-(sample, read_length, gene_set, region) headline 3-nt spectral ratio. Columns: `amp_at_3nt`, `background_amp_median`, `spectral_ratio_3nt`, `snr_call ∈ {excellent, healthy, modest, broken, no_signal}` (thresholds: ≥10× / ≥5× / ≥2× / <2× / NaN), `transcripts` (semicolon-joined list of contributing transcripts). |
 | `fourier_spectrum/<sample>/*.png` and `*.svg` | Three figures per (sample, read_length): `*_combined.png` (canonical mt-mRNAs aggregated), `*_ATP86.png` (junction-bracketed ATP8/ATP6 bicistronic analysis: top = ATP8 frame, bottom = ATP6 frame), `*_ND4L4.png` (junction-bracketed ND4L/ND4 analysis). Each panel shows ONE aggregated trace; in-figure annotations report `spectral_ratio_3nt` and `snr_call`. |
-| `periodicity.metadata.json` | Sidecar JSON recording the Wakigawa knobs that produced the tables: `method = wakigawa_metagene_dft`, `fourier_window_nt`, `drop_codons_after_start`, `drop_codons_before_stop`, `min_mean_coverage`, `min_total_counts`, `regions`, `gene_sets`. |
+| `periodicity.metadata.json` | Sidecar JSON recording the knobs that produced the tables: `method = metagene_dft`, `fourier_window_nt`, `drop_codons_after_start`, `drop_codons_before_stop`, `min_mean_coverage`, `min_total_counts`, `regions`, `gene_sets`. |
 
-#### Method defaults (Wakigawa-faithful)
+#### Method defaults
 
 | Knob | Default | Where to override |
 |---|---|---|
@@ -770,7 +770,7 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
       {p_site,a_site}_density_{rpm,raw}/       # single-nt density at the chosen site
       {p_site,a_site}_density_*_frame/         # frame-coloured CDS overlay (frame-0 dominance = QC)
       {p_site,a_site}_density_*_frame_split/   # 3 stacked sub-rows per sample (frame 0, +1, +2)
-    qc/                                # Wakigawa metagene Fourier QC bundle (always emitted)
+    qc/                                # metagene Fourier QC bundle (always emitted)
       fourier_spectrum_combined.tsv          # per-(sample, length, gene_set, region) amplitude curve
       fourier_period3_score_combined.tsv     # spectral_ratio_3nt + snr_call tier (excellent/healthy/modest/broken)
       periodicity.metadata.json
@@ -805,7 +805,7 @@ After every run, walk these files in order. The first three (`SUMMARY.md`, `warn
 5. **`align/read_counts.tsv`** — per-stage drop-off; invariants `rrna_aligned + post_rrna_filter == post_trim` and `mt_aligned + unaligned_to_mt == post_rrna_filter` must hold.
 6. **`rpf/offset_diagnostics/plots/offset_drift_<align>.svg`** — per-sample offset drift, visible by eye.
 7. **`rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv`** — exact offset row applied downstream.
-8. **`rpf/qc/fourier_period3_score_combined.tsv`** — Wakigawa periodicity verdict per `(sample, read_length, gene_set, region)`. Look at `gene_set=combined` rows: `snr_call ∈ {excellent, healthy}` is publication-grade; `modest` is borderline; `broken` means offset assignment is suspect for that read length. **Read this before trusting any downstream codon-level table.**
+8. **`rpf/qc/fourier_period3_score_combined.tsv`** — metagene Fourier periodicity verdict per `(sample, read_length, gene_set, region)`. Look at `gene_set=combined` rows: `snr_call ∈ {excellent, healthy}` is publication-grade; `modest` is borderline; `broken` means offset assignment is suspect for that read length. **Read this before trusting any downstream codon-level table.**
 9. **`rpf/qc/fourier_spectrum/<sample>/*.png`** — three figures per (sample, length): `combined`, `ATP86`, `ND4L4`. Each panel reports its `spectral_ratio_3nt` and `snr_call` in-figure.
 10. **`rpf/coverage_profile_plots/p_site_density_rpm_frame/<transcript>_*.svg`** — frame-coloured CDS density. Frame-0 dominance (~70-90 %) is the canonical mt-Ribo-seq QC signature; flat or jittery frames suggest contamination or poor offset selection. The `_frame_split/` companion stacks each frame in its own sub-row when the overlay's tallest frame would hide low-frame signal.
 11. **`rpf/rpf_counts.tsv`** + sidecar — per-(sample, gene) RPF count matrix.

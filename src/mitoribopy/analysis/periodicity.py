@@ -496,7 +496,7 @@ def run_periodicity_qc(
     fourier_render_plots: bool = True,
     metagene_nt: int | None = None,
     # Accepted for backwards-compatible call sites; ignored under the
-    # Wakigawa-only QC contract.
+    # current Fourier-only QC contract.
     min_cds_reads_per_length: int = _DEFAULT_MIN_CDS_READS_PER_LENGTH,
     min_frame0_fraction: float = _DEFAULT_MIN_FRAME0_FRACTION,
     min_frame0_dominance: float = _DEFAULT_MIN_FRAME0_DOMINANCE,
@@ -505,7 +505,7 @@ def run_periodicity_qc(
     exclude_stop_codons: int = 3,
     qc_thresholds: dict[str, float] | None = None,
 ) -> dict:
-    """Compute start/stop metagenes + strand sanity + Wakigawa Fourier QC.
+    """Compute start/stop metagenes + strand sanity + metagene Fourier QC.
 
     Writes:
 
@@ -518,7 +518,7 @@ def run_periodicity_qc(
       figure (when ``plot=True``).
     * ``metagene_{start,stop}_<site>_site.svg`` — single-anchor variants.
 
-    Plus the Wakigawa-faithful Fourier bundle written by
+    Plus the metagene Fourier bundle written by
     :func:`mitoribopy.analysis.periodicity_qc.run_periodicity_qc_bundle`:
     ``fourier_spectrum_combined.tsv``, ``fourier_period3_score_combined.tsv``,
     ``fourier_spectrum/<sample>/*.{png,svg}``, ``periodicity.metadata.json``.

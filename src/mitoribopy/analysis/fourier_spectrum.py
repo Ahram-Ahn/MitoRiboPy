@@ -1,9 +1,9 @@
-"""Wakigawa-faithful metagene Fourier periodicity analysis.
+"""Metagene Fourier periodicity analysis.
 
 Replaces the legacy per-gene FFT overlay (`fft_period3_power.tsv` and the
-v0.7.x sum-coverage path). The contract follows the published mt-Ribo-seq
-recipe in Wakigawa et al. 2025 (bioRxiv 2025.05.03.652009): aggregate per-
-gene normalised tracks into a metagene FIRST, then run a single DFT.
+v0.7.x sum-coverage path). The contract is **aggregate first, then DFT**:
+per-gene normalised tracks are averaged into a single metagene before a
+single direct DFT is evaluated on the result.
 
 Why aggregate-then-DFT instead of per-gene overlay
 --------------------------------------------------
@@ -12,18 +12,18 @@ Why aggregate-then-DFT instead of per-gene overlay
   ~5 codons after every AUG carry massive ribosome occupancy
   (initiation stalling). The Fourier transform of an impulse is a flat
   spectrum across all frequencies — which smears period-3 energy
-  uniformly across periods 2-10 in the ORF figure. Wakigawa drops the
-  first 5 codons (15 nt) from every transcript.
+  uniformly across periods 2-10 in the ORF figure. Skipping those
+  first 5 codons (15 nt) of every transcript removes the contaminant.
 
 * **Stop-codon stalling does the same on the 3' end.** Especially severe
   for noncanonical-stop ORFs (MT-CO1: AGA; MT-ND6: AGG). Including the
-  stop trinucleotide adds another impulse. Wakigawa drops the last
-  codon (3 nt) before the stop.
+  stop trinucleotide adds another impulse, so the last codon (3 nt)
+  before the stop is dropped.
 
 * **Per-gene 100 nt is structurally underpowered.** 33 codons of signal
-  per gene is too short for clean DFT on noisy data. Wakigawa
-  aggregates ~9 ORFs into one metagene; the averaging suppresses gene-
-  specific noise while reinforcing codon-locked 3-nt phasing.
+  per gene is too short for clean DFT on noisy data. Aggregating ~9
+  ORFs into one metagene before the DFT averages out gene-specific
+  noise while reinforcing codon-locked 3-nt phasing.
 
 * **Coverage magnitude dominates raw overlays.** The highest-expression
   gene (MT-ND6 in many libraries) buries every other trace. Per-gene
@@ -119,17 +119,6 @@ semicolon-separated ``sequence_aliases``, so BED reads from a fused-
 FASTA chromosome (``ATP86``, ``ND4L4``) resolve to BOTH constituent
 transcripts (ATP8 + ATP6, or ND4L + ND4) for analysis. This is what
 makes the ATP86 / ND4L4 figures work without code-side aliasing.
-
-References
-----------
-
-* Wakigawa et al., "Mitochondrial translation termination, recycling,
-  reinitiation, and rescue for in-frame and out-of-frame contexts"
-  (bioRxiv 2025.05.03.652009). Methods: "Data analysis"; Figure
-  panels S1K, S2I, S5G, S6M, S8O, S9Q.
-* Window choice: "The first 5 codons of each transcript and overlapping
-  ORF regions in the bicistronic transcripts were omitted from the
-  calculation."
 """
 
 from __future__ import annotations
@@ -174,7 +163,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 DEFAULT_WINDOW_NT: int = 99
-"""33 codons of signal (multiple of 3) — Wakigawa-recommended."""
+"""33 codons of signal (multiple of 3) — clean integer-bin period-3."""
 
 DEFAULT_DROP_CODONS_AFTER_START: int = 5
 """Drop 5 codons (15 nt) after AUG to skip the initiation peak."""
@@ -399,7 +388,7 @@ def _build_window_coverage(
 def _normalize_and_window(
     coverage: np.ndarray, *, hann: np.ndarray,
 ) -> np.ndarray:
-    """Per-gene Wakigawa preprocessing: unit-mean, mean-centre, Hann."""
+    """Per-gene preprocessing: unit-mean normalise, mean-centre, Hann window."""
     mean_cov = float(np.mean(coverage))
     if mean_cov <= 0:
         return np.zeros_like(coverage)
@@ -436,9 +425,10 @@ def extract_per_gene_normalized_tracks(
 ) -> list[_PerGeneTrack]:
     """Extract per-(sample, length, gene_set, region, transcript) tracks.
 
-    Each track is the Wakigawa-preprocessed coverage vector ready to be
-    aggregated into a metagene. Tracks failing the min-coverage / min-
-    count filters are dropped silently and not returned.
+    Each track is the preprocessed coverage vector (unit-mean normalised,
+    mean-centred, Hann-windowed) ready to be aggregated into a metagene.
+    Tracks failing the min-coverage / min-count filters are dropped
+    silently and not returned.
     """
     missing = [c for c in _BED_REQUIRED_COLS if c not in bed_with_psite_and_gene.columns]
     if missing:
@@ -655,7 +645,7 @@ def compute_spectral_ratio_3nt(
 def snr_call_for_ratio(ratio: float) -> str:
     """Map a 3-nt spectral ratio to a publication-grade QC tier.
 
-    Wakigawa-style thresholds:
+    Thresholds:
       * >= 10x  : excellent
       * >=  5x  : healthy
       * >=  2x  : modest
@@ -758,7 +748,7 @@ def build_fourier_period3_score_combined_table(
 
     Headline scalar: ``spectral_ratio_3nt``. Includes ``snr_call``
     tier ({"excellent", "healthy", "modest", "broken", "no_signal"})
-    per Wakigawa thresholds.
+    per the thresholds in :func:`snr_call_for_ratio`.
 
     The ``transcripts`` column is a semicolon-joined list of the
     transcripts that contributed to the metagene — auditability.

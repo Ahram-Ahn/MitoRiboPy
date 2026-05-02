@@ -1,6 +1,6 @@
 """Tests for the standalone ``mitoribopy periodicity`` subcommand.
 
-The subcommand now runs the Wakigawa metagene Fourier bundle on a pre-
+The subcommand now runs the metagene Fourier bundle on a pre-
 assigned site table. The contract being verified:
 
 * A strong period-3 signal in the input yields a high spectral_ratio_3nt
@@ -83,7 +83,7 @@ def test_outputs_and_metadata_are_written(tmp_path: Path) -> None:
     assert (out / "fourier_spectrum_combined.tsv").is_file()
     assert (out / "fourier_period3_score_combined.tsv").is_file()
     meta = json.loads((out / "periodicity.metadata.json").read_text())
-    assert meta["method"] == "wakigawa_metagene_dft"
+    assert meta["method"] == "metagene_dft"
     assert meta["fourier_window_nt"] == 99
     assert meta["regions"] == ["orf_start", "orf_stop"]
     assert meta["gene_sets"] == ["combined", "ATP86", "ND4L4"]

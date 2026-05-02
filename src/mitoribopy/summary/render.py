@@ -145,7 +145,7 @@ def render_summary_md(
         f"- `{run_root.name}/align/` — per-sample read counts, kit resolution, BEDs",
         f"- `{run_root.name}/align/umi_qc.tsv` — UMI / dedup audit (when align ran)",
         f"- `{run_root.name}/rpf/` — RPF counts, offsets, P-site / A-site outputs",
-        f"- `{run_root.name}/rpf/qc/` — Wakigawa metagene Fourier QC "
+        f"- `{run_root.name}/rpf/qc/` — metagene Fourier QC "
         "(fourier_spectrum_combined.tsv, fourier_period3_score_combined.tsv, "
         "metagene_start.tsv, metagene_stop.tsv, fourier_spectrum/<sample>/)",
         f"- `{run_root.name}/rpf/codon_correlation/{{p_site,a_site}}/` — "

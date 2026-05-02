@@ -1,4 +1,4 @@
-"""``mitoribopy periodicity`` — standalone Wakigawa metagene Fourier QC.
+"""``mitoribopy periodicity`` — standalone metagene Fourier QC.
 
 Re-runs the Fourier-spectrum periodicity bundle (per-(sample, length,
 gene_set, region) metagene amplitude curve + period-3 spectral ratio +
@@ -40,8 +40,8 @@ from . import common
 
 
 PERIODICITY_SUBCOMMAND_HELP = (
-    "Quantify 3-nt periodicity by running the Wakigawa metagene "
-    "Fourier analysis on a pre-assigned site table."
+    "Quantify 3-nt periodicity by running the metagene Fourier "
+    "analysis on a pre-assigned site table."
 )
 
 
@@ -97,9 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_WINDOW_NT,
         metavar="N",
         help=(
-            "Window size (nt) per region. Default: 99 (33 codons, "
-            "Wakigawa-recommended). Must be a multiple of 3 for clean "
-            "period-3 alignment."
+            "Window size (nt) per region. Default: 99 (33 codons). "
+            "Must be a multiple of 3 for clean period-3 bin alignment."
         ),
     )
     parser.add_argument(

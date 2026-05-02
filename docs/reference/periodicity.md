@@ -1,8 +1,8 @@
 # Periodicity QC reference
 
-The mt-Ribo-seq 3-nt periodicity QC bundle is a faithful re-
-implementation of the metagene Fourier method published in
-Wakigawa et al. 2025 (bioRxiv 2025.05.03.652009).
+The mt-Ribo-seq 3-nt periodicity QC bundle is a metagene Fourier
+analysis: per-gene tracks are normalised, aggregated, and a single
+direct DFT is evaluated on the metagene.
 
 The bundle consists of:
 
@@ -11,7 +11,7 @@ The bundle consists of:
   These are the community-standard "show me 3-nt phasing around the
   start / stop codon" plots and remain useful as a sanity check for
   offset assignment.
-* **Wakigawa metagene Fourier spectrum** — three figures per
+* **Metagene Fourier spectrum** — three figures per
   `(sample, read_length)` and two TSVs per run: per-(sample, length,
   gene_set, region) amplitude curve over period 2-10 nt, plus the
   derived 3-nt spectral ratio with an `snr_call` tier. This is the
@@ -20,31 +20,29 @@ The bundle consists of:
 The legacy frame-fraction QC bundle (`qc_summary.tsv`,
 `frame_counts_*.tsv`, `gene_periodicity.tsv`,
 `frame_fraction_heatmap.svg`, `read_length_periodicity_barplot.svg`,
-`gene_phase_score_dotplot.svg`) was retired in v0.8.0. The Wakigawa
+`gene_phase_score_dotplot.svg`) was retired in v0.8.0. The
 `spectral_ratio_3nt` + `snr_call` columns now carry the headline QC
 story; the per-frame breakdown is no longer reported.
 
 ## Why aggregate-then-DFT instead of per-gene overlay
 
 The previous v0.7.x implementation overlaid one FFT trace per gene per
-panel, which produced a noisy, hard-to-read plot. Two reports
-(Wakigawa Methods + an internal refinement note based on the same
-recipe) converge on the same diagnosis: per-gene DFT is structurally
-underpowered.
+panel, which produced a noisy, hard-to-read plot. Per-gene DFT is
+structurally underpowered for several reasons:
 
 * **Initiation pile-ups create flat broadband spectra.** The first
   ~5 codons after every AUG carry massive ribosome occupancy
   (initiation stalling). The Fourier transform of an impulse is a
   flat spectrum across all frequencies — which smears period-3 energy
-  uniformly across periods 2-10. Wakigawa drops the first 5 codons
-  (15 nt) from every transcript window.
+  uniformly across periods 2-10. Skipping the first 5 codons (15 nt)
+  of every transcript window removes that contaminant.
 * **Stop-codon stalling does the same on the 3' end.** Especially
   severe for noncanonical-stop ORFs (MT-CO1: AGA; MT-ND6: AGG).
-  Including the stop trinucleotide adds another impulse. Wakigawa
-  drops the last codon (3 nt) before the stop.
+  Including the stop trinucleotide adds another impulse, so the
+  last codon (3 nt) before the stop is dropped.
 * **Per-gene 100 nt is structurally underpowered.** 33 codons of
-  signal per gene is too short for clean DFT on noisy data. Wakigawa
-  aggregates ~9 ORFs into one metagene; the averaging suppresses
+  signal per gene is too short for clean DFT on noisy data.
+  Aggregating ~9 ORFs into one metagene before the DFT averages out
   gene-specific noise while reinforcing codon-locked 3-nt phasing.
 * **Coverage magnitude dominates raw overlays.** The highest-
   expression gene (MT-ND6 in many libraries) buries every other
@@ -67,11 +65,10 @@ For a transcript with annotated `start_codon` and `stop_codon`
 
 Default `W = 99 nt = 33 codons`. Multiple of 3 — no period-3 leakage.
 
-The 3' UTR negative-control window from the original Wakigawa figure
-was dropped in v0.8.0: human mt-mRNA 3' UTRs are typically too short
-for a meaningful 99-nt window, and the user-facing artefact is
-cleaner without a sparse third panel. Override the window via
-`--periodicity-fourier-window-nt`.
+A 3' UTR negative-control window is intentionally NOT computed: human
+mt-mRNA 3' UTRs are typically too short for a meaningful 99-nt window,
+and the user-facing artefact is cleaner without a sparse third panel.
+Override the window via `--periodicity-fourier-window-nt`.
 
 ## Per-gene processing pipeline
 
@@ -154,7 +151,7 @@ spectral_ratio_3nt = amp(3.0) / median( amp(p) for p in 2..10
                                         excluding 2.8 <= p <= 3.2 )
 ```
 
-`snr_call` tier (Wakigawa-style):
+`snr_call` tier:
 
 | ratio | snr_call | meaning |
 |---|---|---|
@@ -256,20 +253,18 @@ offset assignment for that read length is suspect — most often the
 wrong for initiation footprints. Cross-check `metagene_start_p_site.svg`
 for the same length.
 
-## Comparing to Wakigawa et al. (2025)
+## Method summary
 
-The published Wakigawa figure overlays per-gene FFT traces at
-`W = 100 nt` for a single read length. Our v0.8.0 implementation is
-strictly stronger:
-
-* Aggregates per-gene normalised tracks (Wakigawa Methods, page 16).
-* Skips 5 codons after AUG and 1 codon before stop (Wakigawa Methods).
-* Uses `W = 99 nt` (multiple of 3) for clean integer-bin period-3
-  alignment, vs Wakigawa's 100 nt.
-* Direct DFT at exactly period 3.0, not bin-snapped.
-* Reports the spectral_ratio_3nt with explicit tier labels.
-
-To exactly reproduce the published `W = 100` recipe (e.g. for a
-direct figure comparison), pass `--periodicity-fourier-window-nt 100`
-on the rpf or periodicity subcommand. The 99 nt default is what we
-recommend for new analyses.
+In one paragraph: per-(sample, read_length, transcript) coverage is
+sliced into a `W`-nt window anchored downstream of the start codon
+(`orf_start`) or upstream of the stop codon (`orf_stop`), with the
+first 5 codons after AUG and the last codon before stop dropped.
+Each per-gene window is divided by its own mean (unit-mean
+normalisation), mean-centred, and Hann-windowed. Qualifying tracks
+are averaged element-wise into a metagene; a direct DFT is then
+evaluated on the metagene at every period in `[2.0, 10.0]` (step
+0.05) and at exactly period 3.0. The headline scalar is
+`spectral_ratio_3nt = amp(3.0) / median(background)`, reported with
+an `snr_call` tier. `W = 99 nt` (33 codons; multiple of 3 so the
+period-3 bin lands on the integer) is the default; pass
+`--periodicity-fourier-window-nt N` to override.

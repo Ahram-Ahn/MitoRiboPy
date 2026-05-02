@@ -20,7 +20,7 @@ Generated against MitoRiboPy v0.6.2.
 | [`mitoribopy rpf`](#mitoribopy-rpf) | Ribo-seq analysis from BED/BAM inputs. |
 | [`mitoribopy rnaseq`](#mitoribopy-rnaseq) | Translation efficiency (TE / delta-TE) from paired RNA-seq + Ribo-seq. Default flow: pass --rna-fastq + --ribo-fastq + --reference-fasta and the subcommand runs trimming, bowtie2 alignment, per-transcript counting, and pyDESeq2 itself before emitting te.tsv, delta_te.tsv, and plots. Alternative: pass --de-table from a prior external DESeq2 / Xtail / Anota2Seq run together with --ribo-dir; this path is mutually exclusive with --rna-fastq and enforces a SHA256 reference-consistency gate. |
 | [`mitoribopy all`](#mitoribopy-all) | End-to-end orchestrator: align + rpf, plus rnaseq when the config carries an 'rnaseq' section configured for either flow (from-FASTQ via 'rna_fastq' + 'reference_fasta', or external-DE via 'de_table'). Writes a composed run_manifest.json with tool versions, parameters, and input/output hashes across all three stages. |
-| [`mitoribopy periodicity`](#mitoribopy-periodicity) | Quantify 3-nt periodicity by running the Wakigawa metagene Fourier analysis on a pre-assigned site table. |
+| [`mitoribopy periodicity`](#mitoribopy-periodicity) | Quantify 3-nt periodicity by running the metagene Fourier analysis on a pre-assigned site table. |
 | [`mitoribopy migrate-config`](#mitoribopy-migrateconfig) | Rewrite legacy MitoRiboPy YAML keys to their canonical names. Input is read from a path; output is written to stdout (the change log goes to stderr). Use to upgrade old pipeline configs without manually hunting down every renamed key. |
 | [`mitoribopy validate-config`](#mitoribopy-validateconfig) | Pre-flight a MitoRiboPy YAML / JSON / TOML config: parse, canonicalise legacy keys, check file paths and mutually-exclusive sections, and resolve rnaseq.mode against supplied inputs. Exit code is 0 on success, 2 when at least one error was found. |
 | [`mitoribopy validate-reference`](#mitoribopy-validatereference) | Pre-flight a custom mitochondrial reference: check that the FASTA and annotation CSV are consistent (matching transcript IDs, matching lengths, CDS divisible by 3, valid start / stop codons under the selected codon table). |
@@ -439,7 +439,7 @@ Optional Modules:
   --periodicity-enabled, --no-periodicity-enabled, --periodicity_enabled, --no-periodicity_enabled
                                       Skip the periodicity QC step entirely when set to false. [default: True]
   --periodicity-fourier-window-nt PERIODICITY_FOURIER_WINDOW_NT, --periodicity_fourier_window_nt PERIODICITY_FOURIER_WINDOW_NT
-                                      Window (nt) for the Fourier metagene per region (orf_start, orf_stop). Default: 99 (33 codons, Wakigawa-recommended).
+                                      Window (nt) for the Fourier metagene per region (orf_start, orf_stop). Default: 99 (33 codons; multiple of 3 for clean period-3 bin alignment).
   --periodicity-metagene-nt PERIODICITY_METAGENE_NT, --periodicity_metagene_nt PERIODICITY_METAGENE_NT
                                       Window (nt) up/downstream of start/stop codons for the metagene_start.tsv / metagene_stop.tsv plots. Default: 90.
 
@@ -619,14 +619,14 @@ usage: mitoribopy periodicity [-h] --site-table PATH --output DIR
                               [--min-mean-coverage X] [--min-total-counts N]
                               [--no-plots]
 
-Quantify 3-nt periodicity by running the Wakigawa metagene Fourier analysis on a pre-assigned site table.
+Quantify 3-nt periodicity by running the metagene Fourier analysis on a pre-assigned site table.
 
 options:
   -h, --help                   show this help message and exit
   --site-table PATH            Per-read site table; required columns: sample, gene, transcript_id, read_length, site_type, site_pos, cds_start, cds_end. `count` is optional (defaults to 1).
   --output DIR                 Directory for the Fourier QC bundle.
   --site {p,a}                 Ribosomal site to score. Default: p. [default: p]
-  --fourier-window-nt N        Window size (nt) per region. Default: 99 (33 codons, Wakigawa-recommended). Must be a multiple of 3 for clean period-3 alignment. [default: 99]
+  --fourier-window-nt N        Window size (nt) per region. Default: 99 (33 codons). Must be a multiple of 3 for clean period-3 bin alignment. [default: 99]
   --drop-codons-after-start N  Codons after the AUG to skip in the orf_start window. Default: 5 (skip the initiation peak). [default: 5]
   --drop-codons-before-stop N  Codons before the stop codon to skip in the orf_stop window. Default: 1 (skip the termination peak). [default: 1]
   --min-mean-coverage X        Skip per-gene windows whose mean coverage is below X. Default: 0.1. [default: 0.1]

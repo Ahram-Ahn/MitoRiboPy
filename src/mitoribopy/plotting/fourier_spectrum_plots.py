@@ -1,4 +1,4 @@
-"""Plot writers for the Wakigawa-style metagene Fourier spectrum.
+"""Plot writers for the metagene Fourier spectrum.
 
 Three figures land per `(sample, read_length)` under
 ``<output>/qc/fourier_spectrum/<sample>/``:
@@ -66,7 +66,7 @@ _TRACE_COLOR: dict[str, str] = {
 # transcript-specific title in the panel-rendering code.
 _DEFAULT_PANEL_TITLES: dict[str, str] = {
     "orf_start": "Downstream of start codon (post-initiation)",
-    "orf_stop":  "Upstream of stop codon (pre-termination — Wakigawa)",
+    "orf_stop":  "Upstream of stop codon (pre-termination)",
 }
 
 _SNR_TIER_DESCRIPTION: dict[str, str] = {

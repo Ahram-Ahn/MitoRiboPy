@@ -1,4 +1,4 @@
-"""Wakigawa-faithful Fourier periodicity orchestrator.
+"""Fourier periodicity orchestrator.
 
 Replaces the legacy v0.6.x QC bundle (frame_counts_*, gene_periodicity,
 qc_summary, phase_score, frame heatmap plots, etc.). The current QC
@@ -66,7 +66,7 @@ def run_periodicity_qc_bundle(
     min_total_counts: int = DEFAULT_MIN_TOTAL_COUNTS,
     render_plots: bool = True,
 ) -> dict:
-    """Write the Wakigawa Fourier bundle and return in-memory tables.
+    """Write the metagene Fourier bundle and return in-memory tables.
 
     Tolerant of missing inputs: when ``bed_with_psite`` or
     ``annotation_df`` is ``None`` the function writes empty (header-
@@ -128,7 +128,7 @@ def run_periodicity_qc_bundle(
         "period_grid_count": int(np.size(DEFAULT_PERIOD_GRID)),
         "period_grid_first": float(DEFAULT_PERIOD_GRID[0]),
         "period_grid_last": float(DEFAULT_PERIOD_GRID[-1]),
-        "method": "wakigawa_metagene_dft",
+        "method": "metagene_dft",
     }
     (output_dir / "periodicity.metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",

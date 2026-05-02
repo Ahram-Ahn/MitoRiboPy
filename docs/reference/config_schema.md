@@ -112,7 +112,7 @@ Selected highlights:
 
 ### Standalone `mitoribopy periodicity` flags
 
-The `rpf` stage emits the Wakigawa metagene Fourier QC bundle under
+The `rpf` stage emits the metagene Fourier QC bundle under
 `<output>/rpf/qc/`. Built-in defaults: window 99 nt = 33 codons, drop
 5 codons after AUG (initiation peak), drop 1 codon before stop
 (termination peak), min mean coverage 0.1, min total counts 30. To

@@ -228,10 +228,10 @@ results/
       p_site_density_rpm_frame_split/ # v0.6.2: per-frame split companion (3 sub-rows
       p_site_density_raw_frame_split/ #         per sample, shared y-axis)
       a_site_density_*/               # A-site mirror folders (analysis_sites in {a,both})
-    qc/                               # Wakigawa metagene Fourier QC bundle (always written)
+    qc/                               # metagene Fourier QC bundle (always written)
       fourier_spectrum_combined.tsv         # per-(sample, length, gene_set, region) amplitude curve
       fourier_period3_score_combined.tsv    # spectral_ratio_3nt + snr_call tier
-      periodicity.metadata.json             # Wakigawa knobs that produced the tables
+      periodicity.metadata.json             # knobs that produced the tables
       fourier_spectrum/<sample>/<sample>_<length>nt_{combined,ATP86,ND4L4}.{png,svg}
       metagene_{start,stop}.tsv             # P-site metagene tables
       metagene_{start,stop}_p_site.svg      # 3-nt periodicity plots

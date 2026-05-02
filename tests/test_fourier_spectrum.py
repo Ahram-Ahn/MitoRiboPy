@@ -1,4 +1,4 @@
-"""Tests for the Wakigawa metagene Fourier periodicity module.
+"""Tests for the metagene Fourier periodicity module.
 
 The contract being verified:
 
@@ -60,7 +60,7 @@ def test_default_window_is_99_nt() -> None:
     assert DEFAULT_WINDOW_NT == 99
 
 
-def test_default_codon_skips_match_wakigawa() -> None:
+def test_default_codon_skips() -> None:
     assert DEFAULT_DROP_CODONS_AFTER_START == 5
     assert DEFAULT_DROP_CODONS_BEFORE_STOP == 1
 

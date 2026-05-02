@@ -260,7 +260,7 @@ def test_synthetic_mini_round_trip(tmp_path: Path) -> None:
         assert by_gene[gene].delta_te_log2 == pytest.approx(0.0, abs=1e-6)
         assert by_gene[gene].note == ""
 
-    # Sidecar artefacts: the Wakigawa Fourier bundle is written for
+    # Sidecar artefacts: the metagene Fourier bundle is written for
     # every (sample, length) combination that has enough coverage.
     assert (qc_dir / "fourier_spectrum_combined.tsv").is_file()
     assert (qc_dir / "fourier_period3_score_combined.tsv").is_file()
