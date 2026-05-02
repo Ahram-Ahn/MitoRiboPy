@@ -97,7 +97,9 @@ def test_write_umi_qc_tsv_round_trips(tmp_path: Path) -> None:
     ]
     out = tmp_path / "umi_qc.tsv"
     write_umi_qc_tsv(rows, out)
-    df = pd.read_csv(out, sep="\t", dtype={"umi_present": str})
+    raw = out.read_text().splitlines()
+    assert raw[0].startswith("# schema_version: ")
+    df = pd.read_csv(out, sep="\t", comment="#", dtype={"umi_present": str})
     assert list(df.columns) == [
         "sample_id",
         "umi_present",

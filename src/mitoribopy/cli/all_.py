@@ -766,8 +766,8 @@ align:
   adapter_detect_min_rate: 0.30           # min fraction with adapter signal
   adapter_detect_min_len: 12              # adapter prefix length used
   adapter_detect_pretrimmed_threshold: 0.05  # all-kits below this -> pretrimmed
-  # allow_pretrimmed_inference: true      # set false to keep v0.4.0 hard-fail
-                                          #   behaviour when detection fails
+  # allow_pretrimmed_inference: true      # set false to hard-fail when
+                                          #   adapter detection finds no kit
 
   # Inputs / reference indexes (bowtie2 prefixes built by bowtie2-build).
   # NOTE: when the top-level `samples:` block is set, `fastq:` and
@@ -1727,8 +1727,7 @@ def run(argv: Iterable[str]) -> int:
     # disjoint FASTQs, write disjoint outputs, and only converge in the
     # DE/TE phase. Running them concurrently turns the wall time from
     # roughly (Ribo + RNA) into roughly max(Ribo, RNA), which matters
-    # most when the pipeline is invoked on a multi-core box (default
-    # since the auto-parallelism refactor).
+    # most when the pipeline is invoked on a multi-core box.
     #
     # When rnaseq is configured AND in from_fastq mode, we kick off a
     # `rnaseq --align-only` worker concurrently with the align stage.
@@ -2040,11 +2039,11 @@ def run(argv: Iterable[str]) -> int:
             f"[mitoribopy all] WARNING: SUMMARY.md generation failed: {exc}\n"
         )
 
-    # Refactor-4: also auto-run validate-figures so figure_qc.tsv is
-    # always produced. We never elevate the run's exit code based on
-    # plot QC — the contract for `all` is "did the pipeline finish",
-    # not "are the figures publication-ready". Users who need that
-    # gate run `mitoribopy validate-figures --strict` themselves.
+    # Auto-run validate-figures so figure_qc.tsv is always produced.
+    # The run's exit code is never elevated based on plot QC — the
+    # contract for `all` is "did the pipeline finish", not "are the
+    # figures publication-ready". Users who need that gate run
+    # `mitoribopy validate-figures --strict` themselves.
     try:
         from . import validate_figures as _validate_figures_cli
 
@@ -2061,9 +2060,9 @@ def run(argv: Iterable[str]) -> int:
             f"[mitoribopy all] WARNING: validate-figures run failed: {exc}\n"
         )
 
-    # Re-write outputs_index.tsv so the refactor-4 additions
-    # (figure_qc.tsv, progress.jsonl) get advertised even when their
-    # writers ran AFTER the manifest call above.
+    # Re-write outputs_index.tsv so figure_qc.tsv and progress.jsonl
+    # get advertised even when their writers ran AFTER the manifest
+    # call above.
     try:
         from ..io.outputs_index import write_outputs_index as _wri
 
@@ -2071,9 +2070,9 @@ def run(argv: Iterable[str]) -> int:
     except Exception:  # pragma: no cover
         pass
 
-    # Refactor-4: emit a final RunEnd event with the warning / error
-    # totals lifted from warnings_log so a downstream JSONL consumer can
-    # compute success without re-parsing the manifest.
+    # Emit a final RunEnd event with the warning / error totals lifted
+    # from warnings_log so a downstream JSONL consumer can compute
+    # success without re-parsing the manifest.
     try:
         from ..io.warnings_log import collected as _wl_collected
 

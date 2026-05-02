@@ -127,12 +127,10 @@ def load_total_read_counts(context: PipelineContext, emit_status: StatusWriter) 
             )
             context.total_counts_map = {}
 
-    # Task 5c: derived state lives on the context. The
-    # context.args.total_mrna_map assignment below is a compatibility
-    # shim for external code that still reads from the namespace; it
-    # emits a deprecation warning on access and will be removed in
-    # v0.4.0. Internal consumers (run_coverage_profile_plots) now take
-    # total_mrna_map as an explicit kwarg.
+    # Derived state lives on the context. The context.args.total_mrna_map
+    # assignment below is a compatibility shim for external code that
+    # still reads from the namespace; internal consumers
+    # (run_coverage_profile_plots) take total_mrna_map as an explicit kwarg.
     context.args.total_mrna_map = context.total_counts_map
     _emit_step_ok(
         2,
@@ -293,9 +291,9 @@ def filter_bed_inputs(context: PipelineContext, emit_status: StatusWriter) -> bo
         output_path=context.base_output_dir / "rpf_counts.metadata.json",
     )
 
-    # Emit run_settings.json with reference_checksum so the Phase 5
-    # rnaseq subcommand's reference-consistency gate can verify that
-    # the Ribo-seq and RNA-seq sides used the same transcript set.
+    # Emit run_settings.json with reference_checksum so the rnaseq
+    # subcommand's reference-consistency gate can verify that the
+    # Ribo-seq and RNA-seq sides used the same transcript set.
     write_rpf_run_settings(context)
 
     _emit_step_ok(

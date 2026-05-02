@@ -40,10 +40,10 @@ DedupStrategy = Literal["auto", "umi-tools", "skip"]
 ``skip``            no deduplication; required default for UMI-less,
                     low-complexity mt-Ribo-seq libraries.
 
-The legacy ``mark-duplicates`` (picard) option was removed in v0.4.5
-because coordinate-only deduplication flattens codon-occupancy signal
-on mt-Ribo-seq libraries. See docs/validation/taco1_ko_regression.md
-for the empirical evidence.
+The legacy ``mark-duplicates`` (picard) option is not supported because
+coordinate-only deduplication flattens codon-occupancy signal on
+mt-Ribo-seq libraries. See docs/validation/taco1_ko_regression.md for
+the empirical evidence.
 """
 
 UmiPosition = Literal["5p", "3p"]
@@ -175,11 +175,11 @@ KIT_PRESETS: dict[str, KitPreset] = {
 }
 
 
-# Backward-compatibility aliases. v0.4.0 launched with vendor-specific
-# preset names (``truseq_smallrna``, ``nebnext_smallrna``, …); v0.4.1
-# consolidated them into adapter-family names. Old YAML configs and CLI
-# invocations keep working — :func:`resolve_kit_alias` translates them
-# transparently with an INFO log line so the user knows the mapping.
+# Backward-compatibility aliases. Earlier releases used vendor-specific
+# preset names (``truseq_smallrna``, ``nebnext_smallrna``, …); the
+# canonical names are now adapter-family names. Old YAML configs and
+# CLI invocations keep working — :func:`resolve_kit_alias` translates
+# them transparently with an INFO log line so the user knows the mapping.
 KIT_PRESET_ALIASES: dict[str, str] = {
     "truseq_smallrna": "illumina_smallrna",
     "nebnext_smallrna": "illumina_truseq",
@@ -203,8 +203,8 @@ class ResolvedKit:
     """The effective (kit, adapter, UMI) tuple after CLI overrides.
 
     Produced by :func:`mitoribopy.align.trim.resolve_kit_settings` and
-    written verbatim into the Phase 6 run manifest so a reader can
-    reconstruct the exact trimming that happened.
+    written verbatim into the run manifest so a reader can reconstruct
+    the exact trimming that happened.
 
     ``adapter`` is ``None`` only for the ``pretrimmed`` kit; in every
     other case it carries the resolved 3' adapter sequence. cutadapt

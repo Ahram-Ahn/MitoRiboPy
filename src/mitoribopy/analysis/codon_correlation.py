@@ -257,11 +257,14 @@ def _place_residual_labels(
                 if placed_xy
                 else span
             )
-            point_d = min(
+            other_distances = [
                 math.hypot(cx - px, cy - py)
                 for px, py in point_xy
                 if (px, py) != (x, y)
-            )
+            ]
+            # Single-label case: the "exclude self" filter empties the
+            # iterable, so fall back to the axis span as a neutral score.
+            point_d = min(other_distances) if other_distances else span
             score = min(label_d, point_d)
             if score > best_score:
                 best = (cx, cy, ha, va)
@@ -350,8 +353,9 @@ def run_codon_correlation(
     * ``codon_correlation_metrics.tsv`` (one row per sample/codon) — the
       authoritative tabular output, suitable for re-plotting.
     * ``{base}_vs_{sample}_{version}.csv`` — legacy per-pair CSVs.
-    * ``{base}_vs_{sample}_{version}.svg/.png`` — three-panel publication
-      figure (log2 density scatter, MA plot, residual plot).
+    * ``{base}_vs_{sample}_{version}.svg/.png`` — two-panel publication
+      figure (log2 density scatter + MA / Bland-Altman). Robust residuals
+      are still recorded in ``codon_correlation_metrics.tsv``.
     * ``codon_correlation.metadata.json`` — sidecar describing the
       metric, regression method, pseudocount, and warnings.
     """
@@ -578,17 +582,18 @@ def run_codon_correlation(
             metrics_row.insert(0, "site", site_label)
             metrics_records.append(metrics_row)
 
-            # ----- Three-panel publication figure -----------------------
+            # ----- Two-panel publication figure -------------------------
             #
             # Panel A: log2-density scatter with identity + robust fit
             #          and support-aware labels.
             # Panel B: MA / Bland-Altman plot — surfaces codon-specific
             #          shifts a correlation hides.
-            # Panel C: residual plot — distribution of (sample - fit) so
-            #          a scale or biased shift is obvious.
             # When metric='raw_count', panel A is rendered in the original
             # raw scale and the figure is written under raw_count_qc/ to
             # mark it as a QC artefact, not a publication figure.
+            # The robust-residual diagnostic remains available in
+            # codon_correlation_metrics.tsv (`robust_residual` column)
+            # for downstream tooling that wants to plot it separately.
             fallback_palette = list(sns.color_palette("Set2", 8).as_hex())
             categories = list(merged_current["Category"].astype(str).unique())
             colour_map = {
@@ -597,8 +602,8 @@ def run_codon_correlation(
 
             primary_mask = merged_current["include_primary"].to_numpy()
 
-            fig, (ax_scatter, ax_ma, ax_resid) = plt.subplots(
-                1, 3, figsize=(18, 6)
+            fig, (ax_scatter, ax_ma) = plt.subplots(
+                1, 2, figsize=(13, 6)
             )
 
             x_plot = merged_current["base_metric"].to_numpy()
@@ -702,22 +707,6 @@ def run_codon_correlation(
             ax_ma.set_ylabel("log2 fold change (M)", fontsize=11)
             ax_ma.set_title("B. MA / Bland-Altman", fontsize=12, fontweight="bold")
             ax_ma.grid(True, which="major", alpha=0.25, linewidth=0.6)
-
-            # Panel C — residuals
-            ax_resid.scatter(
-                merged_current["base_metric"],
-                merged_current["robust_residual"],
-                s=30,
-                alpha=np.where(primary_mask, 0.85, 0.25),
-                color="#0072B2",
-                edgecolor="white",
-                linewidth=0.4,
-            )
-            ax_resid.axhline(0.0, color="0.5", linestyle=":", linewidth=1.0)
-            ax_resid.set_xlabel(scatter_xlabel, fontsize=11)
-            ax_resid.set_ylabel("Residual (sample - fit)", fontsize=11)
-            ax_resid.set_title("C. Robust residuals", fontsize=12, fontweight="bold")
-            ax_resid.grid(True, which="major", alpha=0.25, linewidth=0.6)
 
             title_suffix = "all codons" if version == "all" else "outlier-masked"
             fig.suptitle(

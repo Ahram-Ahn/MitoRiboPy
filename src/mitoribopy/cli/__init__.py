@@ -7,6 +7,7 @@ Top-level synopsis::
     mitoribopy rpf                [options]   # Ribo-seq analysis from BED / BAM
     mitoribopy rnaseq             [options]   # DE table + rpf -> TE / dTE
     mitoribopy all                [options]   # align + rpf + (optional) rnaseq
+    mitoribopy periodicity        [options]   # 3-nt periodicity QC bundle
     mitoribopy migrate-config     <path>      # rewrite legacy YAML keys
     mitoribopy validate-config    <path>      # schema + cross-stage checks
     mitoribopy validate-reference [options]   # FASTA / annotation sanity checks
@@ -32,6 +33,7 @@ from . import align as _align
 from . import all_ as _all
 from . import benchmark as _benchmark
 from . import migrate_config as _migrate_config
+from . import periodicity as _periodicity
 from . import rnaseq as _rnaseq
 from . import rpf as _rpf
 from . import summarize as _summarize
@@ -65,6 +67,7 @@ _SUBCOMMANDS: dict[str, Callable[[Iterable[str]], int]] = {
     "rpf": _rpf.run,
     "rnaseq": _rnaseq.run,
     "all": _all.run,
+    "periodicity": _periodicity.run,
     "migrate-config": _migrate_config.run,
     "validate-config": _validate_config.run,
     "validate-reference": _validate_reference.run,
@@ -79,6 +82,7 @@ _SUBCOMMAND_SUMMARIES: list[tuple[str, str]] = [
     ("rpf", _rpf.RPF_SUBCOMMAND_HELP),
     ("rnaseq", _rnaseq.RNASEQ_SUBCOMMAND_HELP),
     ("all", _all.ALL_SUBCOMMAND_HELP),
+    ("periodicity", _periodicity.PERIODICITY_SUBCOMMAND_HELP),
     ("migrate-config", _migrate_config.MIGRATE_CONFIG_HELP),
     ("validate-config", _validate_config.VALIDATE_CONFIG_HELP),
     ("validate-reference", _validate_reference.VALIDATE_REFERENCE_HELP),

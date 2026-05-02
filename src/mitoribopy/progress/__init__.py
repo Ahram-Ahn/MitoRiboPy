@@ -4,20 +4,19 @@ Two coexisting layers:
 
 1. **Timing primitives** (:mod:`.timing`) — wall-clock ``Stopwatch`` /
    ``StageTimings`` accumulators and the optional tqdm-backed
-   ``SampleCounter``. These were the entirety of ``mitoribopy.progress``
-   before refactor-4 and remain re-exported at the package root for
-   backwards compatibility.
+   ``SampleCounter``. Re-exported at the package root for back-compat
+   with call sites that imported them directly.
 2. **Event-driven progress** (:mod:`.events`, :mod:`.renderers`,
    :mod:`.manager`) — a small typed event vocabulary
    (``RunStart``, ``StageStart``, ``SampleStepEnd``, ``WarningEvent``,
    ``OutputEvent``, ``ResumeSkipEvent``, ...) emitted through a single
    ``ProgressManager`` and rendered by one or more pluggable renderers
-   (plain log lines, tqdm bars, JSONL stream). New in refactor-4.
+   (plain log lines, tqdm bars, JSONL stream).
 
 The split keeps existing call sites working while letting the
 orchestrator publish a richer set of progress events that map cleanly
 to HPC-safe one-line logs and a machine-readable ``progress.jsonl``
-sidecar — see assessment §3.
+sidecar.
 """
 
 from __future__ import annotations
@@ -67,7 +66,7 @@ __all__ = [
     "render_step_timeline",
     "render_summary_lines",
     "stage_timer",
-    # Event-driven progress (new in refactor-4).
+    # Event-driven progress.
     "ErrorEvent",
     "JsonlRenderer",
     "OutputEvent",

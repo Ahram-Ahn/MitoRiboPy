@@ -1,9 +1,8 @@
 """Per-sample kit + dedup resolution for ``mitoribopy align``.
 
-Pre-v0.4.0 the pipeline scanned only the first FASTQ and applied the
-detected (or user-supplied) kit to every other sample. In real datasets
-samples can come from different libraries (mixed UMI / no-UMI, mixed
-kits) and need independent resolution. This module owns that work:
+Real datasets often contain samples from different libraries (mixed UMI
+/ no-UMI, mixed kits) and need independent kit resolution per FASTQ.
+This module owns that work:
 
 * one :class:`SampleResolution` per input FASTQ,
 * a single pre-flight pass that fails fast before any cutadapt or

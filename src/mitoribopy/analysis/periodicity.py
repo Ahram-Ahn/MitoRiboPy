@@ -616,12 +616,28 @@ def _plot_frame_by_length_heatmap(
     if combined.empty:
         return
     samples = sorted(combined["sample_id"].astype(str).unique())
-    fig, axes = plt.subplots(
-        1, len(samples), figsize=(3.2 * len(samples), 4.0),
-        squeeze=False, sharey=True,
+    n_samples = len(samples)
+    # Build the layout with an explicit colorbar column so the cbar
+    # cannot steal width from the last data panel.
+    from matplotlib.gridspec import GridSpec
+
+    fig = plt.figure(figsize=(3.4 * n_samples + 1.2, 4.2))
+    width_ratios = [1.0] * n_samples + [0.06]
+    gs = GridSpec(
+        nrows=1,
+        ncols=n_samples + 1,
+        width_ratios=width_ratios,
+        wspace=0.18,
+        figure=fig,
     )
+    data_axes = []
+    im = None
     for col_i, sample in enumerate(samples):
-        ax = axes[0][col_i]
+        ax = fig.add_subplot(
+            gs[0, col_i],
+            sharey=data_axes[0] if data_axes else None,
+        )
+        data_axes.append(ax)
         sub = combined[combined["sample_id"].astype(str) == sample].sort_values(
             "read_length"
         )
@@ -651,12 +667,14 @@ def _plot_frame_by_length_heatmap(
         ax.set_title(sample, fontsize=10)
         if col_i == 0:
             ax.set_ylabel("read length (nt)")
-    cbar = fig.colorbar(im, ax=axes[0].tolist(), shrink=0.8)
-    cbar.set_label("frame fraction")
+        else:
+            plt.setp(ax.get_yticklabels(), visible=False)
+    if im is not None:
+        cax = fig.add_subplot(gs[0, -1])
+        cbar = fig.colorbar(im, cax=cax)
+        cbar.set_label("frame fraction")
     fig.suptitle("Per-read-length frame distribution (red border = excluded)")
-    # tight_layout warns when a colorbar is attached; subplots_adjust
-    # gets the same effect without the warning.
-    fig.subplots_adjust(top=0.88, right=0.88)
+    fig.subplots_adjust(top=0.88, left=0.08, right=0.94, bottom=0.12)
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     if out_path.suffix.lower() == ".png":
         fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")
@@ -684,14 +702,18 @@ def _plot_metagene_panels(
     if not samples:
         return
 
+    # Share Y per anchor column so panels are visually comparable
+    # across samples. sharex stays False because start/stop windows
+    # span different position ranges.
     fig, axes = plt.subplots(
         len(samples), 2, figsize=(12, 2.6 * len(samples)),
-        sharex=False, squeeze=False,
+        sharex=False, sharey="col", squeeze=False,
     )
     frame_colors = {0: "#0072B2", 1: "#E69F00", 2: "#009E73"}
     start_by_sample = {p.sample: p for p in start_profiles}
     stop_by_sample = {p.sample: p for p in stop_profiles}
 
+    legend_handles: list = []
     for row_i, sample in enumerate(samples):
         for col_i, (anchor, profiles_by_sample) in enumerate(
             (("start", start_by_sample), ("stop", stop_by_sample))
@@ -704,20 +726,18 @@ def _plot_metagene_panels(
             for f in (0, 1, 2):
                 # Frame-by-frame colouring relative to the anchor
                 # codon's first nt (anchor itself is in frame 0).
-                if anchor == "start":
-                    frame_mask = (profile.positions % 3) == f
-                else:
-                    # Stop codon's first nt is also frame 0; positions
-                    # run -window+1 .. 0, so (pos % 3) handles negatives
-                    # as we want.
-                    frame_mask = (profile.positions % 3) == f
-                ax.bar(
+                # (pos % 3) handles negative positions on the stop
+                # window correctly.
+                frame_mask = (profile.positions % 3) == f
+                bars = ax.bar(
                     profile.positions[frame_mask],
                     profile.density[frame_mask],
                     width=1.0,
                     color=frame_colors[f],
-                    label=f"frame {f}" if (row_i == 0 and col_i == 0) else None,
+                    label=f"frame {f}",
                 )
+                if row_i == 0 and col_i == 0:
+                    legend_handles.append(bars)
             ax.set_title(
                 f"{sample} — {'start-aligned' if anchor == 'start' else 'stop-aligned'} P-site"
             )
@@ -725,19 +745,25 @@ def _plot_metagene_panels(
                 "nt from start codon" if anchor == "start"
                 else "nt from stop codon"
             )
-            ax.set_ylabel("P-site reads")
+            if col_i == 0:
+                ax.set_ylabel("P-site reads")
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
-    if axes[0][0].get_visible():
-        # Anchor the legend to the right of the top-row plot so frame
-        # bars stay readable; bbox_inches="tight" preserves the legend
-        # in the saved figure.
-        axes[0][0].legend(
-            loc="upper left", bbox_to_anchor=(1.02, 1.0),
-            borderaxespad=0.0, frameon=False,
+
+    # Figure-level legend below all panels so it never overlaps data
+    # in any subplot.
+    if legend_handles:
+        fig.legend(
+            handles=legend_handles,
+            labels=[h.get_label() for h in legend_handles],
+            loc="lower center",
+            bbox_to_anchor=(0.5, -0.02),
+            ncol=3,
+            frameon=False,
+            fontsize=10,
         )
 
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     if out_path.suffix.lower() == ".png":
         fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")

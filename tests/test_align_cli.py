@@ -42,9 +42,12 @@ def test_build_parser_help_mentions_new_flags() -> None:
     assert "--mt-index" in help_text
     assert "--dedup-strategy" in help_text
     # The legacy --i-understand-mark-duplicates-destroys-mt-ribo-seq-signal
-    # flag was removed in v0.4.5 along with the mark-duplicates strategy.
+    # flag is gone along with the mark-duplicates strategy. The phrase
+    # "mark-duplicates" is allowed to appear in --dedup-strategy help as
+    # part of the explanation that coordinate-only mark-duplicates is
+    # not supported.
     assert "i-understand-mark-duplicates" not in help_text
-    assert "mark-duplicates" not in help_text or "removed in v0.4.5" in help_text
+    assert "mark-duplicates" not in help_text or "not supported" in help_text
 
 
 def test_align_subcommand_help_via_cli(capsys) -> None:

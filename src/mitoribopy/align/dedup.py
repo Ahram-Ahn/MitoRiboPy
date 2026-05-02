@@ -190,9 +190,12 @@ def write_umi_qc_tsv(rows: list[UmiQCRow], path: Path) -> Path:
     (one row per sample). Always overwrites; callers are expected to
     invoke this once per align run after every sample has finished.
     """
+    from ..io.schema_versions import schema_header_line
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as h:
+        h.write(schema_header_line("umi_qc.tsv"))
         h.write("\t".join(_UMI_QC_COLUMNS) + "\n")
         for row in rows:
             d = row.as_row()

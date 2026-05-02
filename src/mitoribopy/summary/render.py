@@ -136,10 +136,19 @@ def render_summary_md(
     # Output index
     output_lines = [
         f"- `{run_root.name}/run_manifest.json` — provenance + recorded hashes",
+        f"- `{run_root.name}/canonical_config.yaml` — fully-resolved config",
+        f"- `{run_root.name}/resource_plan.json` — CPU / memory / parallelism plan",
+        f"- `{run_root.name}/outputs_index.tsv` — index of every produced TSV / JSON / plot",
         f"- `{run_root.name}/warnings.tsv` — structured warnings collected during the run",
         f"- `{run_root.name}/summary_qc.tsv` — per-sample QC roll-up",
+        f"- `{run_root.name}/figure_qc.tsv` — per-plot mechanical QC (run by validate-figures)",
         f"- `{run_root.name}/align/` — per-sample read counts, kit resolution, BEDs",
+        f"- `{run_root.name}/align/umi_qc.tsv` — UMI / dedup audit (when align ran)",
         f"- `{run_root.name}/rpf/` — RPF counts, offsets, P-site / A-site outputs",
+        f"- `{run_root.name}/rpf/qc/` — 3-nt periodicity QC (qc_summary.tsv, "
+        "frame_counts_by_sample_length.tsv, gene_periodicity.tsv, by_length/)",
+        f"- `{run_root.name}/rpf/codon_correlation/{{p_site,a_site}}/` — "
+        "codon-correlation metrics + sidecar metadata",
         f"- `{run_root.name}/rnaseq/` — TE / ΔTE tables and plots (when configured)",
     ]
     body += _section("Outputs", "\n".join(output_lines))

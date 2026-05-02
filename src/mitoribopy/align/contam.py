@@ -136,7 +136,7 @@ def subtract_contaminants(
     threads:
         Passed through as ``-p``.
     seed:
-        bowtie2 ``--seed`` for reproducibility (Phase 6 manifest records it).
+        bowtie2 ``--seed`` for reproducibility (recorded in the run manifest).
     extra_flags:
         Optional bowtie2 flags appended verbatim; use for power-user
         tuning after the default recipe.

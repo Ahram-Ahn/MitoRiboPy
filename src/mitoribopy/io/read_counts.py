@@ -107,6 +107,64 @@ def compute_total_counts(
         label="sample",
         fallback_index=0,
     )
+
+    # Funnel-table fast path: the align stage's read_counts.tsv is one
+    # row per sample with the mt-aligned post-dedup count already in a
+    # named column. No reference filter needed — pull that column
+    # directly. This is the layout `mitoribopy all` produces, so this
+    # branch handles the orchestrated case.
+    normalized_cols = {_normalize_column_name(c): c for c in counts_df.columns}
+    funnel_columns = (
+        "mtalignedafterdedup",  # mt_aligned_after_dedup
+        "mtalignedaftermapq",   # mt_aligned_after_mapq (older layout)
+        "mtaligned",            # mt_aligned (raw mt-tx alignments)
+    )
+    funnel_col = next(
+        (normalized_cols[k] for k in funnel_columns if k in normalized_cols), None,
+    )
+    is_funnel_layout = funnel_col is not None and "reference" not in normalized_cols
+
+    if is_funnel_layout:
+        if normalization_mode == "mt_mrna":
+            # Use the post-dedup mt-mRNA-aligned count as the RPM
+            # denominator. Same biological meaning as
+            # "sum(reads where reference matches mt-mRNA)" but read off
+            # the funnel layout directly.
+            selected_reads_col = funnel_col
+        else:
+            selected_reads_col = _resolve_column_name(
+                counts_df.columns,
+                requested_name=reads_col,
+                fallback_names=["total_reads", "Reads", "reads", "read_count"],
+                label="read-count",
+                fallback_index=1,
+            )
+        work_df = counts_df[[sample_col, selected_reads_col]].copy()
+        work_df.columns = ["Sample", "Total_reads"]
+        work_df["Sample"] = (
+            work_df["Sample"].astype(str).str.strip().str.replace(".bed", "", regex=False)
+        )
+        work_df["Total_reads"] = pd.to_numeric(work_df["Total_reads"], errors="coerce")
+        work_df.dropna(inplace=True)
+        if work_df.empty:
+            log_warning(
+                "COUNTS",
+                f"Funnel layout: '{selected_reads_col}' column had no usable rows.",
+            )
+            return {}, pd.DataFrame(columns=["Sample", "Total_reads"])
+        work_df["Total_reads"] = work_df["Total_reads"].astype(int)
+        total_counts_map: dict[str, int] = {}
+        for sample_name, total_reads in zip(work_df["Sample"], work_df["Total_reads"]):
+            total_counts_map[str(sample_name)] = int(total_reads)
+            total_counts_map[str(sample_name).lower()] = int(total_reads)
+        log_info(
+            "COUNTS",
+            f"Funnel layout: using '{selected_reads_col}' column as the "
+            f"RPM denominator (mode={normalization_mode}).",
+        )
+        log_dataframe_preview("COUNTS", "Read-total summary", work_df)
+        return total_counts_map, work_df
+
     reads_col = _resolve_column_name(
         counts_df.columns,
         requested_name=reads_col,

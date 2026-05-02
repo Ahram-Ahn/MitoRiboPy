@@ -98,6 +98,18 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
         recommended_for="reviewer-spot-check",
     ),
     OutputDescriptor(
+        output_type="umi_qc",
+        stage="align",
+        relative_path="align/umi_qc.tsv",
+        description=(
+            "Per-sample UMI / dedup audit (umi_present, umi_length, "
+            "pre/post-dedup counts, duplicate fraction, dedup method, "
+            "warning code)."
+        ),
+        recommended_for="reviewer-spot-check",
+        schema_key="umi_qc.tsv",
+    ),
+    OutputDescriptor(
         output_type="bed_dir",
         stage="align",
         relative_path="align/bed/",
@@ -153,40 +165,111 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
     OutputDescriptor(
         output_type="periodicity_qc_summary",
         stage="rpf",
-        relative_path="rpf/periodicity/qc_summary.tsv",
+        relative_path="rpf/qc/qc_summary.tsv",
         description=(
             "Per-sample 3-nt periodicity QC: best read length, "
             "expected/dominant frame fractions, entropy bias, and an "
             "overall good/warn/poor/low_depth call."
         ),
         recommended_for="reviewer-spot-check",
+        schema_key="periodicity_qc_summary.tsv",
     ),
     OutputDescriptor(
         output_type="periodicity_qc_summary_md",
         stage="rpf",
-        relative_path="rpf/periodicity/qc_summary.md",
-        description="Human-readable companion to periodicity/qc_summary.tsv.",
+        relative_path="rpf/qc/qc_summary.md",
+        description="Human-readable companion to qc/qc_summary.tsv.",
         recommended_for="reviewer-spot-check",
     ),
     OutputDescriptor(
         output_type="frame_counts_by_sample_length",
         stage="rpf",
-        relative_path="rpf/periodicity/frame_counts_by_sample_length.tsv",
+        relative_path="rpf/qc/frame_counts_by_sample_length.tsv",
         description=(
             "Per-(sample, read length) frame fractions, frame "
             "enrichment, entropy bias, and qc_call."
         ),
         recommended_for="downstream-scripting",
+        schema_key="frame_counts_by_sample_length.tsv",
     ),
     OutputDescriptor(
         output_type="gene_periodicity",
         stage="rpf",
-        relative_path="rpf/periodicity/gene_periodicity.tsv",
+        relative_path="rpf/qc/gene_periodicity.tsv",
         description=(
             "Per-(sample, gene) frame fractions and qc_call; optional "
             "phase_score column when --phase-score is enabled."
         ),
         recommended_for="downstream-scripting",
+        schema_key="gene_periodicity.tsv",
+    ),
+    OutputDescriptor(
+        output_type="frame_by_length",
+        stage="rpf",
+        relative_path="rpf/qc/by_length/frame_by_length.tsv",
+        description=(
+            "Per-(sample, read length) inclusion-policy diagnostics "
+            "(frame fractions, dominance, entropy, n CDS reads, "
+            "include_for_downstream flag, exclusion_reason)."
+        ),
+        recommended_for="downstream-scripting",
+    ),
+    OutputDescriptor(
+        output_type="length_inclusion_decisions",
+        stage="rpf",
+        relative_path="rpf/qc/by_length/length_inclusion_decisions.tsv",
+        description=(
+            "Distilled include/exclude verdict per (sample, read "
+            "length) with reason; mirrors frame_by_length.tsv."
+        ),
+        recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="periodicity_metadata",
+        stage="rpf",
+        relative_path="rpf/qc/by_length/periodicity.metadata.json",
+        description=(
+            "Sidecar JSON recording the inclusion thresholds and "
+            "frame formula used for periodicity QC."
+        ),
+        recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="codon_correlation_metrics_p",
+        stage="rpf",
+        relative_path="rpf/codon_correlation/p_site/codon_correlation_metrics.tsv",
+        description=(
+            "P-site codon-correlation metrics with normalised codon "
+            "density, log2FC, robust residual, and label decisions."
+        ),
+        recommended_for="downstream-scripting",
+    ),
+    OutputDescriptor(
+        output_type="codon_correlation_metadata_p",
+        stage="rpf",
+        relative_path="rpf/codon_correlation/p_site/codon_correlation.metadata.json",
+        description=(
+            "Sidecar JSON describing the metric, regression, support "
+            "filter, label policy, and raw-panel mode used."
+        ),
+        recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="codon_correlation_metrics_a",
+        stage="rpf",
+        relative_path="rpf/codon_correlation/a_site/codon_correlation_metrics.tsv",
+        description=(
+            "A-site codon-correlation metrics (parallel to the "
+            "p_site/ output)."
+        ),
+        recommended_for="downstream-scripting",
+    ),
+    OutputDescriptor(
+        output_type="codon_correlation_metadata_a",
+        stage="rpf",
+        relative_path="rpf/codon_correlation/a_site/codon_correlation.metadata.json",
+        description="Sidecar JSON for the A-site codon-correlation metrics.",
+        recommended_for="reviewer-spot-check",
     ),
     # rnaseq --------------------------------------------------------------
     OutputDescriptor(

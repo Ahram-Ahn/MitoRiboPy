@@ -195,9 +195,9 @@ def discover_plots(run_root: Path | str) -> list[Path]:
     """Return every PNG / SVG plot under *run_root*, deduplicated by stem.
 
     When both ``foo.png`` and ``foo.svg`` exist for the same plot
-    (the common case after the publication-style refactor), only the
-    PNG is returned; the SVG is checked alongside it during validation
-    via :func:`metadata_sidecar_path` and the explicit SVG-text check.
+    (the common case for publication-style outputs), only the PNG is
+    returned; the SVG is checked alongside it during validation via
+    :func:`metadata_sidecar_path` and the explicit SVG-text check.
     """
     run_root = Path(run_root)
     by_stem: dict[Path, Path] = {}

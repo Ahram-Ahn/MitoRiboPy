@@ -337,7 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Disable the auto-fallback to 'pretrimmed' when adapter "
             "detection finds no known kit. With this flag, detection "
             "failure with no --kit-preset fallback raises an error "
-            "instead (the v0.4.0 behaviour before this change)."
+            "instead."
         ),
     )
     library.add_argument(
@@ -420,9 +420,9 @@ def build_parser() -> argparse.ArgumentParser:
             "operation is coordinate+UMI dedup. The legacy aliases "
             "'umi-tools' / 'umi_tools' are accepted and rewritten to "
             "'umi_coordinate' (canonical_config.yaml records the "
-            "canonical name). The earlier 'mark-duplicates' option was "
-            "removed in v0.4.5: coordinate-only dedup destroys codon-"
-            "occupancy signal on low-complexity mt-Ribo-seq libraries."
+            "canonical name). Coordinate-only mark-duplicates is not "
+            "supported: it destroys codon-occupancy signal on low-"
+            "complexity mt-Ribo-seq libraries."
         ),
     )
     dedup.add_argument(
@@ -695,10 +695,10 @@ def _strict_publication_mode_errors(
 def _legacy_global_dedup(resolutions: list[SampleResolution]) -> str:
     """Pick a representative dedup label for legacy single-value consumers.
 
-    The per-sample switch in v0.4.0 means a single run can mix
-    ``umi-tools`` and ``skip``. For backward compatibility some tests
-    still read a single ``dedup_strategy`` field; we report the union as
-    ``mixed`` when it isn't uniform so an external reader notices.
+    Per-sample dedup means a single run can mix ``umi-tools`` and
+    ``skip``. For backward compatibility some tests still read a
+    single ``dedup_strategy`` field; we report the union as ``mixed``
+    when it isn't uniform so an external reader notices.
     """
     strategies = {res.dedup_strategy for res in resolutions}
     if not strategies:

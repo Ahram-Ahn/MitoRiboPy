@@ -348,9 +348,9 @@ def build_parser() -> argparse.ArgumentParser:
             "and an EXPLORATORY.md sidecar is written to the output dir."
         ),
     )
-    # Deprecated alias for the pre-v0.5.2 opt-out flag. The default has
-    # flipped (pseudo-replicate mode is now opt-IN), so this flag is now
-    # a no-op accepted only to keep older config files / scripts working.
+    # Deprecated alias kept for back-compat. Pseudo-replicate mode is
+    # now opt-IN by default, so this flag is a no-op accepted only to
+    # keep older config files / scripts working.
     fastq.add_argument(
         "--no-auto-pseudo-replicate",
         dest="no_auto_pseudo_replicate",
@@ -800,7 +800,12 @@ def _synth_rna_results_from_upstream_counts(
     from ..rnaseq.alignment import SampleAlignmentResult
 
     counts_path = Path(counts_path)
-    df = pd.read_csv(counts_path, sep="\t")
+    # comment="#" skips the leading `# schema_version: X.Y` line that
+    # every MitoRiboPy TSV writer prepends; without it pandas treats
+    # that comment as the first data row, the column layout collapses
+    # to one column, and the downstream DESeq2 fit raises "No 'rna'
+    # samples available for DESeq2."
+    df = pd.read_csv(counts_path, sep="\t", comment="#")
     if df.empty:
         return []
     # Conventional layout: first column is gene id, remaining columns
@@ -987,18 +992,17 @@ def _run_from_fastq(args, output_dir: Path) -> int:
 
     # Pseudo-replicate gate.
     #
-    # Pre-v0.5.2 the from-FASTQ flow auto-split any condition with n=1
-    # into two pseudo-replicates by FASTQ record parity, on by default.
-    # That made pyDESeq2 happy but produced p-values that look real and
-    # are not — the two halves are mechanical subsamples of one library.
-    # The default is now opt-IN: detect singletons up-front, fail with a
-    # clear message unless the user has passed
-    # --allow-pseudo-replicates-for-demo-not-publication.
+    # Pseudo-replicates auto-split a condition with n=1 into two halves
+    # by FASTQ record parity, which makes pyDESeq2 happy but produces
+    # p-values that look real and are not — the two halves are
+    # mechanical subsamples of one library. The default is opt-IN:
+    # detect singletons up-front, fail with a clear message unless the
+    # user has passed --allow-pseudo-replicates-for-demo-not-publication.
     if getattr(args, "no_auto_pseudo_replicate", False):
         sys.stderr.write(
             "[mitoribopy rnaseq] DEPRECATED: --no-auto-pseudo-replicate "
-            "is a no-op as of v0.5.2 (pseudo-replicate mode is now "
-            "opt-in via --allow-pseudo-replicates-for-demo-not-publication). "
+            "is a no-op (pseudo-replicate mode is opt-in via "
+            "--allow-pseudo-replicates-for-demo-not-publication). "
             "Drop the flag from your scripts; it will be removed in a "
             "future release.\n"
         )
@@ -1108,6 +1112,10 @@ def _run_from_fastq(args, output_dir: Path) -> int:
         # the Ribo align stage solely to produce the counts matrices it
         # needs for the downstream DE/TE step. Exit cleanly before
         # touching pyDESeq2 / pseudo-replicate logic / plots.
+        # Return -1 (the caller's "fully done; short-circuit" sentinel)
+        # so the reference-consistency gate further down does NOT fire —
+        # the rpf side hasn't written its output yet, so the gate would
+        # spuriously reject this worker.
         sys.stderr.write(
             "[mitoribopy rnaseq] --align-only complete; wrote "
             f"{output_dir / 'rna_counts.tsv'}"
@@ -1118,7 +1126,7 @@ def _run_from_fastq(args, output_dir: Path) -> int:
             )
             + ". Skipping DE/TE/plots.\n"
         )
-        return 0
+        return -1
 
     samples, counts_df, metadata_df = build_sample_sheet(
         rna_results, ribo_results, condition_map
