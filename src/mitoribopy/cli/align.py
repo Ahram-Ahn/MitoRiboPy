@@ -173,13 +173,43 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         metavar="N",
-        help="UMI length in nt. Overrides the kit preset's default.",
+        help=(
+            "UMI length in nt. Overrides the kit preset's default. For "
+            "--umi-position=both this MUST equal --umi-length-5p + "
+            "--umi-length-3p (it is the canonical concatenated QNAME "
+            "UMI length umi_tools dedups on)."
+        ),
     )
     library.add_argument(
         "--umi-position",
-        choices=["5p", "3p"],
+        choices=["5p", "3p", "both"],
         default=None,
-        help="UMI position within the insert (overrides kit preset).",
+        help=(
+            "UMI position within the insert (overrides kit preset). "
+            "'5p' / '3p' are single-end UMIs; 'both' is a dual-end UMI "
+            "library (e.g. xGen Duplex, Twist) — supply --umi-length-5p "
+            "and --umi-length-3p in that mode."
+        ),
+    )
+    library.add_argument(
+        "--umi-length-5p",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Per-end 5' UMI length in nt. Used only when "
+            "--umi-position=both; ignored otherwise."
+        ),
+    )
+    library.add_argument(
+        "--umi-length-3p",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Per-end 3' UMI length in nt. Used only when "
+            "--umi-position=both; ignored otherwise."
+        ),
     )
     library.add_argument(
         "--sample-overrides",
@@ -1078,6 +1108,8 @@ def _resolve_per_sample(
         adapter=args.adapter,
         umi_length=args.umi_length,
         umi_position=args.umi_position,
+        umi_length_5p=getattr(args, "umi_length_5p", None),
+        umi_length_3p=getattr(args, "umi_length_3p", None),
         dedup_strategy=args.dedup_strategy,
         adapter_detection_mode=args.adapter_detection,
         allow_pretrimmed_inference=getattr(
@@ -1184,6 +1216,8 @@ def run(argv: Iterable[str]) -> int:
                         adapter=args.adapter,
                         umi_length=args.umi_length,
                         umi_position=args.umi_position,
+                        umi_length_5p=getattr(args, "umi_length_5p", None),
+                        umi_length_3p=getattr(args, "umi_length_3p", None),
                     )
                     dedup_label = dedup_step.resolve_dedup_strategy(
                         args.dedup_strategy,
@@ -1230,6 +1264,8 @@ def run(argv: Iterable[str]) -> int:
                         adapter=args.adapter,
                         umi_length=args.umi_length,
                         umi_position=args.umi_position,
+                        umi_length_5p=getattr(args, "umi_length_5p", None),
+                        umi_length_3p=getattr(args, "umi_length_3p", None),
                     )
                 dedup_label = dedup_step.resolve_dedup_strategy(
                     args.dedup_strategy,
@@ -1572,6 +1608,16 @@ def run(argv: Iterable[str]) -> int:
             dedup_strategy, umi_length=umi_length,
         )
         method = requested_method if effective_strategy == "umi-tools" else "skip"
+        umi_length_5p = (
+            int(getattr(resolution.kit, "umi_length_5p", 0) or 0)
+            if resolution is not None and resolution.kit is not None
+            else 0
+        )
+        umi_length_3p = (
+            int(getattr(resolution.kit, "umi_length_3p", 0) or 0)
+            if resolution is not None and resolution.kit is not None
+            else 0
+        )
         umi_qc_rows.append(
             dedup_step.build_umi_qc_row(
                 sample_id=row.sample,
@@ -1581,6 +1627,8 @@ def run(argv: Iterable[str]) -> int:
                 dedup_method=method,
                 pre_count=int(row.mt_aligned_after_mapq),
                 post_count=int(row.mt_aligned_after_dedup),
+                umi_length_5p=umi_length_5p,
+                umi_length_3p=umi_length_3p,
             )
         )
     dedup_step.write_umi_qc_tsv(umi_qc_rows, output_dir / "umi_qc.tsv")

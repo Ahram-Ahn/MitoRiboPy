@@ -73,18 +73,33 @@ _UMI_METHOD_LENGTH_THRESHOLD = 8
 _UMI_METHOD_DUPLICATION_THRESHOLD = 0.20
 
 
-def recommend_umi_method(umi_length: int, duplicate_fraction: float) -> tuple[str, str]:
+def recommend_umi_method(
+    umi_length: int,
+    duplicate_fraction: float,
+    *,
+    umi_length_5p: int = 0,
+    umi_length_3p: int = 0,
+) -> tuple[str, str]:
     """Return ``(method, warning_code)`` for an observed sample.
 
     A pure helper exposed so the CLI / sample-resolver can use the same
     rule when emitting per-sample warnings. ``warning_code`` is a stable
     short identifier suitable for inclusion in ``warnings.tsv`` (e.g.
     ``"short_umi_collision_risk"``); ``"none"`` signals no warning.
+
+    For dual-end UMI libraries (``umi_position == "both"``), pass the
+    per-end lengths via ``umi_length_5p`` / ``umi_length_3p``; the
+    method threshold is then evaluated against the COMBINED length,
+    since umi_tools collapses on the concatenated 5' + 3' token. Longer
+    combined UMIs cluster more reliably with ``directional``.
     """
     umi_length = int(umi_length or 0)
-    if umi_length <= 0:
+    effective_length = max(
+        umi_length, int(umi_length_5p or 0) + int(umi_length_3p or 0)
+    )
+    if effective_length <= 0:
         return ("skip", "no_umi")
-    if umi_length < _UMI_METHOD_LENGTH_THRESHOLD:
+    if effective_length < _UMI_METHOD_LENGTH_THRESHOLD:
         return ("unique", "short_umi_collision_risk")
     if duplicate_fraction > _UMI_METHOD_DUPLICATION_THRESHOLD:
         return ("directional", "none")
@@ -144,12 +159,18 @@ def build_umi_qc_row(
     dedup_method: str,
     pre_count: int,
     post_count: int,
+    umi_length_5p: int = 0,
+    umi_length_3p: int = 0,
 ) -> UmiQCRow:
     """Assemble one :class:`UmiQCRow` from observed counts.
 
     Returns the recommended-method warning when the chosen method is
     not the recommended one; the row is still written so a reviewer
     sees the discrepancy.
+
+    For ``umi_position == "both"`` libraries pass both per-end lengths
+    via ``umi_length_5p`` / ``umi_length_3p`` so the method recommender
+    can score the COMBINED UMI length (not the single-end value).
     """
     umi_present = bool(umi_length and int(umi_length) > 0)
     pre_count = int(pre_count or 0)
@@ -159,7 +180,10 @@ def build_umi_qc_row(
     )
     if umi_present:
         recommended, recommend_warn = recommend_umi_method(
-            umi_length, duplicate_fraction
+            umi_length,
+            duplicate_fraction,
+            umi_length_5p=umi_length_5p,
+            umi_length_3p=umi_length_3p,
         )
         if dedup_strategy == "skip":
             warning = "umi_present_but_skipped"

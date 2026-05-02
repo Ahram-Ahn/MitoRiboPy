@@ -31,7 +31,6 @@ import pandas as pd
 
 from ..analysis.periodicity_qc import (
     QC_THRESHOLDS_DEFAULT,
-    build_fft_period3_table,
     build_frame_counts_by_gene,
     build_frame_counts_by_sample_length,
     build_gene_periodicity,
@@ -152,13 +151,63 @@ def build_parser() -> argparse.ArgumentParser:
         help="Add a ribotricer-style gene-level phase_score column.",
     )
     parser.add_argument(
-        "--fft-period3",
+        "--fourier-spectrum",
+        dest="fourier_spectrum",
         action="store_true",
-        default=False,
+        default=True,
         help=(
-            "Compute FFT-based period-3 power ratio per (sample, gene). "
-            "Writes fft_period3_power.tsv. Marked supplementary; do not "
-            "over-interpret for short ORFs (CDS < 30 nt returns NaN)."
+            "Compute the Wakigawa-style amplitude spectrum per "
+            "(sample, read_length, gene, region) and emit "
+            "fourier_spectrum.tsv, fourier_period3_score.tsv, and "
+            "fourier_period3_summary.tsv. ENABLED BY DEFAULT — pass "
+            "--no-fourier-spectrum to skip. Replaces the legacy "
+            "fft_period3_power.tsv output (single-scalar power ratio)."
+        ),
+    )
+    parser.add_argument(
+        "--no-fourier-spectrum",
+        dest="fourier_spectrum",
+        action="store_false",
+        help="Disable the Fourier-spectrum bundle.",
+    )
+    parser.add_argument(
+        "--fourier-window-nt",
+        type=int,
+        default=100,
+        metavar="N",
+        help=(
+            "Window size (nt) on each side of the canonical stop "
+            "codon for the Fourier spectrum. Wakigawa default: 100."
+        ),
+    )
+    parser.add_argument(
+        "--fourier-period-min",
+        type=float,
+        default=2.0,
+        metavar="P",
+        help=(
+            "Minimum period (nt) retained in the spectrum table and "
+            "plot. Default: 2."
+        ),
+    )
+    parser.add_argument(
+        "--fourier-period-max",
+        type=float,
+        default=10.0,
+        metavar="P",
+        help=(
+            "Maximum period (nt) retained in the spectrum table and "
+            "plot. Default: 10."
+        ),
+    )
+    parser.add_argument(
+        "--fourier-no-plots",
+        dest="fourier_plots",
+        action="store_false",
+        default=True,
+        help=(
+            "Skip the per-(sample, read_length) two-panel overlay "
+            "plots; the TSVs are still written."
         ),
     )
     parser.add_argument(
@@ -309,7 +358,17 @@ def _to_bed_with_psite(df: pd.DataFrame, *, site_filter: str) -> pd.DataFrame:
 
 def _annotation_from_site_table(df: pd.DataFrame) -> pd.DataFrame:
     """Synthesise the annotation table from the cds_start / cds_end
-    columns when the user passes only the site table."""
+    columns when the user passes only the site table.
+
+    The Fourier-spectrum module also needs ``stop_codon`` (first nt of
+    the stop codon) and ``l_tr`` (transcript length); both are derived
+    from cds_end here. We assume the site table's ``cds_end`` is the
+    inclusive last nt of the stop codon (cds_end + 1 = transcript end
+    when no 3' UTR is annotated). For a synthetic site table that
+    carries no 3' UTR, ``stop_codon = cds_end - 2`` (the first of the
+    stop trinucleotide) and ``l_tr = cds_end + 1`` so the Fourier
+    window check skips genes whose 3' UTR doesn't fit.
+    """
     ann = (
         df.groupby(["transcript_id", "gene"], dropna=False)
         .agg(
@@ -319,10 +378,19 @@ def _annotation_from_site_table(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     ann["start_codon"] = ann["start_codon"].astype(int)
-    ann["l_cds"] = (ann["cds_end_max"].astype(int) - ann["start_codon"]).clip(lower=0)
+    cds_end = ann["cds_end_max"].astype(int)
+    ann["l_cds"] = (cds_end - ann["start_codon"]).clip(lower=0)
+    # Stop codon = first nt of the 3-nt stop trinucleotide. For a CDS
+    # whose end inclusively names the last stop nt, the first stop nt
+    # is two positions earlier.
+    ann["stop_codon"] = (cds_end - 2).clip(lower=0)
+    ann["l_tr"] = cds_end + 1
     ann["transcript"] = ann["transcript_id"].astype(str)
     ann["sequence_name"] = ann["transcript_id"].astype(str)
-    return ann[["transcript", "sequence_name", "start_codon", "l_cds"]]
+    return ann[[
+        "transcript", "sequence_name",
+        "start_codon", "l_cds", "stop_codon", "l_tr",
+    ]]
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +451,9 @@ def run(argv: Iterable[str]) -> int:
 
     gene_path = output_dir / "gene_periodicity.tsv"
     frame_counts_by_gene_path = output_dir / "frame_counts_by_gene.tsv"
-    fft_path = output_dir / "fft_period3_power.tsv"
+    fourier_spectrum_path = output_dir / "fourier_spectrum.tsv"
+    fourier_score_path = output_dir / "fourier_period3_score.tsv"
+    fourier_summary_path = output_dir / "fourier_period3_summary.tsv"
     bed = _to_bed_with_psite(df, site_filter=site_filter)
     annotation = _annotation_from_site_table(df)
     written_extras: list[Path] = []
@@ -415,19 +485,52 @@ def run(argv: Iterable[str]) -> int:
         )
         fc_gene.to_csv(frame_counts_by_gene_path, sep="\t", index=False, na_rep="")
         written_extras.append(frame_counts_by_gene_path)
-        # Optional FFT period-3 power per (sample, gene). Spec marks
-        # this supplementary; emit only when --fft-period3 is set.
-        if bool(args.fft_period3):
-            fft_table = build_fft_period3_table(
+        # Wakigawa-style Fourier amplitude spectrum + derived scalars.
+        # ENABLED BY DEFAULT (--no-fourier-spectrum to disable).
+        if bool(getattr(args, "fourier_spectrum", True)):
+            from ..analysis.fourier_spectrum import (
+                build_fourier_spectrum_table,
+                build_period3_score_table,
+                build_period3_summary_table,
+            )
+
+            spectrum_table = build_fourier_spectrum_table(
                 bed,
                 annotation,
                 samples=samples,
-                site_type=site_filter,
-                exclude_start_codons=int(args.exclude_start_codons),
-                exclude_stop_codons=int(args.exclude_stop_codons),
+                window_nt=int(getattr(args, "fourier_window_nt", 100)),
+                period_range=(
+                    float(getattr(args, "fourier_period_min", 2.0)),
+                    float(getattr(args, "fourier_period_max", 10.0)),
+                ),
+                site=site_filter,  # type: ignore[arg-type]
             )
-            fft_table.to_csv(fft_path, sep="\t", index=False, na_rep="")
-            written_extras.append(fft_path)
+            spectrum_table.to_csv(
+                fourier_spectrum_path, sep="\t", index=False, na_rep="",
+            )
+            written_extras.append(fourier_spectrum_path)
+            score_table = build_period3_score_table(spectrum_table)
+            score_table.to_csv(
+                fourier_score_path, sep="\t", index=False, na_rep="",
+            )
+            written_extras.append(fourier_score_path)
+            summary_table = build_period3_summary_table(score_table)
+            summary_table.to_csv(
+                fourier_summary_path, sep="\t", index=False, na_rep="",
+            )
+            written_extras.append(fourier_summary_path)
+            if (
+                bool(getattr(args, "fourier_plots", True))
+                and not spectrum_table.empty
+            ):
+                from ..plotting.fourier_spectrum_plots import (
+                    render_fourier_spectrum_panels,
+                )
+
+                render_fourier_spectrum_panels(
+                    spectrum_table,
+                    output_dir=output_dir / "fourier_spectrum",
+                )
 
     metadata = {
         "site": site_filter,
@@ -438,7 +541,13 @@ def run(argv: Iterable[str]) -> int:
         "exclude_stop_codons": int(args.exclude_stop_codons),
         "include_overlaps": bool(args.include_overlaps),
         "phase_score": bool(args.phase_score),
-        "fft_period3": bool(args.fft_period3),
+        "fourier_spectrum": bool(getattr(args, "fourier_spectrum", True)),
+        "fourier_window_nt": int(getattr(args, "fourier_window_nt", 100)),
+        "fourier_period_range": [
+            float(getattr(args, "fourier_period_min", 2.0)),
+            float(getattr(args, "fourier_period_max", 10.0)),
+        ],
+        "fourier_plots": bool(getattr(args, "fourier_plots", True)),
         "metagene_nt": int(args.metagene_nt),
         "input_site_table": str(Path(args.site_table).resolve()),
     }

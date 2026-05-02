@@ -376,6 +376,8 @@ def _write_samples_block_as_tsv(
         "adapter",
         "umi_length",
         "umi_position",
+        "umi_length_5p",
+        "umi_length_3p",
         "dedup_strategy",
     )
     rows: list[dict[str, str]] = []
@@ -398,6 +400,8 @@ def _write_samples_block_as_tsv(
                 "adapter": _stringify(entry.get("adapter")),
                 "umi_length": _stringify(entry.get("umi_length")),
                 "umi_position": _stringify(entry.get("umi_position")),
+                "umi_length_5p": _stringify(entry.get("umi_length_5p")),
+                "umi_length_3p": _stringify(entry.get("umi_length_3p")),
                 "dedup_strategy": _stringify(entry.get("dedup_strategy")),
             }
         )
@@ -515,13 +519,17 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
         if any(
             r.kit_preset or r.adapter or r.umi_length is not None
             or r.umi_position or r.dedup_strategy
+            or getattr(r, "umi_length_5p", None) is not None
+            or getattr(r, "umi_length_3p", None) is not None
             for r in ribo_rows
         ):
             tsv_path = Path(run_root) / "align" / "sample_overrides.tsv"
             tsv_path.parent.mkdir(parents=True, exist_ok=True)
             cols = (
                 "sample", "kit_preset", "adapter",
-                "umi_length", "umi_position", "dedup_strategy",
+                "umi_length", "umi_position",
+                "umi_length_5p", "umi_length_3p",
+                "dedup_strategy",
             )
             with tsv_path.open("w", encoding="utf-8") as handle:
                 handle.write("\t".join(cols) + "\n")
@@ -532,6 +540,12 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
                         "adapter": _stringify(r.adapter),
                         "umi_length": _stringify(r.umi_length),
                         "umi_position": _stringify(r.umi_position),
+                        "umi_length_5p": _stringify(
+                            getattr(r, "umi_length_5p", None)
+                        ),
+                        "umi_length_3p": _stringify(
+                            getattr(r, "umi_length_3p", None)
+                        ),
                         "dedup_strategy": _stringify(r.dedup_strategy),
                     }
                     handle.write("\t".join(row[c] for c in cols) + "\n")
@@ -651,7 +665,8 @@ _PERIODICITY_BLOCK_KEYS: dict[str, str] = {
     "exclude_start_codons": "periodicity_exclude_start_codons",
     "exclude_stop_codons": "periodicity_exclude_stop_codons",
     "phase_score": "periodicity_phase_score",
-    "fft_period3": "periodicity_fft_period3",
+    "fourier_spectrum": "periodicity_fourier_spectrum",
+    "fourier_window_nt": "periodicity_fourier_window_nt",
     "metagene_nt": "periodicity_metagene_nt",
     "min_reads_per_length": "periodicity_min_reads_per_length",
 }
@@ -680,8 +695,11 @@ def _apply_periodicity_block(config: dict) -> dict:
     if isinstance(metrics, dict):
         if "phase_score" in metrics and "phase_score" not in raw:
             raw["phase_score"] = metrics["phase_score"]
-        if "fft_power_3nt" in metrics and "fft_period3" not in raw:
-            raw["fft_period3"] = metrics["fft_power_3nt"]
+        if (
+            "fourier_spectrum" in metrics
+            and "fourier_spectrum" not in raw
+        ):
+            raw["fourier_spectrum"] = metrics["fourier_spectrum"]
     thresholds = raw.get("thresholds") or {}
     if isinstance(thresholds, dict):
         if "min_reads_per_length" in thresholds and "min_reads_per_length" not in raw:

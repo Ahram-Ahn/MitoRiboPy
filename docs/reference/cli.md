@@ -38,7 +38,8 @@ usage: mitoribopy align [-h] [--config CONFIG] [--dry-run] [--threads N]
                         [--fastq-dir DIR] [--fastq PATH]
                         [--contam-index BT2_PREFIX] [--mt-index BT2_PREFIX]
                         [--output DIR] [--kit-preset PRESET] [--adapter SEQ]
-                        [--umi-length N] [--umi-position {5p,3p}]
+                        [--umi-length N] [--umi-position {5p,3p,both}]
+                        [--umi-length-5p N] [--umi-length-3p N]
                         [--sample-overrides TSV] [--keep-intermediates]
                         [--tmpdir TMPDIR] [--allow-count-invariant-warning]
                         [--strict-publication-mode] [--resume]
@@ -77,8 +78,10 @@ Inputs:
 Library prep:
   --kit-preset PRESET                 Library-prep adapter / UMI preset. Default 'auto' detects per sample (mixed-kit batches OK). Use 'custom' with --adapter <SEQ>. Canonical choices: illumina_smallrna | illumina_truseq | illumina_truseq_umi | qiaseq_mirna | pretrimmed | custom. Legacy vendor aliases (truseq_smallrna, nebnext_smallrna, nebnext_ultra_umi, …) are accepted but not shown in --help; the full vendor mapping lives in README → Adapter / UMI presets. [default: auto]
   --adapter SEQ                       3' adapter sequence. Overrides the kit preset's adapter. Required when --kit-preset custom.
-  --umi-length N                      UMI length in nt. Overrides the kit preset's default.
-  --umi-position {5p,3p}              UMI position within the insert (overrides kit preset).
+  --umi-length N                      UMI length in nt. Overrides the kit preset's default. For --umi-position=both this MUST equal --umi-length-5p + --umi-length-3p (it is the canonical concatenated QNAME UMI length umi_tools dedups on).
+  --umi-position {5p,3p,both}         UMI position within the insert (overrides kit preset). '5p' / '3p' are single-end UMIs; 'both' is a dual-end UMI library (e.g. xGen Duplex, Twist) — supply --umi-length-5p and --umi-length-3p in that mode.
+  --umi-length-5p N                   Per-end 5' UMI length in nt. Used only when --umi-position=both; ignored otherwise.
+  --umi-length-3p N                   Per-end 3' UMI length in nt. Used only when --umi-position=both; ignored otherwise.
   --sample-overrides TSV              Path to a TSV with per-sample overrides for kit_preset / adapter / umi_length / umi_position / dedup_strategy. Required header columns: 'sample' plus at least one of the override columns. The 'sample' value must match the FASTQ basename with the .fq[.gz] / .fastq[.gz] suffix removed. Empty cells (or NA / None / null) fall through to the global CLI default for that field, so a single sample can override only its UMI without restating the rest of the kit. Useful for mixed-UMI batches where each sample's UMI length / position differs.
   --keep-intermediates                Keep the per-step intermediate files (trimmed FASTQ, contam-filtered FASTQ, pre-MAPQ BAM). By default these are deleted as soon as the next step has consumed them, since they are large, regenerable, and not needed by any downstream stage. Pass this flag when debugging a sample or comparing per-step intermediate counts.
   --tmpdir TMPDIR                     Optional override for the directory used for per-step scratch files (trimmed FASTQ, contam-filtered FASTQ, intermediate BAMs). Defaults to a subdirectory of --output. Set this to a fast local SSD when running on a cluster with slow shared storage, or to a pre-mounted tmpfs to avoid hitting disk altogether for short runs.
@@ -162,6 +165,14 @@ usage: mitoribopy rpf [-h] [--config CONFIG] -f REF_FASTA [-s STRAIN]
                       [--read-coverage-raw | --no-read-coverage-raw | --read_coverage_raw | --no-read_coverage_raw]
                       [--read-coverage-rpm | --no-read-coverage-rpm | --read_coverage_rpm | --no-read_coverage_rpm]
                       [--igv-export | --no-igv-export | --igv_export | --no-igv_export]
+                      [--periodicity-enabled | --no-periodicity-enabled | --periodicity_enabled | --no-periodicity_enabled]
+                      [--periodicity-exclude-start-codons PERIODICITY_EXCLUDE_START_CODONS]
+                      [--periodicity-exclude-stop-codons PERIODICITY_EXCLUDE_STOP_CODONS]
+                      [--periodicity-phase-score | --no-periodicity-phase-score | --periodicity_phase_score | --no-periodicity_phase_score]
+                      [--periodicity-fourier-spectrum | --no-periodicity-fourier-spectrum | --periodicity_fourier_spectrum | --no-periodicity_fourier_spectrum]
+                      [--periodicity-fourier-window-nt PERIODICITY_FOURIER_WINDOW_NT]
+                      [--periodicity-metagene-nt PERIODICITY_METAGENE_NT]
+                      [--periodicity-min-reads-per-length PERIODICITY_MIN_READS_PER_LENGTH]
 
 Run the MitoRiboPy Ribo-seq analysis stage on BED / BAM inputs.
 This subcommand filters reads, estimates P-site / A-site offsets,
@@ -430,6 +441,22 @@ Optional Modules:
                                       Write read-coverage plots in RPM under coverage_profile_plots/read_coverage_rpm[_codon]/. Use --no-read_coverage_rpm to skip. [default: True]
   --igv-export, --no-igv-export, --igv_export, --no-igv_export
                                       Export per-sample BedGraph tracks (P-site / A-site) under <output>/igv_tracks/<sample>/, suitable for opening in IGV.
+  --periodicity-enabled, --no-periodicity-enabled, --periodicity_enabled, --no-periodicity_enabled
+                                      Skip the periodicity QC step entirely when set to false. [default: True]
+  --periodicity-exclude-start-codons PERIODICITY_EXCLUDE_START_CODONS, --periodicity_exclude_start_codons PERIODICITY_EXCLUDE_START_CODONS
+                                      Number of codons after CDS start to mask out of frame statistics (initiation pause). Default: 6 (per spec).
+  --periodicity-exclude-stop-codons PERIODICITY_EXCLUDE_STOP_CODONS, --periodicity_exclude_stop_codons PERIODICITY_EXCLUDE_STOP_CODONS
+                                      Number of codons before CDS stop to mask (termination pause). Default: 3 (per spec).
+  --periodicity-phase-score, --no-periodicity-phase-score, --periodicity_phase_score, --no-periodicity_phase_score
+                                      Compute a ribotricer-style gene-level phase_score column in gene_periodicity.tsv. Default: enabled.
+  --periodicity-fourier-spectrum, --no-periodicity-fourier-spectrum, --periodicity_fourier_spectrum, --no-periodicity_fourier_spectrum
+                                      Compute the Wakigawa-style amplitude spectrum per (sample, read_length, gene, region). Writes fourier_spectrum.tsv, fourier_period3_score.tsv, fourier_period3_summary.tsv plus per-(sample, length) two-panel overlay plots under fourier_spectrum/. Default: enabled.
+  --periodicity-fourier-window-nt PERIODICITY_FOURIER_WINDOW_NT, --periodicity_fourier_window_nt PERIODICITY_FOURIER_WINDOW_NT
+                                      Window (nt) on each side of the canonical stop codon for the Fourier spectrum. Default: 100 (Wakigawa published value).
+  --periodicity-metagene-nt PERIODICITY_METAGENE_NT, --periodicity_metagene_nt PERIODICITY_METAGENE_NT
+                                      Window (nt) up/downstream of start/stop codons for the metagene plots. Default: 300 (legacy MitoRiboPy window). Spec recommends 90 for tighter publication-ready plots.
+  --periodicity-min-reads-per-length PERIODICITY_MIN_READS_PER_LENGTH, --periodicity_min_reads_per_length PERIODICITY_MIN_READS_PER_LENGTH
+                                      Minimum CDS sites required to score a read length. Default: 200 (pipeline). Bump to 1000 to match the spec.
 
 Examples:
   mitoribopy rpf --strain h.sapiens --fasta ref.fa --directory beds \
@@ -609,6 +636,10 @@ usage: mitoribopy periodicity [-h] --site-table PATH --output DIR
                               [--exclude-start-codons EXCLUDE_START_CODONS]
                               [--exclude-stop-codons EXCLUDE_STOP_CODONS]
                               [--include-overlaps] [--phase-score]
+                              [--fourier-spectrum] [--no-fourier-spectrum]
+                              [--fourier-window-nt N] [--fourier-period-min P]
+                              [--fourier-period-max P] [--fourier-no-plots]
+                              [--metagene-nt METAGENE_NT]
 
 Quantify and summarise 3-nt periodicity from an already-assigned P-site / A-site coordinate table (no offset recomputation).
 
@@ -632,6 +663,13 @@ options:
                                       Codons before CDS stop to exclude (termination pause). Default: 3. [default: 3]
   --include-overlaps                  Keep rows with is_overlap=true; default masks them when the column is present.
   --phase-score                       Add a ribotricer-style gene-level phase_score column.
+  --fourier-spectrum                  Compute the Wakigawa-style amplitude spectrum per (sample, read_length, gene, region) and emit fourier_spectrum.tsv, fourier_period3_score.tsv, and fourier_period3_summary.tsv. ENABLED BY DEFAULT — pass --no-fourier-spectrum to skip. Replaces the legacy fft_period3_power.tsv output (single-scalar power ratio). [default: True]
+  --no-fourier-spectrum               Disable the Fourier-spectrum bundle. [default: True]
+  --fourier-window-nt N               Window size (nt) on each side of the canonical stop codon for the Fourier spectrum. Wakigawa default: 100. [default: 100]
+  --fourier-period-min P              Minimum period (nt) retained in the spectrum table and plot. Default: 2. [default: 2.0]
+  --fourier-period-max P              Maximum period (nt) retained in the spectrum table and plot. Default: 10. [default: 10.0]
+  --fourier-no-plots                  Skip the per-(sample, read_length) two-panel overlay plots; the TSVs are still written. [default: True]
+  --metagene-nt METAGENE_NT           Number of nucleotides upstream/downstream of start/stop codons for metagene plots. Default: 90 (per spec). [default: 90]
 
 Frame definition: (site_pos - cds_start) mod 3. Frame 0 is the annotated coding frame. site_pos must be transcript-oriented (forward-strand-relative) and 0-based.
 ```

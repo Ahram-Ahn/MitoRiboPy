@@ -28,7 +28,11 @@ Optional columns (any subset; missing columns default to ``None``)::
     kit_preset             per-sample kit override (overrides --kit-preset)
     adapter                per-sample adapter override
     umi_length             integer; per-sample UMI length override
-    umi_position           '5p' or '3p'
+    umi_position           '5p', '3p', or 'both' (dual-end UMI)
+    umi_length_5p          integer; per-end 5' UMI length when
+                           ``umi_position='both'``
+    umi_length_3p          integer; per-end 3' UMI length when
+                           ``umi_position='both'``
     strandedness           'forward' | 'reverse' | 'unstranded'
     dedup_strategy         'auto' | 'umi-tools' | 'skip'
     read_length_min        integer; per-sample minimum RPF length
@@ -137,6 +141,8 @@ _OPTIONAL_COLUMNS: tuple[str, ...] = (
     "adapter",
     "umi_length",
     "umi_position",
+    "umi_length_5p",
+    "umi_length_3p",
     "strandedness",
     "dedup_strategy",
     "read_length_min",
@@ -154,7 +160,7 @@ _VALID_STRANDEDNESS: frozenset[str] = frozenset(
     {"forward", "reverse", "unstranded"}
 )
 _VALID_DEDUP: frozenset[str] = frozenset({"auto", "umi-tools", "skip"})
-_VALID_UMI_POS: frozenset[str] = frozenset({"5p", "3p"})
+_VALID_UMI_POS: frozenset[str] = frozenset({"5p", "3p", "both"})
 _VALID_LIBRARY_TYPE: frozenset[str] = frozenset(
     {"single_end", "paired_end", "auto"}
 )
@@ -188,6 +194,8 @@ class SampleRow:
     adapter: str | None = None
     umi_length: int | None = None
     umi_position: str | None = None
+    umi_length_5p: int | None = None
+    umi_length_3p: int | None = None
     strandedness: str | None = None
     dedup_strategy: str | None = None
     read_length_min: int | None = None
@@ -354,6 +362,39 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
                 f"{sorted(_VALID_UMI_POS)}"
             )
 
+        def _parse_optional_umi_end(colname: str) -> int | None:
+            raw = get(colname)
+            if raw is None:
+                return None
+            try:
+                value = int(raw)
+            except ValueError:
+                errors.append(
+                    f"line {line_no}: {colname} {raw!r} is not an integer"
+                )
+                return None
+            if value < 0:
+                errors.append(
+                    f"line {line_no}: {colname} must be >= 0 (got {value})"
+                )
+                return None
+            return value
+
+        umi_length_5p = _parse_optional_umi_end("umi_length_5p")
+        umi_length_3p = _parse_optional_umi_end("umi_length_3p")
+        if umi_pos == "both":
+            if not (umi_length_5p and umi_length_3p):
+                errors.append(
+                    f"line {line_no}: umi_position='both' requires both "
+                    "umi_length_5p > 0 and umi_length_3p > 0"
+                )
+            elif umi_length is not None and umi_length != umi_length_5p + umi_length_3p:
+                errors.append(
+                    f"line {line_no}: umi_position='both' requires "
+                    f"umi_length ({umi_length}) to equal umi_length_5p + "
+                    f"umi_length_3p ({umi_length_5p + umi_length_3p})"
+                )
+
         strandedness = get("strandedness")
         if strandedness is not None and strandedness not in _VALID_STRANDEDNESS:
             errors.append(
@@ -461,6 +502,8 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
                 adapter=get("adapter"),
                 umi_length=umi_length,
                 umi_position=umi_pos,
+                umi_length_5p=umi_length_5p,
+                umi_length_3p=umi_length_3p,
                 strandedness=strandedness,
                 dedup_strategy=dedup,
                 read_length_min=read_length_min,

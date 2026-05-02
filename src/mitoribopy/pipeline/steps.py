@@ -859,7 +859,8 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
                 ("periodicity_exclude_start_codons", "exclude_start_codons"),
                 ("periodicity_exclude_stop_codons", "exclude_stop_codons"),
                 ("periodicity_phase_score", "compute_phase_score"),
-                ("periodicity_fft_period3", "compute_fft_period3"),
+                ("periodicity_fourier_spectrum", "compute_fourier_spectrum"),
+                ("periodicity_fourier_window_nt", "fourier_window_nt"),
                 ("periodicity_metagene_nt", "metagene_nt"),
                 ("periodicity_min_reads_per_length", "min_cds_reads_per_length"),
             ):

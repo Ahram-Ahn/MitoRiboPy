@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from .figure_validator import write_plot_metadata
 from .style import apply_publication_style
 
 apply_publication_style()
@@ -16,8 +19,16 @@ def plot_codon_usage_dataframe(
     output_path: str,
     title: str,
     codon_label_order: list[str],
+    *,
+    source_data: str | None = None,
+    stage: str = "rpf",
 ) -> None:
-    """Render a codon-usage bar plot."""
+    """Render a codon-usage bar plot.
+
+    When *source_data* is supplied the canonical per-plot
+    ``.metadata.json`` sidecar is written alongside *output_path* so
+    ``mitoribopy validate-figures`` can score the plot.
+    """
     plot_df = df_rows.copy()
     plot_df["Label"] = plot_df["Codon"] + "-" + plot_df["AA"]
 
@@ -38,6 +49,23 @@ def plot_codon_usage_dataframe(
     plt.savefig(output_path)
     plt.close()
 
+    if source_data is not None:
+        n_expected = int(len(codon_label_order))
+        # The bar plot only renders the rows that intersect codon_label_order;
+        # the sidecar's drawn-count must match the actual data plotted.
+        drawn_labels = set(plot_df["Label"]).intersection(codon_label_order)
+        n_drawn = int(len(drawn_labels))
+        write_plot_metadata(
+            Path(output_path),
+            plot_type="codon_usage_bar",
+            stage=stage,
+            source_data=source_data,
+            n_points_expected=n_expected,
+            n_points_drawn=n_drawn,
+            formats=["png"],
+            dpi=300,
+        )
+
 
 def plot_site_depth_profile(
     footprint_df: pd.DataFrame,
@@ -48,8 +76,14 @@ def plot_site_depth_profile(
     sample_name: str,
     transcript_name: str,
     color: str,
+    source_data: str | None = None,
+    stage: str = "rpf",
 ) -> None:
-    """Render a selected-site depth profile for a transcript."""
+    """Render a selected-site depth profile for a transcript.
+
+    When *source_data* is supplied the canonical per-plot
+    ``.metadata.json`` sidecar is written alongside *output_path*.
+    """
     plt.figure(figsize=(12, 3))
     plt.bar(
         footprint_df["Position"],
@@ -63,6 +97,19 @@ def plot_site_depth_profile(
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
+
+    if source_data is not None:
+        n_points = int(len(footprint_df))
+        write_plot_metadata(
+            Path(output_path),
+            plot_type="footprint_density_depth",
+            stage=stage,
+            source_data=source_data,
+            n_points_expected=n_points,
+            n_points_drawn=n_points,
+            formats=["png"],
+            dpi=300,
+        )
 
 
 def plot_frame_usage_total(

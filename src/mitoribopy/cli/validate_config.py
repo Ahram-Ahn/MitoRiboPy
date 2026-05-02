@@ -132,7 +132,11 @@ def _check_unknown_top_level_keys(
 ) -> None:
     # Keep in sync with
     # :data:`mitoribopy.config.canonical._KNOWN_TOP_LEVEL_SECTIONS`.
-    known = {"samples", "align", "rpf", "rnaseq", "execution", "all", "shared", "resume"}
+    known = {
+        "samples", "align", "rpf", "rnaseq",
+        "execution", "periodicity",
+        "all", "shared", "resume",
+    }
     unknown = sorted(set(cfg) - known)
     if unknown:
         errors.append(
@@ -215,6 +219,63 @@ def _check_rnaseq_mode(cfg: dict, errors: list[str]) -> None:
         errors.append(f"rnaseq: {err}")
 
 
+def _check_dual_end_umi(cfg: dict, errors: list[str]) -> None:
+    """Validate dual-end UMI configuration in the align section.
+
+    When ``align.umi_position == 'both'`` (or any per-sample override
+    inside ``align.samples:`` declares the same), both per-end lengths
+    must be set and positive — otherwise the trim step fails halfway
+    through a run with a less obvious error.
+    """
+    align = cfg.get("align")
+    if not isinstance(align, dict):
+        return
+
+    def _check_block(label: str, block: dict) -> None:
+        umi_pos = block.get("umi_position")
+        if umi_pos != "both":
+            return
+        umi_5p = block.get("umi_length_5p") or 0
+        umi_3p = block.get("umi_length_3p") or 0
+        try:
+            umi_5p = int(umi_5p)
+            umi_3p = int(umi_3p)
+        except (TypeError, ValueError):
+            errors.append(
+                f"{label}: umi_length_5p / umi_length_3p must be integers."
+            )
+            return
+        if umi_5p <= 0 or umi_3p <= 0:
+            errors.append(
+                f"{label}: umi_position='both' requires both umi_length_5p > 0 "
+                f"and umi_length_3p > 0 (got umi_length_5p={umi_5p}, "
+                f"umi_length_3p={umi_3p})."
+            )
+            return
+        umi_length = block.get("umi_length")
+        if umi_length is not None:
+            try:
+                umi_length = int(umi_length)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{label}: umi_length must be an integer when set."
+                )
+                return
+            if umi_length != umi_5p + umi_3p:
+                errors.append(
+                    f"{label}: umi_position='both' requires umi_length "
+                    f"({umi_length}) to equal umi_length_5p + umi_length_3p "
+                    f"({umi_5p + umi_3p})."
+                )
+
+    _check_block("align", align)
+    samples = align.get("samples") or []
+    if isinstance(samples, list):
+        for index, entry in enumerate(samples):
+            if isinstance(entry, dict):
+                _check_block(f"align.samples[{index}]", entry)
+
+
 def _check_sample_sheet_loads(cfg: dict, errors: list[str]) -> None:
     raw = cfg.get("samples")
     sheet_path: str | None = None
@@ -264,6 +325,7 @@ def run(argv: Iterable[str]) -> int:
     _check_mutually_exclusive(canonical, errors)
     _check_rnaseq_mode(canonical, errors)
     _check_sample_sheet_loads(canonical, errors)
+    _check_dual_end_umi(canonical, errors)
 
     if not args.no_path_checks:
         align = canonical.get("align") or {}

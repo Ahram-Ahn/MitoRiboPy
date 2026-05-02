@@ -35,13 +35,11 @@ __all__ = [
     "HUMAN_MT_OVERLAPPING_GENES",
     "build_frame_counts_by_sample_length",
     "build_frame_counts_by_gene",
-    "build_fft_period3_table",
     "build_gene_periodicity",
     "build_qc_summary",
     "calculate_frame_enrichment",
     "calculate_entropy_bias",
     "calculate_phase_score",
-    "calculate_fft_period3_ratio",
     "is_known_overlap_gene",
     "run_periodicity_qc_bundle",
     "write_qc_summary_markdown",
@@ -213,31 +211,6 @@ def calculate_phase_score(
     if not vectors:
         return float("nan")
     return float(np.linalg.norm(np.mean(np.stack(vectors), axis=0)))
-
-
-def calculate_fft_period3_ratio(coverage) -> float:
-    """Return the period-3 FFT power ratio of a 1-D coverage array.
-
-    Returns NaN for arrays with fewer than 30 nt or zero variance.
-    Compares the squared magnitude at frequency 1/3 against the median
-    of the rest of the spectrum (excluding DC and the period-3 bin).
-    """
-    x = np.asarray(coverage, dtype=float)
-    if x.size < 30:
-        return float("nan")
-    x = x - np.nanmean(x)
-    if not np.isfinite(x).any() or float(np.nanvar(x)) <= _EPS:
-        return float("nan")
-    power = np.abs(np.fft.rfft(np.nan_to_num(x))) ** 2
-    freqs = np.fft.rfftfreq(x.size, d=1)
-    if freqs.size < 3:
-        return float("nan")
-    k3 = int(np.argmin(np.abs(freqs - 1.0 / 3.0)))
-    background = np.delete(power, [0, k3])
-    if background.size == 0:
-        return float("nan")
-    bg = float(np.nanmedian(background))
-    return float(power[k3] / max(bg, _EPS))
 
 
 # ---------------------------------------------------------------------------
@@ -556,69 +529,6 @@ def build_frame_counts_by_gene(
     return out
 
 
-def build_fft_period3_table(
-    bed_with_psite_and_gene: pd.DataFrame,
-    annotation_df: pd.DataFrame,
-    *,
-    samples: Iterable[str],
-    site_type: str = "p",
-    exclude_start_codons: int = 0,
-    exclude_stop_codons: int = 0,
-) -> pd.DataFrame:
-    """Per-(sample, gene) FFT period-3 power ratio.
-
-    Builds nucleotide-resolution coverage of the assigned site over
-    each (sample, gene)'s CDS and runs
-    :func:`calculate_fft_period3_ratio`. Emits NaN for genes with
-    fewer than 30 nt of usable CDS or zero variance.
-    """
-    cols = ["sample", "gene", "transcript_id", "site_type",
-            "n_nt", "n_sites", "fft_period3_power"]
-    if (
-        bed_with_psite_and_gene is None
-        or bed_with_psite_and_gene.empty
-        or "P_site" not in bed_with_psite_and_gene.columns
-    ):
-        return pd.DataFrame(columns=cols)
-
-    ann = annotation_df.set_index("transcript")[["start_codon", "l_cds"]]
-    chrom_to_tx = annotation_df.set_index("sequence_name")["transcript"].to_dict()
-
-    df = bed_with_psite_and_gene.copy()
-    df["transcript"] = df["chrom"].map(chrom_to_tx).fillna(df["chrom"])
-    df = df[df["transcript"].isin(ann.index)]
-    samples_set = set(samples)
-    df = df[df["sample_name"].astype(str).isin(samples_set)]
-    if df.empty:
-        return pd.DataFrame(columns=cols)
-
-    rows: list[dict] = []
-    for (sample, transcript), group in df.groupby(["sample_name", "transcript"]):
-        cds_start = int(ann.loc[transcript, "start_codon"])
-        cds_len = int(ann.loc[transcript, "l_cds"])
-        edge_lo = cds_start + 3 * int(exclude_start_codons)
-        edge_hi = cds_start + cds_len - 3 * int(exclude_stop_codons)
-        usable_len = max(0, edge_hi - edge_lo)
-        if usable_len <= 0:
-            continue
-        coverage = np.zeros(usable_len, dtype=float)
-        site_pos = group["P_site"].astype(int).to_numpy()
-        in_window = (site_pos >= edge_lo) & (site_pos < edge_hi)
-        idx = site_pos[in_window] - edge_lo
-        np.add.at(coverage, idx, 1.0)
-        ratio = calculate_fft_period3_ratio(coverage)
-        rows.append({
-            "sample": str(sample),
-            "gene": str(transcript),
-            "transcript_id": str(transcript),
-            "site_type": str(site_type).lower(),
-            "n_nt": int(usable_len),
-            "n_sites": int(coverage.sum()),
-            "fft_period3_power": float(ratio) if ratio == ratio else float("nan"),
-        })
-    return pd.DataFrame(rows, columns=cols)
-
-
 def build_qc_summary(
     frame_by_sample_length: pd.DataFrame,
     *,
@@ -790,7 +700,10 @@ def run_periodicity_qc_bundle(
     expected_frame: int = 0,
     thresholds: dict[str, float] | None = None,
     compute_phase_score: bool = False,
-    compute_fft_period3: bool = False,
+    compute_fourier_spectrum: bool = True,
+    fourier_window_nt: int = 100,
+    fourier_period_range: tuple[float, float] = (2.0, 10.0),
+    fourier_render_plots: bool = True,
     exclude_start_codons: int = 0,
     exclude_stop_codons: int = 0,
     annotate_overlap: bool = True,
@@ -801,6 +714,20 @@ def run_periodicity_qc_bundle(
     ``bed_with_psite`` / ``annotation_df`` are not provided the
     gene-level table is skipped but the per-(sample, length) and QC
     summary still write.
+
+    The Fourier-spectrum bundle (Wakigawa-style) replaces the legacy
+    ``fft_period3_power.tsv`` artefact. It writes three tables and (when
+    ``fourier_render_plots`` is True) a per-(sample, read_length)
+    two-panel overlay figure under ``fourier_spectrum/``:
+
+    * ``fourier_spectrum.tsv`` — long-format
+      ``[sample, read_length, gene, region, period_nt, amplitude]``.
+    * ``fourier_period3_score.tsv`` — per-gene period-3 amplitude and
+      score (period-3 amplitude / mean amplitude over reference periods
+      4-10 nt).
+    * ``fourier_period3_summary.tsv`` — combined per (sample, length,
+      region), excluding overlap-upstream genes (MT-ATP8, MT-ND4L)
+      from the combined columns and reporting them separately.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -824,9 +751,14 @@ def run_periodicity_qc_bundle(
     gene_table = pd.DataFrame()
     gene_path = output_dir / "gene_periodicity.tsv"
     frame_counts_by_gene_path = output_dir / "frame_counts_by_gene.tsv"
-    fft_path = output_dir / "fft_period3_power.tsv"
     frame_counts_by_gene = pd.DataFrame()
-    fft_table = pd.DataFrame()
+    fourier_spectrum_path = output_dir / "fourier_spectrum.tsv"
+    fourier_score_path = output_dir / "fourier_period3_score.tsv"
+    fourier_summary_path = output_dir / "fourier_period3_summary.tsv"
+    fourier_plots_dir = output_dir / "fourier_spectrum"
+    spectrum_table = pd.DataFrame()
+    score_table = pd.DataFrame()
+    summary_table = pd.DataFrame()
     if bed_with_psite is not None and annotation_df is not None:
         gene_table = build_gene_periodicity(
             bed_with_psite,
@@ -855,16 +787,40 @@ def run_periodicity_qc_bundle(
         frame_counts_by_gene.to_csv(
             frame_counts_by_gene_path, sep="\t", index=False, na_rep=""
         )
-        if compute_fft_period3:
-            fft_table = build_fft_period3_table(
+        if compute_fourier_spectrum:
+            from .fourier_spectrum import (
+                build_fourier_spectrum_table,
+                build_period3_score_table,
+                build_period3_summary_table,
+            )
+
+            spectrum_table = build_fourier_spectrum_table(
                 bed_with_psite,
                 annotation_df,
                 samples=samples,
-                site_type=site_type,
-                exclude_start_codons=exclude_start_codons,
-                exclude_stop_codons=exclude_stop_codons,
+                window_nt=int(fourier_window_nt),
+                period_range=fourier_period_range,
+                site=str(site_type).lower() or "a",  # type: ignore[arg-type]
             )
-            fft_table.to_csv(fft_path, sep="\t", index=False, na_rep="")
+            spectrum_table.to_csv(
+                fourier_spectrum_path, sep="\t", index=False, na_rep=""
+            )
+            score_table = build_period3_score_table(spectrum_table)
+            score_table.to_csv(
+                fourier_score_path, sep="\t", index=False, na_rep=""
+            )
+            summary_table = build_period3_summary_table(score_table)
+            summary_table.to_csv(
+                fourier_summary_path, sep="\t", index=False, na_rep=""
+            )
+            if fourier_render_plots and not spectrum_table.empty:
+                from ..plotting.fourier_spectrum_plots import (
+                    render_fourier_spectrum_panels,
+                )
+
+                render_fourier_spectrum_panels(
+                    spectrum_table, output_dir=fourier_plots_dir,
+                )
     elif not gene_path.exists():
         # Header-only sentinel so outputs_index can advertise the path
         # consistently across runs.
@@ -883,13 +839,28 @@ def run_periodicity_qc_bundle(
         "frame_counts_by_gene": frame_counts_by_gene,
         "qc_summary": qc_summary,
         "gene_periodicity": gene_table,
-        "fft_period3_power": fft_table,
+        "fourier_spectrum": spectrum_table,
+        "fourier_period3_score": score_table,
+        "fourier_period3_summary": summary_table,
         "paths": {
             "frame_counts_by_sample_length": by_length_path,
             "frame_counts_by_gene": frame_counts_by_gene_path,
             "qc_summary": qc_summary_path,
             "qc_summary_md": qc_summary_md,
             "gene_periodicity": gene_path,
-            "fft_period3_power": fft_path if compute_fft_period3 else None,
+            "fourier_spectrum": (
+                fourier_spectrum_path if compute_fourier_spectrum else None
+            ),
+            "fourier_period3_score": (
+                fourier_score_path if compute_fourier_spectrum else None
+            ),
+            "fourier_period3_summary": (
+                fourier_summary_path if compute_fourier_spectrum else None
+            ),
+            "fourier_spectrum_plots": (
+                fourier_plots_dir
+                if compute_fourier_spectrum and fourier_render_plots
+                else None
+            ),
         },
     }

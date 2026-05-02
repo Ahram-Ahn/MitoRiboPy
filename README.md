@@ -122,7 +122,7 @@ Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no N
 | Verify installed version | `mitoribopy --version` |
 | Git tag | `v0.6.2` |
 
-The README, CLI help, and `examples/templates/` in this repository all describe the **v0.6.2** interface. v0.6.2 is the fourth-edit cleanup release: it adds a top-level `execution:` resource-planning block, run-root `resource_plan.json`, an extended periodicity QC bundle (`qc_summary.tsv` + gene-level / phase-score / FFT metrics, with depth-aware best-length selection, codon-edge masking, and a per-frame split coverage plot), a stable warning-code registry, and canonicalises `dedup_strategy: umi_coordinate` (legacy `umi-tools` still accepted). The standalone `mitoribopy periodicity` subcommand re-scores an already-assigned site table without re-running the rpf pipeline. Older PyPI builds (≤ v0.5.1) shipped a different rpf flag style and a now-removed no-subcommand fallback; do not pin to those for a publication-grade reanalysis.
+The README, CLI help, and `examples/templates/` in this repository all describe the **v0.6.2** interface. v0.6.2 is the fourth-edit cleanup release: it adds a top-level `execution:` resource-planning block, run-root `resource_plan.json`, an extended periodicity QC bundle (`qc_summary.tsv` + gene-level / phase-score / Wakigawa-style Fourier amplitude spectrum, with depth-aware best-length selection, codon-edge masking, and a per-frame split coverage plot — the legacy single-scalar `fft_period3_power.tsv` was retired in v0.7.0; see [docs/reference/periodicity.md](docs/reference/periodicity.md) for the migration recipe), a stable warning-code registry, and canonicalises `dedup_strategy: umi_coordinate` (legacy `umi-tools` still accepted). The standalone `mitoribopy periodicity` subcommand re-scores an already-assigned site table without re-running the rpf pipeline. Older PyPI builds (≤ v0.5.1) shipped a different rpf flag style and a now-removed no-subcommand fallback; do not pin to those for a publication-grade reanalysis.
 
 ### From source (recommended for the manuscript build)
 
@@ -397,7 +397,7 @@ Use `mitoribopy all --print-config-template > pipeline_config.yaml` to drop a fu
 A single TSV declares every sample once, replacing the old pair of stage-specific tables (`--sample-overrides` and `--condition-map`). It is **the recommended way** to declare inputs for any non-trivial project: pairings between Ribo-seq and RNA-seq are by `sample_id` (never by index), per-sample kit / UMI overrides for mixed batches live in the same file, and an `exclude` column lets you drop a bad library without deleting rows.
 
 **Required columns:** `sample_id`, `assay` (`ribo` or `rna`), `condition`, `fastq_1`.
-**Optional columns:** `replicate`, `fastq_2`, `kit_preset`, `adapter`, `umi_length`, `umi_position`, `strandedness`, `dedup_strategy`, `exclude` (`true`/`false`/blank), `notes`.
+**Optional columns:** `replicate`, `fastq_2`, `kit_preset`, `adapter`, `umi_length`, `umi_position` (`5p` / `3p` / `both`), `umi_length_5p`, `umi_length_3p` (per-end lengths for `umi_position=both`), `strandedness`, `dedup_strategy`, `exclude` (`true`/`false`/blank), `notes`.
 
 Empty cells (`""`, `NA`, `None`, `-`, `null`) read as "use the default". Lines starting with `#` and blank lines are ignored. Validation is strict: a single load pass reports every row error so you can fix the sheet without iterate-and-retry.
 
@@ -625,8 +625,10 @@ Preprocesses FASTQ inputs into BAM + BED6 + per-sample read counts. Pipeline (pe
 |---|---|---|
 | `--kit-preset PRESET` | `auto` | Library-prep adapter family. See [Kit presets](#kit-presets) below for the canonical list. |
 | `--adapter SEQ` | — | Explicit 3' adapter sequence. **Required** when `--kit-preset custom`; otherwise an optional fallback used only when detection fails. |
-| `--umi-length N` | from preset | Override the kit preset's UMI length. |
-| `--umi-position {5p,3p}` | from preset | Override the kit preset's UMI position. |
+| `--umi-length N` | from preset | Override the kit preset's UMI length. For `--umi-position=both` this MUST equal `--umi-length-5p + --umi-length-3p`; auto-derived from the per-end sum when omitted. |
+| `--umi-position {5p,3p,both}` | from preset | Override the kit preset's UMI position. `both` is dual-end UMI (e.g. xGen Duplex, Twist) — pass 1 extracts the 5' UMI, pass 2 extracts the 3' UMI and APPENDS to the QNAME so umi_tools dedups on the concatenated token. |
+| `--umi-length-5p N` | 0 | Per-end 5' UMI length. Used only when `--umi-position=both`. |
+| `--umi-length-3p N` | 0 | Per-end 3' UMI length. Used only when `--umi-position=both`. |
 | `--adapter-detection MODE` | `auto` | `auto` (default), `strict`, or `off`. See [Adapter detection](#adapter-detection) below. |
 | `--adapter-detect-reads N` | 5000 | FASTQ reads scanned per sample during detection. |
 | `--adapter-detect-min-rate FRAC` | 0.30 | Minimum fraction of scanned reads with adapter signal for the kit to be considered detected. |
@@ -649,6 +651,7 @@ Preprocesses FASTQ inputs into BAM + BED6 + per-sample read counts. Pipeline (pe
 | `illumina_truseq` | `AGATCGGAAGAGCACACGTCTGAACTCCAGTCA` | none | NEBNext Multiplex Small RNA, TruSeq Stranded Total RNA Gold, Takara SMARTer Stranded Total v3 Pico, Bio-Rad SEQuoia Express Standard, … (any Illumina R1 adapter without a UMI) |
 | `illumina_truseq_umi` | `AGATCGGAAGAGCACACGTCTGAACTCCAGTCA` | 8 nt 5' | NEBNext Ultra II UMI, Bio-Rad SEQuoia Complete UMI, … |
 | `qiaseq_mirna` | `AACTGTAGGCACCATCAAT` | 12 nt 3' | QIAseq miRNA Library Kit |
+| `custom` (dual-end) | user-supplied via `--adapter` | 5p + 3p (set `--umi-position both` plus `--umi-length-5p` / `--umi-length-3p`) | xGen Duplex, Twist, and other dual-end UMI library preps. cutadapt extracts the 5' UMI in pass 1 and APPENDS the 3' UMI to the QNAME in pass 2; umi_tools dedups on the concatenated token. |
 
 Vendor-specific kit names (`truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, `truseq_stranded_total`, `smarter_pico_v3`, `sequoia_express`) are also accepted as synonyms for the adapter-family preset they map to.
 
@@ -1026,9 +1029,10 @@ frame = (assigned_site_nt − CDS_start_nt) mod 3
 | `qc_summary.tsv` + `qc_summary.md` | "Is this sample's periodicity good enough to interpret?" One row / one block per sample with `overall_qc_call`, the best read length picked **after** the depth filter, and the depth-weighted global frame fractions. |
 | `frame_counts_by_sample_length.tsv` | "Which read length is well-phased?" Per-(sample, read_length) frame fractions, `expected_frame_enrichment` (frame 0 over the mean of the other two), `entropy_bias` (1 − base-3 entropy across the three fractions), and a soft `qc_call`. |
 | `gene_periodicity.tsv` | "Which gene is well-phased?" Per-(sample, gene) frame fractions, optional ribotricer-style `phase_score` (enable with `mitoribopy periodicity --phase-score`), and an `is_overlap_pair` boolean for the human mt-mRNA overlap pairs. |
+| `fourier_spectrum.tsv` + `fourier_period3_score.tsv` + `fourier_period3_summary.tsv` + `fourier_spectrum/<sample>/*_combined.{png,svg}` | Wakigawa-style discrete-Fourier amplitude spectrum on the 100-nt window upstream of (`orf`) and downstream of (`utr3`) every canonical stop codon, computed per-`(sample, read_length, gene, region)`. The headline figure is the per-`(sample, read_length)` two-panel overlay (ORF on top, 3' UTR on bottom): a healthy library shows a sharp peak at period 3 nt in the ORF panel and a flat 3' UTR panel. Replaced the legacy `fft_period3_power.tsv` single-scalar in v0.7.0; see [docs/reference/periodicity.md](docs/reference/periodicity.md) for the full schema and the overlap-upstream policy (MT-ATP8 / MT-ND4L analysed individually but excluded from the combined-data view). |
 | `periodicity_metagene.png/.svg` | Start- and stop-anchored 3-nt periodicity, bars frame-coloured. The community-standard "show me 3-nt phasing" plot. |
 | `by_length/frame_by_length_heatmap.png/.svg` | Read-length × frame-fraction heatmap with red borders on excluded length classes. |
-| `by_length/periodicity.metadata.json` | Frame formula, threshold values, and `exclude_start_codons` / `exclude_stop_codons` settings actually applied — so a reviewer can re-derive every number from disk. |
+| `by_length/periodicity.metadata.json` | Frame formula, threshold values, `exclude_start_codons` / `exclude_stop_codons`, and Fourier knobs (`fourier_spectrum_enabled`, `fourier_window_nt`, `fourier_period_range`) actually applied — so a reviewer can re-derive every number from disk. |
 
 #### Default thresholds
 
@@ -1624,6 +1628,12 @@ align:
     - name: sampleC                # SRA-deposited, already adapter-clipped
       kit_preset: pretrimmed
       umi_length: 0
+    - name: sampleD                # dual-end UMI library (xGen Duplex / Twist)
+      kit_preset: custom
+      adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+      umi_position: both
+      umi_length_5p: 6
+      umi_length_3p: 6           # umi_length is auto-derived as 12
 ```
 
 `mitoribopy all` materializes this block as a sidecar file at `<output>/align/sample_overrides.tsv` and passes it to `mitoribopy align` via `--sample-overrides`. Any field left unset in a sample entry falls through to the global default for that field, so a sample can override only its UMI length without restating the rest of the kit. Per-sample overrides are reported in `kit_resolution.tsv` with a `source` column starting with `per_sample_override:` so the provenance file tells the truth.

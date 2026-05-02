@@ -197,6 +197,8 @@ def _resolve_one(
     allow_pretrimmed_inference: bool = True,
     detector=adapter_detect.detect_adapter,
     override: SampleOverride | None = None,
+    umi_length_5p: int | None = None,
+    umi_length_3p: int | None = None,
 ) -> SampleResolution:
     """Resolve one sample. May raise :class:`SampleResolutionError`.
 
@@ -228,6 +230,12 @@ def _resolve_one(
         if override.umi_position is not None:
             umi_position = override.umi_position
             override_applied = True
+        if override.umi_length_5p is not None:
+            umi_length_5p = override.umi_length_5p
+            override_applied = True
+        if override.umi_length_3p is not None:
+            umi_length_3p = override.umi_length_3p
+            override_applied = True
         if override.dedup_strategy is not None:
             dedup_strategy = override.dedup_strategy
             override_applied = True
@@ -245,6 +253,8 @@ def _resolve_one(
             adapter=adapter,
             umi_length=umi_length,
             umi_position=umi_position,
+            umi_length_5p=umi_length_5p,
+            umi_length_3p=umi_length_3p,
         )
         dedup = resolve_dedup_strategy(
             dedup_strategy,
@@ -287,6 +297,8 @@ def _resolve_one(
             adapter=adapter,
             umi_length=umi_length,
             umi_position=umi_position,
+            umi_length_5p=umi_length_5p,
+            umi_length_3p=umi_length_3p,
         )
         dedup = resolve_dedup_strategy(
             dedup_strategy,
@@ -361,6 +373,8 @@ def _resolve_one(
         adapter=adapter,
         umi_length=umi_length,
         umi_position=umi_position,
+        umi_length_5p=umi_length_5p,
+        umi_length_3p=umi_length_3p,
     )
     dedup = resolve_dedup_strategy(
         dedup_strategy,
@@ -403,6 +417,8 @@ def resolve_sample_resolutions(
     allow_pretrimmed_inference: bool = True,
     detector=adapter_detect.detect_adapter,
     sample_overrides: dict[str, SampleOverride] | None = None,
+    umi_length_5p: int | None = None,
+    umi_length_3p: int | None = None,
 ) -> list[SampleResolution]:
     """Pre-flight resolution for every input sample.
 
@@ -459,6 +475,8 @@ def resolve_sample_resolutions(
                     allow_pretrimmed_inference=allow_pretrimmed_inference,
                     detector=detector,
                     override=sample_overrides.get(sample),
+                    umi_length_5p=umi_length_5p,
+                    umi_length_3p=umi_length_3p,
                 )
             )
         except (SampleResolutionError, ValueError, KeyError) as exc:
@@ -484,6 +502,8 @@ _SAMPLE_OVERRIDE_COLUMNS: tuple[str, ...] = (
     "adapter",
     "umi_length",
     "umi_position",
+    "umi_length_5p",
+    "umi_length_3p",
     "dedup_strategy",
 )
 
@@ -560,11 +580,26 @@ def read_sample_overrides_tsv(path: Path) -> dict[str, SampleOverride]:
 
         umi_position_raw = row.get("umi_position", "")
         umi_position = None if _is_blank(umi_position_raw) else umi_position_raw
-        if umi_position is not None and umi_position not in ("5p", "3p"):
+        if umi_position is not None and umi_position not in ("5p", "3p", "both"):
             raise SampleResolutionError(
                 f"--sample-overrides {path}: row {line_no} has an invalid "
-                f"umi_position {umi_position!r} (must be '5p' or '3p')."
+                f"umi_position {umi_position!r} (must be '5p', '3p', or 'both')."
             )
+
+        def _parse_optional_int(colname: str) -> int | None:
+            raw = row.get(colname, "")
+            if _is_blank(raw):
+                return None
+            try:
+                return int(raw)
+            except ValueError as exc:
+                raise SampleResolutionError(
+                    f"--sample-overrides {path}: row {line_no} has a "
+                    f"non-integer {colname} {raw!r}."
+                ) from exc
+
+        umi_length_5p = _parse_optional_int("umi_length_5p")
+        umi_length_3p = _parse_optional_int("umi_length_3p")
 
         kit_preset_raw = row.get("kit_preset", "")
         adapter_raw = row.get("adapter", "")
@@ -576,6 +611,8 @@ def read_sample_overrides_tsv(path: Path) -> dict[str, SampleOverride]:
             adapter=None if _is_blank(adapter_raw) else adapter_raw,
             umi_length=umi_length,
             umi_position=umi_position,  # type: ignore[arg-type]
+            umi_length_5p=umi_length_5p,
+            umi_length_3p=umi_length_3p,
             dedup_strategy=None if _is_blank(dedup_raw) else dedup_raw,  # type: ignore[arg-type]
         )
 
@@ -605,6 +642,12 @@ def write_sample_overrides_tsv(
                     "" if override.umi_length is None else str(override.umi_length)
                 ),
                 "umi_position": override.umi_position or "",
+                "umi_length_5p": (
+                    "" if override.umi_length_5p is None else str(override.umi_length_5p)
+                ),
+                "umi_length_3p": (
+                    "" if override.umi_length_3p is None else str(override.umi_length_3p)
+                ),
                 "dedup_strategy": override.dedup_strategy or "",
             }
             handle.write(

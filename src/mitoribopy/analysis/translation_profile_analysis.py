@@ -468,6 +468,7 @@ def run_translation_profile_analysis(
                     sample_name=sample_name,
                     transcript_name=sequence_display_map.get(sequence_id, sequence_id),
                     color=site_color,
+                    source_data=f"{sequence_id}_footprint_density.csv",
                 )
 
             # Frame usage and per-transcript codon usage for this site.
@@ -634,6 +635,7 @@ def run_translation_profile_analysis(
                     f"{transcript_label_map.get(t, t)} - {site_label} Codon Usage "
                     f"(Frame0{', Smoothed +/-1 nt' if args.codon_density_window else ''}) - {sample_name}",
                     codon_label_order,
+                    source_data=f"{site_prefix}_codon_usage_{t}.csv",
                 )
 
             # Empirical-Bayes (pseudocount) shrinkage for the
@@ -675,6 +677,7 @@ def run_translation_profile_analysis(
                 f"Overall {site_label} Codon Usage "
                 f"(Frame0{', Smoothed +/-1 nt' if args.codon_density_window else ''}) - {sample_name}",
                 codon_label_order,
+                source_data=f"{site_prefix}_codon_usage_total.csv",
             )
 
     log_info(

@@ -808,13 +808,28 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         ),
     )
     optional_group.add_argument(
-        "--periodicity-fft-period3",
-        "--periodicity_fft_period3",
+        "--periodicity-fourier-spectrum",
+        "--periodicity_fourier_spectrum",
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Compute supplementary FFT period-3 power per (sample, "
-            "gene). Writes fft_period3_power.tsv. Default: disabled."
+            "Compute the Wakigawa-style amplitude spectrum per "
+            "(sample, read_length, gene, region). Writes "
+            "fourier_spectrum.tsv, fourier_period3_score.tsv, "
+            "fourier_period3_summary.tsv plus per-(sample, length) "
+            "two-panel overlay plots under fourier_spectrum/. "
+            "Default: enabled."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-fourier-window-nt",
+        "--periodicity_fourier_window_nt",
+        type=int,
+        default=None,
+        help=(
+            "Window (nt) on each side of the canonical stop codon for "
+            "the Fourier spectrum. Default: 100 (Wakigawa published "
+            "value)."
         ),
     )
     optional_group.add_argument(

@@ -28,8 +28,10 @@ error message that lists every problem found.
 | `fastq_2` | path | R2 FASTQ for paired-end reads. |
 | `kit_preset` | string | Per-sample kit override (`auto`, `illumina_smallrna`, `illumina_truseq`, `illumina_truseq_umi`, `qiaseq_mirna`, `pretrimmed`, `custom`). Wins over the global `--kit-preset`. |
 | `adapter` | string | Per-sample adapter sequence override. |
-| `umi_length` | int ≥ 0 | Per-sample UMI length override. **Recommended for publication** (otherwise the rnaseq from-FASTQ path may infer it from R1 entropy and emit a `UMI_INFERRED_NO_DECLARATION` warning). |
-| `umi_position` | `5p` \| `3p` | Per-sample UMI position. Required when `umi_length > 0` to avoid ambiguity. |
+| `umi_length` | int ≥ 0 | Per-sample UMI length override. **Recommended for publication** (otherwise the rnaseq from-FASTQ path may infer it from R1 entropy and emit a `UMI_INFERRED_NO_DECLARATION` warning). For `umi_position=both`, this MUST equal `umi_length_5p + umi_length_3p`. |
+| `umi_position` | `5p` \| `3p` \| `both` | Per-sample UMI position. Required when `umi_length > 0` to avoid ambiguity. `both` is dual-end UMI (xGen Duplex, Twist) — supply `umi_length_5p` and `umi_length_3p`. |
+| `umi_length_5p` | int ≥ 0 | Per-end 5' UMI length when `umi_position=both`. Required (must be > 0) for that mode; ignored otherwise. |
+| `umi_length_3p` | int ≥ 0 | Per-end 3' UMI length when `umi_position=both`. Required (must be > 0) for that mode; ignored otherwise. |
 | `strandedness` | `forward` \| `reverse` \| `unstranded` | Per-sample library strandedness. |
 | `dedup_strategy` | `auto` \| `umi-tools` \| `skip` | Per-sample dedup choice. `auto` resolves to `umi-tools` when `umi_length > 0`, else `skip`. |
 | `exclude` | `true` \| `false` \| (empty) | When `true`, the row is dropped from `active()` views without deleting the row. Lets a bad library be quarantined without altering the sheet structure. |

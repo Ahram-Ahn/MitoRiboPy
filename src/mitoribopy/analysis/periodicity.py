@@ -1033,7 +1033,10 @@ def run_periodicity_qc(
     exclude_start_codons: int = 6,
     exclude_stop_codons: int = 3,
     compute_phase_score: bool = True,
-    compute_fft_period3: bool = False,
+    compute_fourier_spectrum: bool = True,
+    fourier_window_nt: int = 100,
+    fourier_period_range: tuple[float, float] = (2.0, 10.0),
+    fourier_render_plots: bool = True,
     metagene_nt: int | None = None,
     qc_thresholds: dict[str, float] | None = None,
 ) -> dict:
@@ -1152,7 +1155,10 @@ def run_periodicity_qc(
         site_type=str(offset_site).lower() or "p",
         thresholds=qc_thresholds,
         compute_phase_score=compute_phase_score,
-        compute_fft_period3=compute_fft_period3,
+        compute_fourier_spectrum=compute_fourier_spectrum,
+        fourier_window_nt=fourier_window_nt,
+        fourier_period_range=fourier_period_range,
+        fourier_render_plots=fourier_render_plots,
         exclude_start_codons=exclude_start_codons,
         exclude_stop_codons=exclude_stop_codons,
     )
@@ -1172,7 +1178,12 @@ def run_periodicity_qc(
                 "exclude_start_codons": int(exclude_start_codons),
                 "exclude_stop_codons": int(exclude_stop_codons),
                 "phase_score_enabled": bool(compute_phase_score),
-                "fft_period3_enabled": bool(compute_fft_period3),
+                "fourier_spectrum_enabled": bool(compute_fourier_spectrum),
+                "fourier_window_nt": int(fourier_window_nt),
+                "fourier_period_range": [
+                    float(fourier_period_range[0]),
+                    float(fourier_period_range[1]),
+                ],
                 "metagene_nt": int(effective_window_nt),
                 "frame_formula": "(P_site_nt - CDS_start_nt) % 3",
                 "frame_0_definition": (

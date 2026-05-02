@@ -44,6 +44,7 @@ import seaborn as sns
 from scipy.stats import kendalltau, linregress, spearmanr, theilslopes
 
 from ..console import iter_with_progress, log_info, log_warning
+from ..plotting.figure_validator import write_plot_metadata
 from ..plotting.style import apply_publication_style
 
 apply_publication_style()
@@ -726,6 +727,21 @@ def run_codon_correlation(
             fig.savefig(out_svg, bbox_inches="tight")
             fig.savefig(out_png, dpi=300, bbox_inches="tight")
             plt.close(fig)
+            # Per-plot sidecar so ``mitoribopy validate-figures`` can score
+            # the figure without re-running matplotlib. The folder-level
+            # ``codon_correlation.metadata.json`` still records the
+            # cross-plot policy (metric, regression, support_min_raw).
+            n_pts = int(len(merged_current))
+            write_plot_metadata(
+                out_png,
+                plot_type="codon_correlation_scatter",
+                stage="rpf",
+                source_data=Path(out_csv).name,
+                n_points_expected=n_pts,
+                n_points_drawn=n_pts,
+                formats=["png", "svg"],
+                dpi=300,
+            )
             log_info("COR", f"Plot saved => {out_svg} (+ 300 dpi PNG)")
 
             corr_records.append({

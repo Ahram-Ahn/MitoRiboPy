@@ -272,29 +272,38 @@ def test_build_frame_counts_by_gene_schema_and_values() -> None:
     assert all(table["site_type"] == "p")
 
 
-def test_build_fft_period3_table_returns_finite_values_for_strong_periodicity() -> None:
-    """FFT period-3 power should be finite and > 1 (signal > background)
-    for an artificially perfect codon-locked profile, and NaN for too-short
-    CDSes."""
-    from mitoribopy.analysis.periodicity_qc import build_fft_period3_table
+def test_fourier_spectrum_replaces_legacy_fft_period3_table() -> None:
+    """The Wakigawa-style spectrum must score a strong period-3 signal
+    cleanly. Detailed coverage (window math, overlap-upstream policy,
+    plot writers) is in tests/test_fourier_spectrum.py — this is the
+    smoke test that the legacy build_fft_period3_table replacement is
+    importable and returns a populated table for a perfect signal.
+    """
+    from mitoribopy.analysis.fourier_spectrum import (
+        build_fourier_spectrum_table,
+        build_period3_score_table,
+    )
 
-    # Long enough CDS: 300 nt with one read at every codon start (frame 0).
-    ann_long = _annotation("LONG", l_utr5=0, l_cds=300, l_utr3=0)
-    bed_long = _bed_for("S1", "LONG", list(range(0, 300, 3)))
-    # Short CDS: only 20 nt — FFT returns NaN per spec (CDS < 30 nt).
-    ann_short = _annotation("SHORT", l_utr5=0, l_cds=20, l_utr3=0)
-    bed_short = _bed_for("S1", "SHORT", [0, 3, 6, 9, 12])
-    ann = pd.concat([ann_long, ann_short], ignore_index=True)
-    bed = pd.concat([bed_long, bed_short], ignore_index=True)
-
-    table = build_fft_period3_table(bed, ann, samples=["S1"], site_type="p")
-    assert {"sample", "gene", "site_type", "n_nt", "n_sites",
-            "fft_period3_power"}.issubset(set(table.columns))
-    long_row = table[table["gene"] == "LONG"].iloc[0]
-    short_row = table[table["gene"] == "SHORT"].iloc[0]
-    assert long_row["fft_period3_power"] > 1.0  # strong periodic signal
-    import math
-    assert math.isnan(short_row["fft_period3_power"])
+    # Use an upstream-of-stop window (the Wakigawa convention).
+    ann = pd.DataFrame([
+        {"transcript": "LONG", "sequence_name": "LONG",
+         "stop_codon": 300, "l_tr": 500},
+    ])
+    # A-site = P_site + 3, so we want A-site every 3 nt in [201, 300).
+    psite_positions = list(range(198, 300, 3))
+    bed = pd.DataFrame([
+        {"sample_name": "S1", "chrom": "LONG",
+         "read_length": 30, "P_site": p}
+        for p in psite_positions
+    ])
+    spec = build_fourier_spectrum_table(
+        bed, ann, samples=["S1"], window_nt=99, site="a",
+    )
+    assert not spec.empty
+    score = build_period3_score_table(spec)
+    long_row = score[(score["gene"] == "LONG") & (score["region"] == "orf")]
+    assert len(long_row) == 1
+    assert float(long_row["period3_score"].iloc[0]) > 5.0
 
 
 def test_run_periodicity_qc_writes_every_spec_output(tmp_path) -> None:
@@ -333,7 +342,9 @@ def test_run_periodicity_qc_writes_every_spec_output(tmp_path) -> None:
         output_dir=out,
         plot=True,
         min_cds_reads_per_length=1,  # tiny fixture
-        compute_fft_period3=True,
+        compute_fourier_spectrum=True,
+        fourier_window_nt=99,  # multiple-of-3 -> exact period-3 bin
+        fourier_render_plots=False,  # fixture is too sparse for an overlay plot
         metagene_nt=60,
     )
     spec_outputs = [
@@ -343,7 +354,9 @@ def test_run_periodicity_qc_writes_every_spec_output(tmp_path) -> None:
         "gene_periodicity.tsv",
         "metagene_start.tsv",
         "metagene_stop.tsv",
-        "fft_period3_power.tsv",
+        "fourier_spectrum.tsv",
+        "fourier_period3_score.tsv",
+        "fourier_period3_summary.tsv",
         # Plots
         "frame_fraction_heatmap.svg",
         "read_length_periodicity_barplot.svg",
@@ -360,8 +373,9 @@ def test_run_periodicity_qc_writes_every_spec_output(tmp_path) -> None:
 
 def test_periodicity_metadata_records_new_fields(tmp_path) -> None:
     """periodicity.metadata.json must record exclude_start_codons,
-    exclude_stop_codons, phase_score_enabled, fft_period3_enabled,
-    metagene_nt — so a reviewer can re-derive every number from disk."""
+    exclude_stop_codons, phase_score_enabled, fourier_spectrum_enabled,
+    fourier_window_nt, metagene_nt — so a reviewer can re-derive every
+    number from disk."""
     import json
     from mitoribopy.analysis.periodicity import run_periodicity_qc
 
@@ -382,11 +396,13 @@ def test_periodicity_metadata_records_new_fields(tmp_path) -> None:
         selected_offsets_combined=None,
         offset_type="5", offset_site="p", output_dir=out,
         plot=False, exclude_start_codons=6, exclude_stop_codons=3,
-        compute_phase_score=True, compute_fft_period3=True, metagene_nt=90,
+        compute_phase_score=True, compute_fourier_spectrum=True,
+        fourier_window_nt=99, fourier_render_plots=False, metagene_nt=90,
     )
     meta = json.loads((out / "by_length" / "periodicity.metadata.json").read_text())
     assert meta["exclude_start_codons"] == 6
     assert meta["exclude_stop_codons"] == 3
     assert meta["phase_score_enabled"] is True
-    assert meta["fft_period3_enabled"] is True
+    assert meta["fourier_spectrum_enabled"] is True
+    assert meta["fourier_window_nt"] == 99
     assert meta["metagene_nt"] == 90

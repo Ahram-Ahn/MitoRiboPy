@@ -40,8 +40,18 @@ def resolve_kit_settings(
     adapter: str | None = None,
     umi_length: int | None = None,
     umi_position: UmiPosition | None = None,
+    umi_length_5p: int | None = None,
+    umi_length_3p: int | None = None,
 ) -> ResolvedKit:
     """Apply the kit preset's defaults, then the explicit CLI overrides.
+
+    For ``umi_position == "both"`` libraries the caller must supply
+    ``umi_length_5p`` and ``umi_length_3p`` (or have them in the kit
+    preset). When *both* per-end lengths and ``umi_length`` are set,
+    ``umi_length`` MUST equal ``umi_length_5p + umi_length_3p`` — that
+    is the canonical QNAME UMI length the downstream umi_tools dedup
+    parses after the last ``_`` separator. When ``umi_length`` is not
+    set explicitly we derive it from the per-end sum.
 
     Raises
     ------
@@ -49,7 +59,8 @@ def resolve_kit_settings(
         if *kit* is not a known preset name.
     ValueError
         if the effective configuration is internally inconsistent
-        (notably: ``custom`` with no ``--adapter``).
+        (notably: ``custom`` with no ``--adapter``, dual-end UMI without
+        per-end lengths, or a per-end / total length mismatch).
     """
     # Translate any legacy vendor-specific alias to its canonical
     # adapter-family preset name before lookup.
@@ -90,16 +101,50 @@ def resolve_kit_settings(
         raise ValueError("--umi-length must be zero or a positive integer.")
 
     effective_umi_position = umi_position if umi_position is not None else preset.umi_position
-    if effective_umi_position not in ("5p", "3p"):
+    if effective_umi_position not in ("5p", "3p", "both"):
         raise ValueError(
-            f"--umi-position must be '5p' or '3p'; got {effective_umi_position!r}."
+            f"--umi-position must be '5p', '3p', or 'both'; got "
+            f"{effective_umi_position!r}."
         )
+
+    effective_umi_5p = (
+        int(umi_length_5p) if umi_length_5p is not None else int(preset.umi_length_5p)
+    )
+    effective_umi_3p = (
+        int(umi_length_3p) if umi_length_3p is not None else int(preset.umi_length_3p)
+    )
+    if effective_umi_5p < 0 or effective_umi_3p < 0:
+        raise ValueError(
+            "--umi-length-5p and --umi-length-3p must be zero or positive integers."
+        )
+
+    if effective_umi_position == "both":
+        if effective_umi_5p == 0 or effective_umi_3p == 0:
+            raise ValueError(
+                "umi_position='both' requires both --umi-length-5p and "
+                "--umi-length-3p to be > 0 (got umi_length_5p="
+                f"{effective_umi_5p}, umi_length_3p={effective_umi_3p})."
+            )
+        per_end_total = effective_umi_5p + effective_umi_3p
+        # When umi_length wasn't explicitly supplied, derive it from the
+        # per-end sum so callers can pass only the 5p/3p values.
+        if umi_length is None and preset.umi_length == 0:
+            effective_umi_length = per_end_total
+        elif effective_umi_length != per_end_total:
+            raise ValueError(
+                "umi_position='both' requires umi_length to equal "
+                "umi_length_5p + umi_length_3p (got umi_length="
+                f"{effective_umi_length}, umi_length_5p={effective_umi_5p}, "
+                f"umi_length_3p={effective_umi_3p})."
+            )
 
     return ResolvedKit(
         kit=preset.name,
         adapter=effective_adapter,
         umi_length=effective_umi_length,
         umi_position=effective_umi_position,
+        umi_length_5p=effective_umi_5p,
+        umi_length_3p=effective_umi_3p,
     )
 
 
@@ -124,17 +169,38 @@ def _build_pass1_command(
     For 5' UMI libraries the UMI is extracted in this pass (``-u N`` is
     applied before adapter search by cutadapt's internal ordering).
 
+    For ``umi_position == "both"`` libraries pass 1 extracts ONLY the
+    5' UMI (``umi_length_5p`` bases). The 3' UMI is taken in pass 2
+    along with the standard adapter trim.
+
     For 3' UMI libraries the UMI is NOT handled here; the caller runs a
     second cutadapt pass via :func:`_build_pass2_umi_command`.
     """
     cmd: list[str] = ["cutadapt"]
 
-    if resolved.umi_length > 0 and resolved.umi_position == "5p":
+    pass1_umi_length = 0
+    if resolved.umi_position == "5p" and resolved.umi_length > 0:
+        pass1_umi_length = resolved.umi_length
+    elif resolved.umi_position == "both" and resolved.umi_length_5p > 0:
+        pass1_umi_length = resolved.umi_length_5p
+
+    if pass1_umi_length > 0:
         # Cut UMI from the 5' end; place the removed bases into the read name.
+        # In dual-end ('both') mode we must omit the literal `` {comment}``
+        # tail: cutadapt would otherwise append a trailing space to every
+        # pass-1 header, and pass 2's ``{id}{cut_suffix}`` concatenation
+        # would re-emit that space between the two UMI tokens (breaking
+        # the umi_tools dedup contract that the substring after the last
+        # ``_`` is the UMI). 5p-only and 3p-only modes preserve any
+        # incoming FASTQ comment as before.
+        if resolved.umi_position == "both":
+            rename_template = "--rename={id}_{cut_prefix}"
+        else:
+            rename_template = "--rename={id}_{cut_prefix} {comment}"
         cmd += [
             "-u",
-            str(resolved.umi_length),
-            "--rename={id}_{cut_prefix} {comment}",
+            str(pass1_umi_length),
+            rename_template,
         ]
 
     # Skip the -a flag entirely for the 'pretrimmed' kit so cutadapt
@@ -172,19 +238,36 @@ def _build_pass2_umi_command(
     umi_length: int,
     threads: int,
     log_json: Path,
+    append_to_existing_umi: bool = False,
 ) -> list[str]:
     """Assemble the 3'-UMI-extraction cutadapt invocation.
 
-    Used only when the kit has a 3' UMI (e.g. QIAseq). Runs AFTER adapter
-    trimming so that the last ``umi_length`` bases of the trimmed read
-    are the UMI (they were between the insert and the 3' adapter on the
-    original read).
+    Used when the kit has a 3' UMI (e.g. QIAseq) or when
+    ``umi_position == "both"`` (dual-end UMIs).
+
+    For ``append_to_existing_umi=True`` (the dual-end case) the rename
+    template is ``{id}{cut_suffix}`` — note the lack of an underscore
+    separator. Pass 1 already wrote ``<originalid>_<5pUMI>`` into the
+    QNAME, so appending ``{cut_suffix}`` here yields
+    ``<originalid>_<5pUMI><3pUMI>``. umi_tools dedup parses the substring
+    after the LAST ``_`` as the UMI, so the concatenated string becomes
+    the combined dedup token without us needing to encode the boundary.
+
+    For ``append_to_existing_umi=False`` (single-end 3' UMI) the rename
+    is ``{id}_<3pUMI>``, the original behaviour.
     """
+    if append_to_existing_umi:
+        # Dual-end mode: omit ``{comment}`` so the QNAME ends cleanly at
+        # the concatenated UMI string (no trailing whitespace before the
+        # umi_tools dedup token).
+        rename_template = "--rename={id}{cut_suffix}"
+    else:
+        rename_template = "--rename={id}_{cut_suffix} {comment}"
     cmd: list[str] = [
         "cutadapt",
         "-u",
         f"-{umi_length}",
-        "--rename={id}_{cut_suffix} {comment}",
+        rename_template,
     ]
     if threads and threads > 1:
         cmd += ["--cores", str(threads)]
@@ -290,19 +373,37 @@ def run_cutadapt(
     log_json = Path(log_json)
     log_json.parent.mkdir(parents=True, exist_ok=True)
 
-    two_pass = resolved.umi_length > 0 and resolved.umi_position == "3p"
+    is_dual_end_umi = (
+        resolved.umi_position == "both"
+        and resolved.umi_length_5p > 0
+        and resolved.umi_length_3p > 0
+    )
+    is_single_3p_umi = resolved.umi_length > 0 and resolved.umi_position == "3p"
+    two_pass = is_single_3p_umi or is_dual_end_umi
 
     if two_pass:
         intermediate = fastq_out.with_suffix(fastq_out.suffix + ".prepass.fq.gz")
         pass1_log = log_json.with_name(log_json.stem + ".pass1.json")
         pass2_log = log_json.with_name(log_json.stem + ".pass2.json")
 
+        if is_dual_end_umi:
+            # Pass 1: extract the 5' UMI, trim adapter; pass 2 handles
+            # the 3' UMI. The pass-1 length filter must leave room for
+            # the 3' UMI bases that pass 2 will subsequently strip.
+            pass2_umi_length = resolved.umi_length_3p
+            pass1_resolved = resolved
+        else:
+            # Single-end 3' UMI: pass 1 skips UMI handling, pass 2 trims it.
+            pass2_umi_length = resolved.umi_length
+            pass1_resolved = replace(
+                resolved, umi_length=0, umi_position="5p"
+            )
         pass1_cmd = _build_pass1_command(
             fastq_in=fastq_in,
             fastq_out=intermediate,
-            resolved=replace(resolved, umi_length=0),  # skip UMI handling in pass 1
-            min_length=min_length + resolved.umi_length,  # final insert must still meet min
-            max_length=max_length + resolved.umi_length,  # keep +UMI length for pass 2
+            resolved=pass1_resolved,
+            min_length=min_length + pass2_umi_length,
+            max_length=max_length + pass2_umi_length,
             quality=quality,
             threads=threads,
             log_json=pass1_log,
@@ -312,9 +413,10 @@ def run_cutadapt(
         pass2_cmd = _build_pass2_umi_command(
             fastq_in=intermediate,
             fastq_out=fastq_out,
-            umi_length=resolved.umi_length,
+            umi_length=pass2_umi_length,
             threads=threads,
             log_json=pass2_log,
+            append_to_existing_umi=is_dual_end_umi,
         )
         _invoke(runner, pass2_cmd)
 

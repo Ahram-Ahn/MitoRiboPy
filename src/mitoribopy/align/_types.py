@@ -46,7 +46,19 @@ mt-Ribo-seq libraries. See docs/validation/taco1_ko_regression.md for
 the empirical evidence.
 """
 
-UmiPosition = Literal["5p", "3p"]
+UmiPosition = Literal["5p", "3p", "both"]
+"""Where the UMI sits within the insert.
+
+``5p``    UMI at the 5' end of the read; cutadapt extracts in pass 1.
+``3p``    UMI at the 3' end of the read; cutadapt extracts in pass 2
+          (after the adapter trim, since cutadapt's ``-u -N`` runs
+          BEFORE adapter search in a single call).
+``both``  Dual-end UMI (e.g. xGen Duplex, Twist) — pass 1 extracts
+          the 5' UMI, pass 2 extracts the 3' UMI and APPENDS to the
+          QNAME so umi_tools sees the concatenated token after the
+          last ``_`` separator. The two UMIs can have different
+          lengths (``umi_length_5p`` + ``umi_length_3p``).
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +82,11 @@ class KitPreset:
     umi_length: int
     umi_position: UmiPosition
     description: str
+    # Per-end UMI lengths for ``umi_position == "both"`` libraries (e.g.
+    # xGen Duplex, Twist). For single-end UMI presets these stay at 0
+    # and ``umi_length`` continues to carry the canonical length.
+    umi_length_5p: int = 0
+    umi_length_3p: int = 0
 
 
 # Canonical preset registry, organized by adapter family rather than
@@ -216,6 +233,11 @@ class ResolvedKit:
     adapter: str | None
     umi_length: int
     umi_position: UmiPosition
+    # Per-end UMI lengths. For ``umi_position == "both"`` libraries
+    # ``umi_length`` MUST equal ``umi_length_5p + umi_length_3p`` (the
+    # final QNAME UMI token is the concatenated 5' + 3' string).
+    umi_length_5p: int = 0
+    umi_length_3p: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +313,10 @@ class SampleOverride:
     umi_length: int | None = None
     umi_position: UmiPosition | None = None
     dedup_strategy: DedupStrategy | None = None
+    # Per-end UMI lengths for ``umi_position == "both"`` libraries.
+    # Inherit the global default when ``None``.
+    umi_length_5p: int | None = None
+    umi_length_3p: int | None = None
 
 
 @dataclass(frozen=True)

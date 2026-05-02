@@ -68,7 +68,8 @@ Selected highlights:
 |---|---|
 | `kit_preset` | `auto` (default) / explicit kit / `pretrimmed` / `custom` |
 | `adapter_detection` | `auto` / `off` / `strict` |
-| `umi_length`, `umi_position` | per-run defaults; per-sample overrides go in the sample sheet |
+| `umi_length`, `umi_position` | per-run defaults; per-sample overrides go in the sample sheet. `umi_position` accepts `5p`, `3p`, or `both` |
+| `umi_length_5p`, `umi_length_3p` | per-end UMI lengths for `umi_position: both` (e.g. xGen Duplex, Twist). Required when `umi_position=both`; `umi_length` MUST equal their sum and is auto-derived when omitted |
 | `contam_index`, `mt_index` | bowtie2 index prefixes (sidecar `.1.bt2` must exist) |
 | `min_length`, `max_length`, `quality`, `mapq` | length / quality / MAPQ filters |
 | `dedup_strategy` | `auto` / `umi-tools` / `skip` |
@@ -132,7 +133,8 @@ mitoribopy periodicity \
   --min-reads-per-gene 50 \
   --exclude-start-codons 6 \
   --exclude-stop-codons 3 \
-  --phase-score
+  --phase-score \
+  --fourier-window-nt 100
 ```
 
 The standalone CLI applies `--exclude-start-codons` / `--exclude-stop-codons`
@@ -140,6 +142,18 @@ uniformly to both the per-(sample, length) frame counts and the per-(sample,
 gene) frame counts, so initiation- and termination-proximal codons are
 excluded consistently. `--phase-score` adds a ribotricer-style
 gene-level consistency column to `gene_periodicity.tsv`.
+
+The Wakigawa-style Fourier amplitude spectrum (`fourier_spectrum.tsv`,
+`fourier_period3_score.tsv`, `fourier_period3_summary.tsv`, plus the
+per-`(sample, read_length)` two-panel overlay plots under
+`fourier_spectrum/`) is **enabled by default** — pass
+`--no-fourier-spectrum` to skip. Tunables: `--fourier-window-nt`
+(default 100, the Wakigawa published value), `--fourier-period-min` /
+`--fourier-period-max` (defaults 2 and 10), `--fourier-no-plots` (TSVs
+only). Overlap-upstream genes (`MT-ATP8`, `MT-ND4L`) are scored
+individually but excluded from the combined-data view; their score
+rows carry `is_overlap_upstream_orf=true` and the summary table reports
+them in separate `*_overlap_upstream` columns.
 
 Required columns in the input site table: `sample`, `gene`,
 `transcript_id`, `read_length`, `site_type` (`p` or `a`), `site_pos`
@@ -151,7 +165,9 @@ present (override with `--include-overlaps`).
 Outputs always include the publication-grade bundle described in
 [the v0.6.2 release notes](../release-notes/v0.6.2.md#periodicity-qc-bundle-extension):
 `qc_summary.tsv`, `qc_summary.md`, `frame_counts_by_sample_length.tsv`,
-`gene_periodicity.tsv`, and `periodicity.metadata.json`.
+`gene_periodicity.tsv`, and `periodicity.metadata.json`. The Fourier-
+spectrum bundle ships alongside (see [periodicity.md](periodicity.md)
+for the full output reference).
 
 ---
 

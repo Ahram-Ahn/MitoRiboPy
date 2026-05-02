@@ -17,7 +17,6 @@ from mitoribopy.analysis.periodicity_qc import (
     build_frame_counts_by_sample_length,
     build_qc_summary,
     calculate_entropy_bias,
-    calculate_fft_period3_ratio,
     calculate_frame_enrichment,
     calculate_phase_score,
 )
@@ -192,19 +191,34 @@ def test_phase_score_uniform_low():
     assert score != score or score < 0.5  # NaN fall-through allowed
 
 
-def test_fft_period3_ratio_high_for_periodic_signal():
+def test_fourier_amplitude_spectrum_peaks_at_period_three_for_periodic_signal():
+    """Replaces the legacy fft_period3_ratio test (v0.7.0+).
+
+    The single-scalar power-ratio scoring was retired in favour of the
+    full Wakigawa-style amplitude spectrum. Coverage of the new path
+    lives in tests/test_fourier_spectrum.py; this stub guards against a
+    regression where the new module fails to import.
+    """
     import numpy as np
 
-    coverage = np.tile([10.0, 1.0, 1.0], 50)
-    ratio = calculate_fft_period3_ratio(coverage)
-    assert ratio > 5.0
+    from mitoribopy.analysis.fourier_spectrum import compute_amplitude_spectrum
+
+    # 99 samples (multiple of 3) so the period-3 bin is exact.
+    coverage = np.tile([10.0, 1.0, 1.0], 33)
+    spectrum = compute_amplitude_spectrum(coverage)
+    assert not spectrum.empty
+    nearest_3 = spectrum.iloc[
+        (spectrum["period_nt"] - 3.0).abs().argsort()
+    ].iloc[0]
+    other = spectrum[spectrum["period_nt"] != nearest_3["period_nt"]]
+    assert nearest_3["amplitude"] > 5.0 * other["amplitude"].max()
 
 
-def test_fft_period3_ratio_nan_for_short_signal():
-    import math
+def test_fourier_amplitude_spectrum_empty_for_short_signal():
+    from mitoribopy.analysis.fourier_spectrum import compute_amplitude_spectrum
 
-    val = calculate_fft_period3_ratio([1.0, 2.0, 3.0])
-    assert math.isnan(val)
+    spec = compute_amplitude_spectrum([1.0, 2.0, 3.0])
+    assert spec.empty
 
 
 def test_build_frame_counts_assigns_qc_call():
