@@ -662,23 +662,13 @@ def _apply_execution_block(
 # source of truth for the actual flags.
 _PERIODICITY_BLOCK_KEYS: dict[str, str] = {
     "enabled": "periodicity_enabled",
-    "exclude_start_codons": "periodicity_exclude_start_codons",
-    "exclude_stop_codons": "periodicity_exclude_stop_codons",
-    "phase_score": "periodicity_phase_score",
-    "fourier_spectrum": "periodicity_fourier_spectrum",
     "fourier_window_nt": "periodicity_fourier_window_nt",
     "metagene_nt": "periodicity_metagene_nt",
-    "min_reads_per_length": "periodicity_min_reads_per_length",
 }
 
 
 def _apply_periodicity_block(config: dict) -> dict:
     """Cascade the top-level ``periodicity:`` block into ``rpf.periodicity_*``.
-
-    Spec defines a top-level ``periodicity:`` section. The rpf parser
-    owns the actual flags (``--periodicity-*``); this helper translates
-    the section into rpf-stage keys so users can write the spec-shaped
-    YAML and it Just Works through ``mitoribopy all``.
 
     Explicit ``rpf.periodicity_*`` keys win over the top-level section.
     Returns the resolved periodicity dict so callers can record it.
@@ -687,23 +677,6 @@ def _apply_periodicity_block(config: dict) -> dict:
     raw = config.get("periodicity") or {}
     if not isinstance(raw, dict):
         raw = {}
-
-    # Spec also nests metric toggles + thresholds; flatten the ones we
-    # surface as rpf flags. Unknown nested keys are silently ignored
-    # so the YAML can carry future-spec keys without breaking older runs.
-    metrics = raw.get("metrics") or {}
-    if isinstance(metrics, dict):
-        if "phase_score" in metrics and "phase_score" not in raw:
-            raw["phase_score"] = metrics["phase_score"]
-        if (
-            "fourier_spectrum" in metrics
-            and "fourier_spectrum" not in raw
-        ):
-            raw["fourier_spectrum"] = metrics["fourier_spectrum"]
-    thresholds = raw.get("thresholds") or {}
-    if isinstance(thresholds, dict):
-        if "min_reads_per_length" in thresholds and "min_reads_per_length" not in raw:
-            raw["min_reads_per_length"] = thresholds["min_reads_per_length"]
 
     rpf_cfg = config.get("rpf")
     if not isinstance(rpf_cfg, dict):

@@ -228,17 +228,13 @@ results/
       p_site_density_rpm_frame_split/ # v0.6.2: per-frame split companion (3 sub-rows
       p_site_density_raw_frame_split/ #         per sample, shared y-axis)
       a_site_density_*/               # A-site mirror folders (analysis_sites in {a,both})
-    qc/                               # 3-nt periodicity QC bundle (always written)
-      qc_summary.tsv                  # one row per sample: overall_qc_call
-                                      #   (good/warn/poor/low_depth)
-      qc_summary.md                   # human-readable companion
-      frame_counts_by_sample_length.tsv # per-(sample, read_length) frame fractions
-      gene_periodicity.tsv            # per-(sample, gene) frame fractions +
-                                      #   is_overlap_pair flag
-      periodicity_metagene.png/.svg   # start- and stop-aligned 3-nt periodicity
-      by_length/
-        frame_by_length_heatmap.png/.svg # read-length × frame-fraction heatmap
-        periodicity.metadata.json     # frame formula + thresholds applied
+    qc/                               # Wakigawa metagene Fourier QC bundle (always written)
+      fourier_spectrum_combined.tsv         # per-(sample, length, gene_set, region) amplitude curve
+      fourier_period3_score_combined.tsv    # spectral_ratio_3nt + snr_call tier
+      periodicity.metadata.json             # Wakigawa knobs that produced the tables
+      fourier_spectrum/<sample>/<sample>_<length>nt_{combined,ATP86,ND4L4}.{png,svg}
+      metagene_{start,stop}.tsv             # P-site metagene tables
+      metagene_{start,stop}_p_site.svg      # 3-nt periodicity plots
     codon_correlation/          # if --cor_plot
       p_site/<base>_vs_<sample>_*.{csv,svg,png}
       a_site/<base>_vs_<sample>_*.{csv,svg,png}
@@ -284,20 +280,16 @@ The shortest path through the outputs:
    When the overlay's tallest frame is ambiguous (typical for fused overlapping ORFs like `ATP86`, where the ATP6 ORF is +2 nt offset from ATP8), open the per-frame split companion at `results/rpf/coverage_profile_plots/p_site_density_rpm_frame_split/<gene>_*.svg` instead. Three sub-rows per sample (frame 0, +1, +2) sharing the y-axis make low-frame signal visible even when another frame stacks at the same CDS position.
 
 6. **What's the periodicity QC verdict?**
-   Open `results/rpf/qc/qc_summary.md` for a per-sample human-readable verdict (`good` / `warn` / `poor` / `low_depth`) and `qc_summary.tsv` for the machine-readable companion. A `poor` call means the offsets did not produce the expected codon phasing; codon-occupancy interpretation is unsafe in that case. Drill down with:
+   Open `results/rpf/qc/fourier_period3_score_combined.tsv` and filter on `gene_set=combined`. The `snr_call` column is the headline tier per `(sample, read_length, region)`: `excellent ≥ 10×`, `healthy ≥ 5×`, `modest ≥ 2×`, `broken < 2×`. A `broken` call means the offsets did not produce codon phasing for that read length; codon-occupancy interpretation is unsafe in that case. The three figures under `qc/fourier_spectrum/<sample>/` (`*_combined.png`, `*_ATP86.png`, `*_ND4L4.png`) report the same metric in-figure on each panel.
 
-   - `frame_counts_by_sample_length.tsv` — does one bad read-length class drag the pooled call down?
-   - `gene_periodicity.tsv` — is one gene the culprit (often a fused overlap pair like `ATP86` / `ND4L4`, flagged with `is_overlap_pair=true`)?
-
-   To re-score periodicity with different thresholds (or with the spec defaults `--exclude-start-codons 6 --exclude-stop-codons 3`) without re-running offset selection:
+   To re-score periodicity with a different window or codon-skip without re-running offset selection:
 
    ```bash
    $ mitoribopy periodicity \
        --site-table results/rpf/qc/site_table.tsv \
        --output     results/rpf/qc/standalone_periodicity \
        --site p \
-       --exclude-start-codons 6 --exclude-stop-codons 3 \
-       --phase-score
+       --fourier-window-nt 99
    ```
 
 7. **What's the codon-usage profile?**

@@ -238,8 +238,9 @@ WARNING_CODES: tuple[WarningCode, ...] = (
             "(default 0.50)."
         ),
         remediation=(
-            "Inspect frame_fraction_heatmap.svg and gene_periodicity.tsv "
-            "for length-specific or gene-specific causes; consider "
+            "Inspect fourier_period3_score_combined.tsv (snr_call column) "
+            "and the per-(sample, read_length) Fourier overlay PNGs under "
+            "rpf/qc/fourier_spectrum/ for length-specific causes; consider "
             "tightening the read-length window."
         ),
     ),

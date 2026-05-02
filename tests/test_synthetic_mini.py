@@ -207,25 +207,14 @@ def test_synthetic_mini_round_trip(tmp_path: Path) -> None:
         exclude_start_codons=0,
         exclude_stop_codons=0,
     )
-    # Periodicity invariant: every read's P-site (start + offset 12)
-    # lands either at the stop-codon-2 position (anchor reads) or at a
-    # codon start (tile reads), so NO read sits at start+1, start+4,
-    # start+7, ... — frame 1 must be empty for every sample. Both
-    # frame_0 and frame_2 may be non-zero because the three transcripts
-    # in the fixture have different CDS-length parities, but the off-
-    # by-one frame is the package's strongest negative control.
-    for fs in result["frame_summary"]:
-        assert fs.n_reads > 0
-        assert fs.frame_1 == pytest.approx(0.0, abs=1e-6), (
-            f"{fs.sample}: expected frame 1 to be empty by construction, "
-            f"got {fs.frame_1:.4f}"
-        )
-        assert fs.frame_0 + fs.frame_2 == pytest.approx(1.0, rel=1e-6)
-        # KO samples doubled ND2 -> total CDS reads should reflect that.
-        if fs.sample.startswith("KO"):
-            assert fs.n_reads == 400
-        else:
-            assert fs.n_reads == 300
+    # Periodicity invariant: the metagene start profile should peak at
+    # codon-aligned positions (every 3 nt). The frame_summary contract
+    # was retired in v0.8.0 along with the rest of the frame-fraction
+    # QC bundle; downstream consumers now read fourier_period3_score_combined
+    # for the headline periodicity verdict.
+    assert result["periodicity_start"], "metagene start profiles missing"
+    for profile in result["periodicity_start"]:
+        assert profile.density.size > 0
 
     # Stage 4: TE math. Build {gene: {sample: count}} from the BED.
     ribo_counts: dict[str, dict[str, int]] = {}
@@ -271,9 +260,11 @@ def test_synthetic_mini_round_trip(tmp_path: Path) -> None:
         assert by_gene[gene].delta_te_log2 == pytest.approx(0.0, abs=1e-6)
         assert by_gene[gene].note == ""
 
-    # Sidecar artefacts: frame_summary.tsv lists every sample.
-    body = (qc_dir / "frame_summary.tsv").read_text()
-    assert "WT_R1" in body and "KO_R2" in body
+    # Sidecar artefacts: the Wakigawa Fourier bundle is written for
+    # every (sample, length) combination that has enough coverage.
+    assert (qc_dir / "fourier_spectrum_combined.tsv").is_file()
+    assert (qc_dir / "fourier_period3_score_combined.tsv").is_file()
+    assert (qc_dir / "periodicity.metadata.json").is_file()
 
 
 def test_synthetic_mini_periodicity_metagene_clean_signal(tmp_path: Path) -> None:

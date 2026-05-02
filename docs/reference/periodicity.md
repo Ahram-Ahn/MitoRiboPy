@@ -1,189 +1,275 @@
 # Periodicity QC reference
 
-Two complementary signals defend a mt-Ribo-seq run's 3-nt periodicity
-claim:
+The mt-Ribo-seq 3-nt periodicity QC bundle is a faithful re-
+implementation of the metagene Fourier method published in
+Wakigawa et al. 2025 (bioRxiv 2025.05.03.652009).
 
-1. **Frame-fraction QC** — pooled and per-read-length tables of how
-   often the assigned P-site lands in frame 0, 1, 2 across the CDS.
-   Outputs: `frame_counts_by_sample_length.tsv`,
-   `frame_counts_by_gene.tsv`, `gene_periodicity.tsv`, `qc_summary.tsv`,
-   `qc_summary.md`.
-2. **Fourier amplitude spectrum** — the Wakigawa-style discrete
-   Fourier transform on the 100-nt window upstream of (ORF) and
-   downstream of (3' UTR) every canonical stop codon, computed
-   per `(sample, read_length, gene, region)`. The defensible claim is
-   "ORF shows a sharp peak at period = 3 nt AND the matched 3' UTR
-   does not." Outputs: `fourier_spectrum.tsv`,
-   `fourier_period3_score.tsv`, `fourier_period3_summary.tsv`, plus
-   per-`(sample, read_length)` two-panel overlay plots under
-   `fourier_spectrum/<sample>/`.
+The bundle consists of:
 
-This document covers (2). The frame-fraction QC is documented in the
-v0.6.2 release notes.
+* **Metagene start / stop profiles** — `metagene_start.tsv`,
+  `metagene_stop.tsv`, plus the start- and stop-anchored `.svg` plots.
+  These are the community-standard "show me 3-nt phasing around the
+  start / stop codon" plots and remain useful as a sanity check for
+  offset assignment.
+* **Wakigawa metagene Fourier spectrum** — three figures per
+  `(sample, read_length)` and two TSVs per run: per-(sample, length,
+  gene_set, region) amplitude curve over period 2-10 nt, plus the
+  derived 3-nt spectral ratio with an `snr_call` tier. This is the
+  headline QC artefact.
 
-## What replaced what
+The legacy frame-fraction QC bundle (`qc_summary.tsv`,
+`frame_counts_*.tsv`, `gene_periodicity.tsv`,
+`frame_fraction_heatmap.svg`, `read_length_periodicity_barplot.svg`,
+`gene_phase_score_dotplot.svg`) was retired in v0.8.0. The Wakigawa
+`spectral_ratio_3nt` + `snr_call` columns now carry the headline QC
+story; the per-frame breakdown is no longer reported.
 
-| v0.6.x (removed) | v0.7.0+ (current) |
-|---|---|
-| `fft_period3_power.tsv` (single scalar per `(sample, gene)`) | `fourier_spectrum.tsv` (full amplitude curve, period 2-10 nt) + `fourier_period3_score.tsv` (per-`(sample, read_length, gene, region)` scalar) + `fourier_period3_summary.tsv` (per-`(sample, length, region)` combined summary, overlap-upstream genes split out) |
-| `--fft-period3` / `--periodicity-fft-period3` | `--fourier-spectrum` / `--periodicity-fourier-spectrum` (default ON), `--fourier-window-nt`, `--fourier-period-min`, `--fourier-period-max`, `--fourier-no-plots` |
-| `compute_fft_period3=True` (Python kwarg) | `compute_fourier_spectrum=True` |
-| `calculate_fft_period3_ratio()`, `build_fft_period3_table()` | `mitoribopy.analysis.fourier_spectrum.compute_amplitude_spectrum()`, `build_fourier_spectrum_table()`, `build_period3_score_table()`, `build_period3_summary_table()` |
+## Why aggregate-then-DFT instead of per-gene overlay
 
-Migration recipe: scripts that used to grab the single-scalar
-`fft_period3_power` column should read either
-`fourier_period3_score.tsv` (new column: `period3_score`) or, when a
-single defensible per-sample number is needed,
-`fourier_period3_summary.tsv` → `median_period3_score_combined`.
+The previous v0.7.x implementation overlaid one FFT trace per gene per
+panel, which produced a noisy, hard-to-read plot. Two reports
+(Wakigawa Methods + an internal refinement note based on the same
+recipe) converge on the same diagnosis: per-gene DFT is structurally
+underpowered.
 
-## Window convention (Wakigawa et al., Mol Cell 2025)
+* **Initiation pile-ups create flat broadband spectra.** The first
+  ~5 codons after every AUG carry massive ribosome occupancy
+  (initiation stalling). The Fourier transform of an impulse is a
+  flat spectrum across all frequencies — which smears period-3 energy
+  uniformly across periods 2-10. Wakigawa drops the first 5 codons
+  (15 nt) from every transcript window.
+* **Stop-codon stalling does the same on the 3' end.** Especially
+  severe for noncanonical-stop ORFs (MT-CO1: AGA; MT-ND6: AGG).
+  Including the stop trinucleotide adds another impulse. Wakigawa
+  drops the last codon (3 nt) before the stop.
+* **Per-gene 100 nt is structurally underpowered.** 33 codons of
+  signal per gene is too short for clean DFT on noisy data. Wakigawa
+  aggregates ~9 ORFs into one metagene; the averaging suppresses
+  gene-specific noise while reinforcing codon-locked 3-nt phasing.
+* **Coverage magnitude dominates raw overlays.** The highest-
+  expression gene (MT-ND6 in many libraries) buries every other
+  trace. Per-gene unit-mean normalisation equalises contributions
+  before aggregation.
+* **Hann window + mean-centering kill spectral leakage.** Without
+  them, the DC component leaks into nearby frequencies and creates
+  an upward amplitude ramp toward periods 8-10 (the "rising tail"
+  that the legacy figure showed).
 
-For a transcript with annotated `stop_codon` (the 0-based first nt of
-the stop codon trinucleotide):
+## Window convention
 
-| Region | nt range (transcript-local) | Width |
+For a transcript with annotated `start_codon` and `stop_codon`
+(each the 0-based first nt of its trinucleotide) and window width `W`:
+
+| Region | nt range | Notes |
 |---|---|---|
-| `orf`  | `[stop_codon - W, stop_codon)` | W nt strictly upstream of the stop codon |
-| `utr3` | `[stop_codon + 3, stop_codon + 3 + W)` | W nt strictly downstream of the stop trinucleotide |
+| `orf_start` | `[start_codon + 15, start_codon + 15 + W)` | Skip 5 codons of initiation peak |
+| `orf_stop`  | `[stop_codon - 3 - W, stop_codon - 3)` | Skip 1 codon before stop |
 
-Default W = 100 nt (the published Wakigawa value). The stop codon
-trinucleotide itself is never included in either panel. Genes whose
-window falls off the transcript end are dropped silently.
+Default `W = 99 nt = 33 codons`. Multiple of 3 — no period-3 leakage.
 
-## Read assignment
+The 3' UTR negative-control window from the original Wakigawa figure
+was dropped in v0.8.0: human mt-mRNA 3' UTRs are typically too short
+for a meaningful 99-nt window, and the user-facing artefact is
+cleaner without a sparse third panel. Override the window via
+`--periodicity-fourier-window-nt`.
 
-The Wakigawa figure displays the **A-site** position of each read
-(`A-site = P-site + 3` nt). The default is preserved here: `--site a`.
-For libraries where the P-site is the more diagnostic anchor, pass
-`--site p`.
+## Per-gene processing pipeline
 
-## Spectrum normalization
+For each (sample, read_length, transcript, region):
 
-`amplitude = |FFT[k]| * 2 / N` for `k > 0` — the standard one-sided
-amplitude scale that recovers the peak amplitude of a pure sinusoid
-from a finite signal. The DC component (`k = 0`) is dropped via
-mean-subtraction before the FFT. This is depth-sensitive on raw
-counts; downstream consumers that want depth-normalised scores can
-divide by `n_sites`.
+```
+1. Build P-/A-site coverage vector of length W in window-local coords.
+2. Filter: skip if mean(coverage) < 0.1 or sum(coverage) < 30.
+3. x = coverage / mean(coverage)        # unit-mean normalisation
+4. x = x - mean(x)                      # mean-centre (kills DC leakage)
+5. x = x * np.hanning(W)                # Hann taper
+```
+
+## Aggregation: three gene_sets per (sample, length)
+
+Three figures get rendered per (sample, read_length):
+
+### `combined`
+
+Element-wise mean of the per-gene normalised tracks across every
+transcript that is **not** part of the ATP8/ATP6 or ND4L/ND4 overlap
+pair. Typically 9 mt-mRNAs in human (`MT-CO1`, `MT-CO2`, `MT-CO3`,
+`MT-CYB`, `MT-ND1`, `MT-ND2`, `MT-ND3`, `MT-ND5`, `MT-ND6`).
+
+### `ATP86` (junction-bracketed)
+
+The ATP8 / ATP6 bicistronic transcript carries two ORFs in different
+reading frames that overlap at nt 162-205 of the ATP86 transcript.
+The figure has TWO panels, each interrogating a different frame at
+the junction:
+
+* **`orf_stop` panel — ATP8 frame.** Window =
+  `[ATP8.stop - 3 - 99, ATP8.stop - 3)` = `[103, 202)`. Captures the
+  end of ATP8's reading frame, including the start of the bicistronic
+  overlap. A period-3 peak here means ribosomes are reading in ATP8's
+  frame.
+* **`orf_start` panel — ATP6 frame.** Window =
+  `[ATP6.start + 15, ATP6.start + 15 + 99)` = `[177, 276)`. Captures
+  the start of ATP6's reading frame, just past the bicistronic
+  overlap. A period-3 peak here means ribosomes are reading in
+  ATP6's frame.
+
+The two windows OVERLAP at `[177, 202)` — exactly the bicistronic
+overlap region. The ATP86 figure is the only place in the bundle
+where this region is interrogated separately in each frame.
+
+### `ND4L4` (junction-bracketed)
+
+Same idea for the ND4L / ND4 bicistronic pair. The 4-nt overlap is
+too short to fall inside both windows; they flank the junction:
+
+* **`orf_stop` panel — ND4L frame.** Window =
+  `[ND4L.stop - 3 - 99, ND4L.stop - 3)` = `[192, 291)`. Captures the
+  end of ND4L's reading frame, ending just before the 4-nt overlap.
+* **`orf_start` panel — ND4 frame.** Window =
+  `[ND4.start + 15, ND4.start + 15 + 99)` = `[305, 404)`. Captures
+  the start of ND4's reading frame, beginning just after the overlap.
+
+## Direct DFT at exact period 3.0
+
+Standard `np.fft.rfft` evaluates at frequency bins `k / N` for
+integer `k`, which means the period-3 bin lands at
+`N / round(N / 3)` — never exactly 3 except when `N` is a multiple
+of 3. We sidestep that by computing the DFT directly at arbitrary
+periods:
+
+```
+z         = sum_n x[n] * exp(-2j * pi * n / period)
+amplitude = |z| / sqrt(sum(x ** 2) + 1e-12)
+```
+
+Amplitude is in `[0, 1]`: 1.0 means `x` is a pure sinusoid at that
+period; 0 means no projection onto that frequency. This is comparable
+across windows of different length (unlike rfft amplitude).
+
+The headline scalar:
+
+```
+spectral_ratio_3nt = amp(3.0) / median( amp(p) for p in 2..10
+                                        excluding 2.8 <= p <= 3.2 )
+```
+
+`snr_call` tier (Wakigawa-style):
+
+| ratio | snr_call | meaning |
+|---|---|---|
+| ≥ 10× | `excellent` | Pristine library — every key length is well-phased. |
+| ≥ 5×  | `healthy` | Publication-defensible periodicity. |
+| ≥ 2×  | `modest` | Real but weak — suggests poor offset assignment or low-quality library. |
+| < 2×  | `broken` | Likely frame-shifted or wrong offset. |
+| NaN   | `no_signal` | Empty input — usually a depth issue. |
 
 ## Output schema
 
-### `fourier_spectrum.tsv`
+### `fourier_spectrum_combined.tsv`
 
-One row per `(sample, read_length, gene, region, period_nt)` cell —
-the long-format spectrum a plotting tool can re-render directly.
+One row per `(sample, read_length, gene_set, region, period_nt)`.
 
 | Column | Type | Description |
 |---|---|---|
 | `sample` | string | Sample id |
-| `read_length` | int | Footprint length (nt) — Wakigawa publishes one figure per length |
-| `gene` | string | Transcript id (matches the FASTA / annotation `transcript` field) |
-| `transcript_id` | string | Same value as `gene` (kept for downstream tooling that expects both) |
-| `region` | `orf` \| `utr3` | Window relative to the canonical stop codon |
-| `n_sites` | int | Total assigned sites in the window (depth proxy) |
-| `n_nt` | int | Window width in nt (= `--fourier-window-nt`) |
-| `period_nt` | float | FFT bin period in nt — non-integer because the bin spacing is `N / k` (e.g. for N=100 the period closest to 3 nt is `100/33 ≈ 3.03`) |
-| `amplitude` | float | One-sided amplitude (see normalization above) |
-| `is_overlap_upstream_orf` | bool | `True` for `MT-ATP8` / `MT-ND4L` (genes whose stop codon sits inside another ORF) — see Overlap-upstream policy below |
+| `read_length` | int | Footprint length (nt) |
+| `gene_set` | `combined` \| `ATP86` \| `ND4L4` | See aggregation above |
+| `region` | `orf_start` \| `orf_stop` | See window convention above |
+| `n_genes` | int | Number of qualifying transcripts in the metagene |
+| `n_sites_total` | int | Sum of site counts across qualifying transcripts |
+| `n_nt` | int | Window width in nt (= `--periodicity-fourier-window-nt`) |
+| `period_nt` | float | Period evaluated by direct DFT (grid: 2.0..10.0 step 0.05) |
+| `amplitude` | float | Normalised amplitude in [0, 1] (see Direct DFT) |
 
-### `fourier_period3_score.tsv`
+### `fourier_period3_score_combined.tsv`
 
-One row per `(sample, read_length, gene, region)`. Replaces the
-legacy single-scalar `fft_period3_power` column.
+One row per `(sample, read_length, gene_set, region)`.
 
 | Column | Type | Description |
 |---|---|---|
-| `sample`, `read_length`, `gene`, `transcript_id`, `region`, `n_sites`, `n_nt`, `is_overlap_upstream_orf` | (as above) | |
-| `period3_amplitude` | float | Amplitude at the FFT bin closest to period 3 nt |
-| `period3_score` | float | `period3_amplitude / mean(amplitude in reference bins 4, 5, 6, 7, 8, 9, 10 nt)`. `NaN` when the reference mean is 0 |
-
-### `fourier_period3_summary.tsv`
-
-One row per `(sample, read_length, region)`. Combines genes EXCLUDING
-overlap-upstream and reports the excluded genes separately.
-
-| Column | Type | Description |
-|---|---|---|
-| `sample`, `read_length`, `region` | | |
-| `n_genes_combined` | int | Number of non-overlap-upstream genes scored |
-| `median_period3_score_combined` | float | Median `period3_score` over those genes — the **headline number** for "is this sample's translation periodicity healthy?" |
-| `max_period3_score_combined` | float | Max `period3_score` — useful for spotting one heroic gene that dominates the median |
-| `n_genes_overlap_upstream` | int | Number of overlap-upstream genes (typically 2 for human: ATP8 + ND4L) |
-| `median_period3_score_overlap_upstream` | float | Median `period3_score` over the overlap-upstream genes — these typically also score high in the 3' UTR panel because the "3' UTR" window is actually inside another ORF |
-| `max_period3_score_overlap_upstream` | float | Max over the overlap-upstream genes |
+| `sample`, `read_length`, `gene_set`, `region`, `n_genes`, `n_sites_total`, `n_nt` | (as above) | |
+| `amp_at_3nt` | float | Direct DFT amplitude at exactly period 3.0 |
+| `background_amp_median` | float | Median amplitude in [2..10] nt excluding (2.8, 3.2) |
+| `spectral_ratio_3nt` | float | `amp_at_3nt / background_amp_median` |
+| `snr_call` | string | Tier (see table above) |
+| `transcripts` | string | Semicolon-joined list of transcripts that contributed |
 
 ## Plot bundle
 
-Per `(sample, read_length)`, two figures land under
+Per `(sample, read_length)`, three figures land under
 `<output>/rpf/qc/fourier_spectrum/<sample>/`:
 
-* `<sample>_<read_length>nt_combined.{png,svg}` — Wakigawa-style
-  stacked two-panel overlay (ORF top, 3' UTR bottom), one trace per
-  gene EXCEPT the overlap-upstream pair. This is the publication-grade
-  figure.
-* `<sample>_<read_length>nt_overlap_upstream.{png,svg}` — same layout
-  but only `MT-ATP8` and `MT-ND4L` (or whatever overlap-upstream genes
-  are present). Skipped when none are in the input. Its purpose is
-  diagnostic: a reviewer can confirm the overlap-upstream 3' UTR
-  panel really does show period-3 signal (because the "3' UTR" window
-  is inside the next ORF), which validates the rationale for excluding
-  these genes from the combined panel.
+* `<sample>_<length>nt_combined.{png,svg}` — single trace per panel
+  drawn from the combined gene_set metagene.
+* `<sample>_<length>nt_ATP86.{png,svg}` — junction-bracketed ATP86
+  analysis (ATP8 frame top, ATP6 frame bottom).
+* `<sample>_<length>nt_ND4L4.{png,svg}` — junction-bracketed ND4L4
+  analysis (ND4L frame top, ND4 frame bottom).
 
 Each PNG carries the canonical per-plot `.metadata.json` sidecar so
 `mitoribopy validate-figures` can score it without re-running
-matplotlib.
+matplotlib. The sidecar's `panel_layout` field records which
+transcript drives each panel (auditability).
 
-## Overlap-upstream policy
+In-figure annotations on each panel show the `spectral_ratio_3nt`
+value and the `snr_call` tier so a reviewer can read the headline
+number off the plot.
 
-The annotated stop codon of `MT-ATP8` sits inside the `MT-ATP6` ORF;
-the annotated stop codon of `MT-ND4L` sits inside the `MT-ND4` ORF.
-For these two genes the 100-nt window labelled "3' UTR" is not really
-3' UTR — it's another ORF being translated, so the 3' UTR panel will
-show period-3 signal that has nothing to do with stop-codon
-termination behaviour. Wakigawa et al. handle this by excluding
-both genes from the combined figure entirely.
+## Statistical hardening (TODO)
 
-This package preserves Wakigawa's exclusion in the **combined data**
-(combined panel of the plot, `*_combined` columns of the summary
-table) but **always scores the genes individually** so a reviewer can
-look at them deliberately:
+Two follow-ups marked TODO in
+`src/mitoribopy/analysis/fourier_spectrum.py`:
 
-* per-gene rows in `fourier_spectrum.tsv` and
-  `fourier_period3_score.tsv` include `MT-ATP8` and `MT-ND4L` with
-  `is_overlap_upstream_orf=true`;
-* the combined-summary TSV reports them in `*_overlap_upstream`
-  columns separate from the `*_combined` columns;
-* a separate `*_overlap_upstream.png` figure renders just these
-  genes.
+* **Bootstrap CI over genes** — resample the per-gene normalised
+  tracks with replacement (~1000 times), recompute the metagene and
+  `amp_at_3nt` per resample, take the 2.5%-97.5% percentile. Adds
+  `amp_3nt_ci_low`, `amp_3nt_ci_high` columns + a shaded ribbon on
+  the plot. Tells you "how sensitive is this peak to which genes
+  carry it."
+* **Circular-shift permutation null** — shift each per-gene track by
+  a random offset, re-aggregate, recompute the spectral ratio. Take
+  the empirical p-value. Adds a `permutation_p` column. Tells you "is
+  this peak unlikely under a randomly-phased signal of the same
+  magnitude."
 
-The recognised gene names are case-insensitive and treat `_` as `-`:
-`MT-ATP8`, `MTATP8`, `ATP8`, `MT-ND4L`, `MTND4L`, `ND4L`. Fused-FASTA
-spellings (`ATP86`, `ND4L4`) are deliberately NOT excluded — those
-entries cover the whole combined region and have a legitimate 3' UTR
-downstream of the natural transcript-end stop codon.
-
-To override the exclusion (analyse the overlap-upstream genes as part
-of the combined data anyway), bypass the predicate by editing the
-score / summary tables directly with pandas — the per-gene rows have
-the boolean flag set so the filtering is one line of code.
+Neither changes the value of `spectral_ratio_3nt`; they tell you how
+much to trust it. Implement when reviewers ask.
 
 ## Reading the figure
 
 A healthy mt-Ribo-seq library produces:
 
-1. A **sharp peak at period 3 nt in the ORF panel** for every gene
-   trace (the published amplitude reaches ~5-12 in the Wakigawa
-   figures, but the absolute scale is depth-dependent — compare across
-   genes within a sample, not across samples).
-2. A **flat 3' UTR panel** with no period-3 peak (any signal there
-   means non-translating mitoribosome footprints landed in the 3'
-   UTR — which is the diagnostic for the published `mtRF1L KO`
-   stop-codon read-through story).
-3. The **overlap-upstream panel** shows period-3 in BOTH panels (the
-   "3' UTR" window is really inside the next ORF, so it carries
-   translating-ribosome signal).
+1. A **sharp peak at period 3 nt in BOTH ORF panels** of the
+   `combined` figure — `spectral_ratio_3nt >= 5`. Agreement between
+   `orf_start` and `orf_stop` is the strongest evidence that
+   elongation engages frame-3 reading promptly after initiation AND
+   keeps phasing through to termination.
+2. The **ATP86 panels** show period-3 peaks in EACH of the two
+   frames (ATP8 frame and ATP6 frame), confirming the bicistronic
+   transcript is translated in both reading frames.
+3. The **ND4L4 panels** show similar two-frame translation evidence.
 
-If the ORF panel is flat or the 3' UTR panel matches the ORF panel
-amplitude, the offset assignment for that read length is suspect.
-Cross-check `frame_counts_by_sample_length.tsv` → `qc_call` for the
-same length.
+If the `orf_start` panel is flat but `orf_stop` is healthy, the
+offset assignment for that read length is suspect — most often the
+5'-end-to-P-site offset is correct for elongation footprints but
+wrong for initiation footprints. Cross-check `metagene_start_p_site.svg`
+for the same length.
+
+## Comparing to Wakigawa et al. (2025)
+
+The published Wakigawa figure overlays per-gene FFT traces at
+`W = 100 nt` for a single read length. Our v0.8.0 implementation is
+strictly stronger:
+
+* Aggregates per-gene normalised tracks (Wakigawa Methods, page 16).
+* Skips 5 codons after AUG and 1 codon before stop (Wakigawa Methods).
+* Uses `W = 99 nt` (multiple of 3) for clean integer-bin period-3
+  alignment, vs Wakigawa's 100 nt.
+* Direct DFT at exactly period 3.0, not bin-snapped.
+* Reports the spectral_ratio_3nt with explicit tier labels.
+
+To exactly reproduce the published `W = 100` recipe (e.g. for a
+direct figure comparison), pass `--periodicity-fourier-window-nt 100`
+on the rpf or periodicity subcommand. The 99 nt default is what we
+recommend for new analyses.

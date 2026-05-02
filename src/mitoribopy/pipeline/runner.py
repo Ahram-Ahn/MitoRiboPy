@@ -778,58 +778,13 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Skip the periodicity QC step entirely when set to false.",
     )
     optional_group.add_argument(
-        "--periodicity-exclude-start-codons",
-        "--periodicity_exclude_start_codons",
-        type=int,
-        default=None,
-        help=(
-            "Number of codons after CDS start to mask out of frame "
-            "statistics (initiation pause). Default: 6 (per spec)."
-        ),
-    )
-    optional_group.add_argument(
-        "--periodicity-exclude-stop-codons",
-        "--periodicity_exclude_stop_codons",
-        type=int,
-        default=None,
-        help=(
-            "Number of codons before CDS stop to mask (termination "
-            "pause). Default: 3 (per spec)."
-        ),
-    )
-    optional_group.add_argument(
-        "--periodicity-phase-score",
-        "--periodicity_phase_score",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Compute a ribotricer-style gene-level phase_score column "
-            "in gene_periodicity.tsv. Default: enabled."
-        ),
-    )
-    optional_group.add_argument(
-        "--periodicity-fourier-spectrum",
-        "--periodicity_fourier_spectrum",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Compute the Wakigawa-style amplitude spectrum per "
-            "(sample, read_length, gene, region). Writes "
-            "fourier_spectrum.tsv, fourier_period3_score.tsv, "
-            "fourier_period3_summary.tsv plus per-(sample, length) "
-            "two-panel overlay plots under fourier_spectrum/. "
-            "Default: enabled."
-        ),
-    )
-    optional_group.add_argument(
         "--periodicity-fourier-window-nt",
         "--periodicity_fourier_window_nt",
         type=int,
         default=None,
         help=(
-            "Window (nt) on each side of the canonical stop codon for "
-            "the Fourier spectrum. Default: 100 (Wakigawa published "
-            "value)."
+            "Window (nt) for the Fourier metagene per region (orf_start, "
+            "orf_stop). Default: 99 (33 codons, Wakigawa-recommended)."
         ),
     )
     optional_group.add_argument(
@@ -839,18 +794,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=None,
         help=(
             "Window (nt) up/downstream of start/stop codons for the "
-            "metagene plots. Default: 300 (legacy MitoRiboPy window). "
-            "Spec recommends 90 for tighter publication-ready plots."
-        ),
-    )
-    optional_group.add_argument(
-        "--periodicity-min-reads-per-length",
-        "--periodicity_min_reads_per_length",
-        type=int,
-        default=None,
-        help=(
-            "Minimum CDS sites required to score a read length. "
-            "Default: 200 (pipeline). Bump to 1000 to match the spec."
+            "metagene_start.tsv / metagene_stop.tsv plots. Default: 90."
         ),
     )
     return parser

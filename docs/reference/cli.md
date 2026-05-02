@@ -20,7 +20,7 @@ Generated against MitoRiboPy v0.6.2.
 | [`mitoribopy rpf`](#mitoribopy-rpf) | Ribo-seq analysis from BED/BAM inputs. |
 | [`mitoribopy rnaseq`](#mitoribopy-rnaseq) | Translation efficiency (TE / delta-TE) from paired RNA-seq + Ribo-seq. Default flow: pass --rna-fastq + --ribo-fastq + --reference-fasta and the subcommand runs trimming, bowtie2 alignment, per-transcript counting, and pyDESeq2 itself before emitting te.tsv, delta_te.tsv, and plots. Alternative: pass --de-table from a prior external DESeq2 / Xtail / Anota2Seq run together with --ribo-dir; this path is mutually exclusive with --rna-fastq and enforces a SHA256 reference-consistency gate. |
 | [`mitoribopy all`](#mitoribopy-all) | End-to-end orchestrator: align + rpf, plus rnaseq when the config carries an 'rnaseq' section configured for either flow (from-FASTQ via 'rna_fastq' + 'reference_fasta', or external-DE via 'de_table'). Writes a composed run_manifest.json with tool versions, parameters, and input/output hashes across all three stages. |
-| [`mitoribopy periodicity`](#mitoribopy-periodicity) | Quantify and summarise 3-nt periodicity from an already-assigned P-site / A-site coordinate table (no offset recomputation). |
+| [`mitoribopy periodicity`](#mitoribopy-periodicity) | Quantify 3-nt periodicity by running the Wakigawa metagene Fourier analysis on a pre-assigned site table. |
 | [`mitoribopy migrate-config`](#mitoribopy-migrateconfig) | Rewrite legacy MitoRiboPy YAML keys to their canonical names. Input is read from a path; output is written to stdout (the change log goes to stderr). Use to upgrade old pipeline configs without manually hunting down every renamed key. |
 | [`mitoribopy validate-config`](#mitoribopy-validateconfig) | Pre-flight a MitoRiboPy YAML / JSON / TOML config: parse, canonicalise legacy keys, check file paths and mutually-exclusive sections, and resolve rnaseq.mode against supplied inputs. Exit code is 0 on success, 2 when at least one error was found. |
 | [`mitoribopy validate-reference`](#mitoribopy-validatereference) | Pre-flight a custom mitochondrial reference: check that the FASTA and annotation CSV are consistent (matching transcript IDs, matching lengths, CDS divisible by 3, valid start / stop codons under the selected codon table). |
@@ -166,13 +166,8 @@ usage: mitoribopy rpf [-h] [--config CONFIG] -f REF_FASTA [-s STRAIN]
                       [--read-coverage-rpm | --no-read-coverage-rpm | --read_coverage_rpm | --no-read_coverage_rpm]
                       [--igv-export | --no-igv-export | --igv_export | --no-igv_export]
                       [--periodicity-enabled | --no-periodicity-enabled | --periodicity_enabled | --no-periodicity_enabled]
-                      [--periodicity-exclude-start-codons PERIODICITY_EXCLUDE_START_CODONS]
-                      [--periodicity-exclude-stop-codons PERIODICITY_EXCLUDE_STOP_CODONS]
-                      [--periodicity-phase-score | --no-periodicity-phase-score | --periodicity_phase_score | --no-periodicity_phase_score]
-                      [--periodicity-fourier-spectrum | --no-periodicity-fourier-spectrum | --periodicity_fourier_spectrum | --no-periodicity_fourier_spectrum]
                       [--periodicity-fourier-window-nt PERIODICITY_FOURIER_WINDOW_NT]
                       [--periodicity-metagene-nt PERIODICITY_METAGENE_NT]
-                      [--periodicity-min-reads-per-length PERIODICITY_MIN_READS_PER_LENGTH]
 
 Run the MitoRiboPy Ribo-seq analysis stage on BED / BAM inputs.
 This subcommand filters reads, estimates P-site / A-site offsets,
@@ -443,20 +438,10 @@ Optional Modules:
                                       Export per-sample BedGraph tracks (P-site / A-site) under <output>/igv_tracks/<sample>/, suitable for opening in IGV.
   --periodicity-enabled, --no-periodicity-enabled, --periodicity_enabled, --no-periodicity_enabled
                                       Skip the periodicity QC step entirely when set to false. [default: True]
-  --periodicity-exclude-start-codons PERIODICITY_EXCLUDE_START_CODONS, --periodicity_exclude_start_codons PERIODICITY_EXCLUDE_START_CODONS
-                                      Number of codons after CDS start to mask out of frame statistics (initiation pause). Default: 6 (per spec).
-  --periodicity-exclude-stop-codons PERIODICITY_EXCLUDE_STOP_CODONS, --periodicity_exclude_stop_codons PERIODICITY_EXCLUDE_STOP_CODONS
-                                      Number of codons before CDS stop to mask (termination pause). Default: 3 (per spec).
-  --periodicity-phase-score, --no-periodicity-phase-score, --periodicity_phase_score, --no-periodicity_phase_score
-                                      Compute a ribotricer-style gene-level phase_score column in gene_periodicity.tsv. Default: enabled.
-  --periodicity-fourier-spectrum, --no-periodicity-fourier-spectrum, --periodicity_fourier_spectrum, --no-periodicity_fourier_spectrum
-                                      Compute the Wakigawa-style amplitude spectrum per (sample, read_length, gene, region). Writes fourier_spectrum.tsv, fourier_period3_score.tsv, fourier_period3_summary.tsv plus per-(sample, length) two-panel overlay plots under fourier_spectrum/. Default: enabled.
   --periodicity-fourier-window-nt PERIODICITY_FOURIER_WINDOW_NT, --periodicity_fourier_window_nt PERIODICITY_FOURIER_WINDOW_NT
-                                      Window (nt) on each side of the canonical stop codon for the Fourier spectrum. Default: 100 (Wakigawa published value).
+                                      Window (nt) for the Fourier metagene per region (orf_start, orf_stop). Default: 99 (33 codons, Wakigawa-recommended).
   --periodicity-metagene-nt PERIODICITY_METAGENE_NT, --periodicity_metagene_nt PERIODICITY_METAGENE_NT
-                                      Window (nt) up/downstream of start/stop codons for the metagene plots. Default: 300 (legacy MitoRiboPy window). Spec recommends 90 for tighter publication-ready plots.
-  --periodicity-min-reads-per-length PERIODICITY_MIN_READS_PER_LENGTH, --periodicity_min_reads_per_length PERIODICITY_MIN_READS_PER_LENGTH
-                                      Minimum CDS sites required to score a read length. Default: 200 (pipeline). Bump to 1000 to match the spec.
+                                      Window (nt) up/downstream of start/stop codons for the metagene_start.tsv / metagene_stop.tsv plots. Default: 90.
 
 Examples:
   mitoribopy rpf --strain h.sapiens --fasta ref.fa --directory beds \
@@ -628,50 +613,27 @@ Inspect a stage's full flag list:
 
 ```text
 usage: mitoribopy periodicity [-h] --site-table PATH --output DIR
-                              [--site {p,a}] [--expected-frame EXPECTED_FRAME]
-                              [--min-reads-per-length MIN_READS_PER_LENGTH]
-                              [--min-reads-per-gene MIN_READS_PER_GENE]
-                              [--good-frame-fraction GOOD_FRAME_FRACTION]
-                              [--warn-frame-fraction WARN_FRAME_FRACTION]
-                              [--exclude-start-codons EXCLUDE_START_CODONS]
-                              [--exclude-stop-codons EXCLUDE_STOP_CODONS]
-                              [--include-overlaps] [--phase-score]
-                              [--fourier-spectrum] [--no-fourier-spectrum]
-                              [--fourier-window-nt N] [--fourier-period-min P]
-                              [--fourier-period-max P] [--fourier-no-plots]
-                              [--metagene-nt METAGENE_NT]
+                              [--site {p,a}] [--fourier-window-nt N]
+                              [--drop-codons-after-start N]
+                              [--drop-codons-before-stop N]
+                              [--min-mean-coverage X] [--min-total-counts N]
+                              [--no-plots]
 
-Quantify and summarise 3-nt periodicity from an already-assigned P-site / A-site coordinate table (no offset recomputation).
+Quantify 3-nt periodicity by running the Wakigawa metagene Fourier analysis on a pre-assigned site table.
 
 options:
-  -h, --help                          show this help message and exit
-  --site-table PATH                   Per-read site table; required columns: sample, gene, transcript_id, read_length, site_type, site_pos, cds_start, cds_end. `count` is optional (defaults to 1).
-  --output DIR                        Directory for the periodicity QC bundle.
-  --site {p,a}                        Ribosomal site to score. Default: p. [default: p]
-  --expected-frame EXPECTED_FRAME     Expected CDS frame after site assignment. Default: 0.
-  --min-reads-per-length MIN_READS_PER_LENGTH
-                                      Minimum CDS sites required to score a read length. [default: 1000]
-  --min-reads-per-gene MIN_READS_PER_GENE
-                                      Minimum CDS sites required to score a gene. [default: 50]
-  --good-frame-fraction GOOD_FRAME_FRACTION
-                                      Lower bound on expected_frame_fraction for qc_call=good. [default: 0.6]
-  --warn-frame-fraction WARN_FRAME_FRACTION
-                                      Lower bound on expected_frame_fraction for qc_call=warn. [default: 0.5]
-  --exclude-start-codons EXCLUDE_START_CODONS
-                                      Codons after CDS start to exclude (initiation pause). Default: 6. [default: 6]
-  --exclude-stop-codons EXCLUDE_STOP_CODONS
-                                      Codons before CDS stop to exclude (termination pause). Default: 3. [default: 3]
-  --include-overlaps                  Keep rows with is_overlap=true; default masks them when the column is present.
-  --phase-score                       Add a ribotricer-style gene-level phase_score column.
-  --fourier-spectrum                  Compute the Wakigawa-style amplitude spectrum per (sample, read_length, gene, region) and emit fourier_spectrum.tsv, fourier_period3_score.tsv, and fourier_period3_summary.tsv. ENABLED BY DEFAULT — pass --no-fourier-spectrum to skip. Replaces the legacy fft_period3_power.tsv output (single-scalar power ratio). [default: True]
-  --no-fourier-spectrum               Disable the Fourier-spectrum bundle. [default: True]
-  --fourier-window-nt N               Window size (nt) on each side of the canonical stop codon for the Fourier spectrum. Wakigawa default: 100. [default: 100]
-  --fourier-period-min P              Minimum period (nt) retained in the spectrum table and plot. Default: 2. [default: 2.0]
-  --fourier-period-max P              Maximum period (nt) retained in the spectrum table and plot. Default: 10. [default: 10.0]
-  --fourier-no-plots                  Skip the per-(sample, read_length) two-panel overlay plots; the TSVs are still written. [default: True]
-  --metagene-nt METAGENE_NT           Number of nucleotides upstream/downstream of start/stop codons for metagene plots. Default: 90 (per spec). [default: 90]
+  -h, --help                   show this help message and exit
+  --site-table PATH            Per-read site table; required columns: sample, gene, transcript_id, read_length, site_type, site_pos, cds_start, cds_end. `count` is optional (defaults to 1).
+  --output DIR                 Directory for the Fourier QC bundle.
+  --site {p,a}                 Ribosomal site to score. Default: p. [default: p]
+  --fourier-window-nt N        Window size (nt) per region. Default: 99 (33 codons, Wakigawa-recommended). Must be a multiple of 3 for clean period-3 alignment. [default: 99]
+  --drop-codons-after-start N  Codons after the AUG to skip in the orf_start window. Default: 5 (skip the initiation peak). [default: 5]
+  --drop-codons-before-stop N  Codons before the stop codon to skip in the orf_stop window. Default: 1 (skip the termination peak). [default: 1]
+  --min-mean-coverage X        Skip per-gene windows whose mean coverage is below X. Default: 0.1. [default: 0.1]
+  --min-total-counts N         Skip per-gene windows whose total site count is below N. Default: 30. [default: 30]
+  --no-plots                   Skip the per-(sample, read_length) figures; TSVs still written. [default: True]
 
-Frame definition: (site_pos - cds_start) mod 3. Frame 0 is the annotated coding frame. site_pos must be transcript-oriented (forward-strand-relative) and 0-based.
+Frame definition: (site_pos - cds_start) mod 3. The Fourier analysis is anchored at the start codon (orf_start) and the stop codon (orf_stop). site_pos must be transcript-oriented (forward-strand-relative) and 0-based.
 ```
 
 ## `mitoribopy migrate-config`

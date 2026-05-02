@@ -163,74 +163,38 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
         recommended_for="reviewer-spot-check",
     ),
     OutputDescriptor(
-        output_type="periodicity_qc_summary",
+        output_type="fourier_spectrum_combined",
         stage="rpf",
-        relative_path="rpf/qc/qc_summary.tsv",
+        relative_path="rpf/qc/fourier_spectrum_combined.tsv",
         description=(
-            "Per-sample 3-nt periodicity QC: best read length, "
-            "expected/dominant frame fractions, entropy bias, and an "
-            "overall good/warn/poor/low_depth call."
-        ),
-        recommended_for="reviewer-spot-check",
-        schema_key="periodicity_qc_summary.tsv",
-    ),
-    OutputDescriptor(
-        output_type="periodicity_qc_summary_md",
-        stage="rpf",
-        relative_path="rpf/qc/qc_summary.md",
-        description="Human-readable companion to qc/qc_summary.tsv.",
-        recommended_for="reviewer-spot-check",
-    ),
-    OutputDescriptor(
-        output_type="frame_counts_by_sample_length",
-        stage="rpf",
-        relative_path="rpf/qc/frame_counts_by_sample_length.tsv",
-        description=(
-            "Per-(sample, read length) frame fractions, frame "
-            "enrichment, entropy bias, and qc_call."
+            "Per-(sample, read_length, gene_set, region) Wakigawa "
+            "metagene amplitude curve over period 2-10 nt. "
+            "gene_set in {combined, ATP86, ND4L4}; region in {orf_start, "
+            "orf_stop}."
         ),
         recommended_for="downstream-scripting",
-        schema_key="frame_counts_by_sample_length.tsv",
+        schema_key="fourier_spectrum_combined.tsv",
     ),
     OutputDescriptor(
-        output_type="gene_periodicity",
+        output_type="fourier_period3_score_combined",
         stage="rpf",
-        relative_path="rpf/qc/gene_periodicity.tsv",
+        relative_path="rpf/qc/fourier_period3_score_combined.tsv",
         description=(
-            "Per-(sample, gene) frame fractions and qc_call; optional "
-            "phase_score column when --phase-score is enabled."
-        ),
-        recommended_for="downstream-scripting",
-        schema_key="gene_periodicity.tsv",
-    ),
-    OutputDescriptor(
-        output_type="frame_by_length",
-        stage="rpf",
-        relative_path="rpf/qc/by_length/frame_by_length.tsv",
-        description=(
-            "Per-(sample, read length) inclusion-policy diagnostics "
-            "(frame fractions, dominance, entropy, n CDS reads, "
-            "include_for_downstream flag, exclusion_reason)."
-        ),
-        recommended_for="downstream-scripting",
-    ),
-    OutputDescriptor(
-        output_type="length_inclusion_decisions",
-        stage="rpf",
-        relative_path="rpf/qc/by_length/length_inclusion_decisions.tsv",
-        description=(
-            "Distilled include/exclude verdict per (sample, read "
-            "length) with reason; mirrors frame_by_length.tsv."
+            "Per-(sample, read_length, gene_set, region) headline 3-nt "
+            "spectral ratio with snr_call (excellent / healthy / "
+            "modest / broken / no_signal)."
         ),
         recommended_for="reviewer-spot-check",
+        schema_key="fourier_period3_score_combined.tsv",
     ),
     OutputDescriptor(
         output_type="periodicity_metadata",
         stage="rpf",
-        relative_path="rpf/qc/by_length/periodicity.metadata.json",
+        relative_path="rpf/qc/periodicity.metadata.json",
         description=(
-            "Sidecar JSON recording the inclusion thresholds and "
-            "frame formula used for periodicity QC."
+            "Sidecar JSON recording the Fourier window, codon-skip "
+            "settings, gene_set definitions, and DFT method used for "
+            "the periodicity QC bundle."
         ),
         recommended_for="reviewer-spot-check",
     ),

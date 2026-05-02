@@ -47,7 +47,7 @@ jq -r '.warnings[] | "\(.severity)\t\(.code)\t\(.message)"' \
 | ---- | -------- | ----- | ------- | ----------- |
 | `W_CODON_RAW_COUNT_PRIMARY` | warn | rpf | Codon-correlation rendered with `--cor-metric raw_count`. | Re-run with `--cor-metric log2_density_rpm` for publication. |
 | `W_PERIODICITY_LOW_DEPTH` | warn | rpf | Sample has < `min_reads_per_length` assigned P-sites. | Treat as `low_depth`; do not use it to validate the offset choice. |
-| `W_PERIODICITY_WEAK` | warn | rpf | Expected-frame fraction below the warn threshold. | Inspect `frame_fraction_heatmap.svg` and `gene_periodicity.tsv`; consider tightening the read-length window. |
+| `W_PERIODICITY_WEAK` | warn | rpf | 3-nt spectral ratio below the warn threshold. | Inspect `fourier_period3_score_combined.tsv` (`snr_call` column) and the per-(sample, read_length) Fourier overlay PNGs under `rpf/qc/fourier_spectrum/`; consider tightening the read-length window. |
 
 ## Rnaseq / TE
 

@@ -1,81 +1,135 @@
-"""Wakigawa-style discrete-Fourier-transform periodicity analysis.
+"""Wakigawa-faithful metagene Fourier periodicity analysis.
 
-Replaces the legacy single-scalar ``fft_period3_power`` path. The
-contract here mirrors the published mt-Ribo-seq analysis from Wakigawa
-et al. (Mol Cell, 2025) — the only published DFT recipe that
-distinguishes translating mitoribosomes from background by comparing
-the period-3 amplitude of the **ORF window upstream of the canonical
-stop codon** with the matched **3′ UTR window downstream of it**.
+Replaces the legacy per-gene FFT overlay (`fft_period3_power.tsv` and the
+v0.7.x sum-coverage path). The contract follows the published mt-Ribo-seq
+recipe in Wakigawa et al. 2025 (bioRxiv 2025.05.03.652009): aggregate per-
+gene normalised tracks into a metagene FIRST, then run a single DFT.
 
-Why this replaces the old path
-------------------------------
+Why aggregate-then-DFT instead of per-gene overlay
+--------------------------------------------------
 
-The legacy ``calculate_fft_period3_ratio`` collapsed each (sample, gene)
-into ``power[k=1/3] / median(background)`` over the whole CDS. Three
-hidden weaknesses motivated the rewrite:
+* **Initiation pile-ups create flat broadband spectra.** The first
+  ~5 codons after every AUG carry massive ribosome occupancy
+  (initiation stalling). The Fourier transform of an impulse is a flat
+  spectrum across all frequencies — which smears period-3 energy
+  uniformly across periods 2-10 in the ORF figure. Wakigawa drops the
+  first 5 codons (15 nt) from every transcript.
 
-1. **Single number.** A reviewer cannot see whether the peak is
-   actually at period 3 or just leaked in from neighbours. The full
-   amplitude curve is the auditable artefact.
-2. **No 3′ UTR negative control.** The strongest defensible claim is
-   "ORF periodic AND 3′ UTR flat". Without the matched downstream DFT
-   the pipeline cannot verify it.
-3. **Whole-CDS window.** Long mt-mRNAs get dominated by transcript-
-   length-dependent low-frequency noise. Wakigawa fixes this with a
-   fixed 100-nt window anchored at the stop codon — comparable across
-   genes regardless of CDS length.
+* **Stop-codon stalling does the same on the 3' end.** Especially severe
+  for noncanonical-stop ORFs (MT-CO1: AGA; MT-ND6: AGG). Including the
+  stop trinucleotide adds another impulse. Wakigawa drops the last
+  codon (3 nt) before the stop.
+
+* **Per-gene 100 nt is structurally underpowered.** 33 codons of signal
+  per gene is too short for clean DFT on noisy data. Wakigawa
+  aggregates ~9 ORFs into one metagene; the averaging suppresses gene-
+  specific noise while reinforcing codon-locked 3-nt phasing.
+
+* **Coverage magnitude dominates raw overlays.** The highest-expression
+  gene (MT-ND6 in many libraries) buries every other trace. Per-gene
+  unit-mean normalisation equalises contributions before aggregation.
+
+* **Hann window + mean-centering kill spectral leakage.** Without them,
+  the DC component leaks into nearby frequencies and creates an upward
+  amplitude ramp toward periods 8-10 (the "rising tail" you see in the
+  raw figure).
 
 Window convention
 -----------------
 
-For a transcript with annotated ``stop_codon`` (the 0-based first nt
-of the stop codon trinucleotide):
+For a transcript with annotated ``start_codon`` and ``stop_codon`` (each
+the 0-based first nt of its trinucleotide):
 
-* ORF window  = ``[stop_codon - W, stop_codon)``     (W nt strictly upstream)
-* 3′ UTR      = ``[stop_codon + 3, stop_codon + 3 + W)``  (W nt strictly downstream)
+* ``orf_start`` = ``[start_codon + 15, start_codon + 15 + W)``
+  (skip 5 codons of initiation peak, then W nt of elongation signal)
+* ``orf_stop``  = ``[stop_codon - 3 - W, stop_codon - 3)``
+  (skip 1 codon before stop, then W nt of elongation signal upstream)
 
-The 3′ UTR window starts at ``stop_codon + 3`` so the stop-codon
-trinucleotide itself is never included in either panel. The default W
-is 100 nt — Wakigawa's published choice.
+Default ``W = 99 nt`` = 33 codons exactly. Avoids periods 3-leakage that
+non-multiple-of-3 windows produce.
 
-Read-length stratification
---------------------------
-
-The DFT is computed per (sample, read_length) — Wakigawa publishes
-"32 nt" panels because pooling lengths can mask a single bad-length
-class that's contaminating a healthy library. Every read length present
-in the input BED gets its own row in the long-format table; the plot
-layer renders one figure per (sample, read_length).
-
-Overlap-upstream gene policy
+Per-gene processing pipeline
 ----------------------------
 
-For human mt-mRNAs, the stop codons of MT-ATP8 and MT-ND4L sit
-*inside* the downstream MT-ATP6 and MT-ND4 ORFs respectively. Their
-"3′ UTR" 100-nt window is therefore not really 3′ UTR — it's another
-ORF being translated, so it can show period-3 signal that has nothing
-to do with stop-codon termination behaviour. These two genes are
-flagged via :func:`is_overlap_upstream_orf` and EXCLUDED from the
-combined per-(sample, length, region) summary. They are still scored
-per-gene so a reviewer can inspect them deliberately.
+For each (sample, read_length, transcript, region):
 
-Note that fused-FASTA spellings (``ATP86``, ``ND4L4``) are NOT
-excluded — those represent the whole combined region whose canonical
-stop codon is at the natural transcript end, so the 3′ UTR window is
-legitimate.
+  1. Build P-/A-site coverage vector of length W in window-local coords.
+  2. Filter: skip if ``mean(coverage) < 0.1`` or ``sum(coverage) < 30``
+     (low-coverage genes contribute noise without signal).
+  3. ``x = coverage / mean(coverage)``  -> unit-mean track.
+  4. ``x = x - mean(x)``                -> mean-centred.
+  5. ``x = x * np.hanning(W)``          -> Hann-windowed (reduces leakage).
 
-Amplitude normalization
------------------------
+Aggregation
+-----------
 
-The published figure plots a one-sided amplitude spectrum on the
-``|FFT[k]| * 2 / N`` scale (k > 0; the standard convention for
-estimating sinusoidal amplitude from a finite signal). This is the
-same scale matplotlib / scipy users see by default and is depth-
-sensitive on raw counts; per-gene scaling (e.g. divide by mean window
-density) is intentionally NOT applied here — Wakigawa overlays absolute
-amplitudes per gene so high-coverage genes are visually dominant, and
-flattening by depth would erase that signal. Downstream consumers that
-want depth-normalised scores can divide by ``n_sites``.
+For each (sample, read_length, region, gene_set):
+
+  metagene = element-wise mean across qualifying per-gene tracks.
+
+Three gene_sets are scored:
+
+* ``combined`` — every transcript in the dataset that is NOT part of
+  the ATP8/ATP6 or ND4L/ND4 overlap pair. Typically 9 mt-mRNAs in
+  human (MT-CO1, MT-CO2, MT-CO3, MT-CYB, MT-ND1, MT-ND2, MT-ND3,
+  MT-ND5, MT-ND6).
+* ``ATP86`` — junction-bracketed analysis of the bicistronic
+  ATP8/ATP6 region. The ``orf_stop`` panel uses the ATP8 transcript
+  (window leads up to ATP8's stop at the start of the overlap); the
+  ``orf_start`` panel uses the ATP6 transcript (window leaves ATP6's
+  start, just past the overlap). The two windows OVERLAP at the
+  bicistronic junction, so a period-3 peak in each panel says which
+  reading frame is dominant in that region.
+* ``ND4L4`` — same idea for the ND4L/ND4 bicistronic pair. The four-
+  nt overlap is too short to bracket inside both windows; the windows
+  flank the junction instead.
+
+Direct DFT (period-grid evaluation)
+-----------------------------------
+
+Standard ``np.fft.rfft`` evaluates at frequency bins
+``k / N`` for integer ``k``, which means the period-3 bin lands at
+``N / round(N / 3)`` — never exactly 3 except when ``N`` is a multiple
+of 3. We sidestep that by computing the DFT directly at arbitrary
+periods via
+
+    z          = sum_n x[n] * exp(-2j * pi * n / period)
+    amplitude  = |z| / sqrt(sum(x ** 2) + 1e-12)
+
+This evaluates exactly at ``period = 3.0`` and any other period the
+user requests. The denominator is the L2 norm of x, so amplitude is
+in ``[0, 1]`` and is comparable across windows of different length.
+
+The headline scalar is the **3-nt spectral ratio**:
+
+    spectral_ratio_3nt = amp(3.0) / median( amp(p) for p in 2..10
+                                            excluding 2.8 <= p <= 3.2 )
+
+Healthy library: ``ratio >= 5x``. Excellent: ``ratio >= 10x``.
+Frame-shifted / unrecycled: ``ratio < 2x``. The thresholds map to the
+``snr_call`` column ({"excellent", "healthy", "modest", "broken"}).
+
+Annotation contract
+-------------------
+
+This module reads ``transcript``, ``sequence_name``, ``sequence_aliases``,
+``start_codon``, ``stop_codon``, and ``l_tr`` from the annotation table.
+The chrom-to-transcript lookup checks both ``sequence_name`` and the
+semicolon-separated ``sequence_aliases``, so BED reads from a fused-
+FASTA chromosome (``ATP86``, ``ND4L4``) resolve to BOTH constituent
+transcripts (ATP8 + ATP6, or ND4L + ND4) for analysis. This is what
+makes the ATP86 / ND4L4 figures work without code-side aliasing.
+
+References
+----------
+
+* Wakigawa et al., "Mitochondrial translation termination, recycling,
+  reinitiation, and rescue for in-frame and out-of-frame contexts"
+  (bioRxiv 2025.05.03.652009). Methods: "Data analysis"; Figure
+  panels S1K, S2I, S5G, S6M, S8O, S9Q.
+* Window choice: "The first 5 codons of each transcript and overlapping
+  ORF regions in the bicistronic transcripts were omitted from the
+  calculation."
 """
 
 from __future__ import annotations
@@ -89,53 +143,114 @@ import pandas as pd
 
 __all__ = [
     "DEFAULT_WINDOW_NT",
-    "DEFAULT_PERIOD_RANGE",
-    "OVERLAP_UPSTREAM_GENES",
+    "DEFAULT_DROP_CODONS_AFTER_START",
+    "DEFAULT_DROP_CODONS_BEFORE_STOP",
+    "DEFAULT_PERIOD_GRID",
+    "DEFAULT_MIN_MEAN_COVERAGE",
+    "DEFAULT_MIN_TOTAL_COUNTS",
+    "REGIONS",
+    "GENE_SETS",
+    "OVERLAP_PAIR_TRANSCRIPTS",
+    "ATP86_GENE_SET",
+    "ND4L4_GENE_SET",
     "Region",
+    "GeneSet",
     "Site",
     "FourierWindow",
-    "compute_amplitude_spectrum",
-    "build_window_coverage",
-    "build_fourier_spectrum_table",
-    "build_period3_score_table",
-    "build_period3_summary_table",
-    "is_overlap_upstream_orf",
+    "build_chrom_to_transcripts",
+    "extract_per_gene_normalized_tracks",
+    "build_metagene",
+    "direct_dft_amplitude",
+    "compute_spectrum_grid",
+    "compute_spectral_ratio_3nt",
+    "snr_call_for_ratio",
+    "build_fourier_spectrum_combined_table",
+    "build_fourier_period3_score_combined_table",
 ]
 
 
-DEFAULT_WINDOW_NT: int = 100
-"""Width in nucleotides of the ORF / 3' UTR window (Wakigawa default)."""
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-DEFAULT_PERIOD_RANGE: tuple[float, float] = (2.0, 10.0)
-"""Period range (nt) the published figures span on the x-axis."""
+DEFAULT_WINDOW_NT: int = 99
+"""33 codons of signal (multiple of 3) — Wakigawa-recommended."""
 
-# Genes whose annotated stop codon sits inside another mt-mRNA ORF.
-# Their 3' UTR window is contaminated by translation of the downstream
-# ORF (MT-ATP6 for MT-ATP8; MT-ND4 for MT-ND4L). They are scored
-# per-gene but excluded from combined-genes summaries and combined-
-# overlay plots. Fused-FASTA names (e.g. "ATP86") are deliberately NOT
-# in this set: those entries cover the whole combined region and have a
-# legitimate 3' UTR downstream of the natural transcript-end stop codon.
-OVERLAP_UPSTREAM_GENES: frozenset[str] = frozenset({
-    "MT-ATP8", "MTATP8", "ATP8",
-    "MT-ND4L", "MTND4L", "ND4L",
+DEFAULT_DROP_CODONS_AFTER_START: int = 5
+"""Drop 5 codons (15 nt) after AUG to skip the initiation peak."""
+
+DEFAULT_DROP_CODONS_BEFORE_STOP: int = 1
+"""Drop 1 codon (3 nt) before stop to skip the termination peak."""
+
+DEFAULT_MIN_MEAN_COVERAGE: float = 0.1
+"""Skip per-gene windows whose mean coverage is below this threshold."""
+
+DEFAULT_MIN_TOTAL_COUNTS: int = 30
+"""Skip per-gene windows whose total site count is below this threshold."""
+
+DEFAULT_PERIOD_GRID: np.ndarray = np.round(np.arange(2.0, 10.05, 0.05), 2)
+"""Period grid (nt) for the publication-style spectrum plot."""
+
+# Bicistronic-overlap transcripts (and their fused-FASTA spellings).
+# Membership in this set excludes a transcript from the ``combined``
+# gene_set and routes it to either the ``ATP86`` or ``ND4L4`` gene_set
+# for separate analysis. Keys are case-insensitive; ``_`` is treated as
+# ``-`` at lookup.
+ATP86_GENE_SET: frozenset[str] = frozenset({
+    "ATP8", "MTATP8", "MT-ATP8",
+    "ATP6", "MTATP6", "MT-ATP6",
+    "ATP86", "MTATP86", "MT-ATP86",
 })
 
+ND4L4_GENE_SET: frozenset[str] = frozenset({
+    "ND4L", "MTND4L", "MT-ND4L",
+    "ND4", "MTND4", "MT-ND4",
+    "ND4L4", "MTND4L4", "MT-ND4L4",
+})
 
-Region = Literal["orf", "utr3"]
+OVERLAP_PAIR_TRANSCRIPTS: frozenset[str] = ATP86_GENE_SET | ND4L4_GENE_SET
+
+
+Region = Literal["orf_start", "orf_stop"]
+GeneSet = Literal["combined", "ATP86", "ND4L4"]
 Site = Literal["a", "p", "5p"]
 
 
-def is_overlap_upstream_orf(name: str | None) -> bool:
-    """Return True only for genes whose stop codon is INSIDE another ORF.
+REGIONS: tuple[Region, Region] = ("orf_start", "orf_stop")
+GENE_SETS: tuple[GeneSet, GeneSet, GeneSet] = ("combined", "ATP86", "ND4L4")
 
-    Matching is case-insensitive and treats ``_`` as ``-``. See
-    :data:`OVERLAP_UPSTREAM_GENES` for the recognised spellings.
-    """
+
+# ATP86 panel mapping: which transcript drives each panel of the ATP86
+# figure. The orf_stop panel uses ATP8's window (upstream of the ATP8
+# stop codon, leading INTO the bicistronic junction). The orf_start
+# panel uses ATP6's window (downstream of the ATP6 start codon, leaving
+# the junction). With the standard W=99 / drop_5_codons_after_start /
+# drop_1_codon_before_stop defaults, the two windows overlap at the
+# junction: ATP8 orf_stop = [103, 202), ATP6 orf_start = [177, 276),
+# overlap = [177, 202). The user's interest in "the overlapping junction"
+# is satisfied here.
+_ATP86_PANEL_TRANSCRIPT: dict[str, str] = {
+    "orf_stop": "ATP8",
+    "orf_start": "ATP6",
+}
+
+# ND4L4 panel mapping. The 4-nt ND4L/ND4 overlap (nt 290-294) is too
+# short to fall inside both windows; with W=99 the orf_stop of ND4L
+# ends at 291 and orf_start of ND4 begins at 305, flanking the junction.
+_ND4L4_PANEL_TRANSCRIPT: dict[str, str] = {
+    "orf_stop": "ND4L",
+    "orf_start": "ND4",
+}
+
+
+def _normalize_gene_name(name: str | None) -> str:
     if name is None:
-        return False
-    s = str(name).strip().upper().replace("_", "-")
-    return s in OVERLAP_UPSTREAM_GENES
+        return ""
+    return str(name).strip().upper().replace("_", "-")
+
+
+def _is_in_set(name: str | None, gene_set: frozenset[str]) -> bool:
+    return _normalize_gene_name(name) in gene_set
 
 
 # ---------------------------------------------------------------------------
@@ -145,12 +260,7 @@ def is_overlap_upstream_orf(name: str | None) -> bool:
 
 @dataclass(frozen=True)
 class FourierWindow:
-    """Resolved nt-coordinate window for one (transcript, region) pair.
-
-    ``lo`` is inclusive, ``hi`` is exclusive — a half-open interval over
-    transcript-local nt coordinates. ``valid`` is False when the window
-    falls off either end of the transcript (the caller drops these).
-    """
+    """Resolved nt-coordinate window for one (transcript, region)."""
 
     transcript: str
     region: Region
@@ -167,42 +277,113 @@ def _resolve_window(
     *,
     transcript: str,
     region: Region,
+    start_codon: int,
     stop_codon: int,
     transcript_length: int,
     window_nt: int,
+    drop_codons_after_start: int,
+    drop_codons_before_stop: int,
 ) -> FourierWindow:
-    """Compute the nt-coordinate window for one (transcript, region)."""
-    if region == "orf":
-        lo = stop_codon - window_nt
-        hi = stop_codon
-    elif region == "utr3":
-        lo = stop_codon + 3
-        hi = stop_codon + 3 + window_nt
+    """Compute the half-open ``[lo, hi)`` nt window for one (tx, region)."""
+    if region == "orf_start":
+        skip = drop_codons_after_start * 3
+        lo = start_codon + skip
+        hi = lo + window_nt
+        valid = (
+            lo >= 0
+            and hi <= transcript_length
+            and hi <= stop_codon
+            and (hi - lo) == window_nt
+        )
+    elif region == "orf_stop":
+        skip = drop_codons_before_stop * 3
+        hi = stop_codon - skip
+        lo = hi - window_nt
+        valid = (
+            lo >= 0
+            and lo >= start_codon + drop_codons_after_start * 3
+            and hi <= transcript_length
+            and (hi - lo) == window_nt
+        )
     else:  # pragma: no cover - Literal guards this at the boundary
-        raise ValueError(f"region must be 'orf' or 'utr3', got {region!r}")
-    valid = lo >= 0 and hi <= transcript_length and (hi - lo) == window_nt
+        raise ValueError(
+            "region must be 'orf_start' or 'orf_stop', got " + repr(region)
+        )
     return FourierWindow(
         transcript=transcript, region=region, lo=lo, hi=hi, valid=valid,
     )
 
 
 # ---------------------------------------------------------------------------
-# Per-window coverage + spectrum
+# Chrom -> transcripts mapping (handles fused-FASTA aliases)
 # ---------------------------------------------------------------------------
 
 
-def build_window_coverage(
-    site_positions: np.ndarray,
-    *,
-    window: FourierWindow,
-) -> np.ndarray:
-    """Return a length-W coverage vector for the given window.
+def _split_aliases(value) -> list[str]:
+    if value is None:
+        return []
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return []
+    return [token.strip() for token in s.split(";") if token.strip()]
 
-    *site_positions* is a 1-D integer array of P-site or A-site nt
-    positions (transcript-local, same coordinate system as
-    ``window.lo``/``window.hi``). Positions outside the window are
-    silently dropped.
+
+def build_chrom_to_transcripts(annotation_df: pd.DataFrame) -> dict[str, list[str]]:
+    """Map every BED chromosome name to the list of transcripts on it.
+
+    The mapping checks ``sequence_name`` first, then each entry in the
+    semicolon-separated ``sequence_aliases`` field. This is what allows
+    a fused-FASTA chromosome (``ATP86``) to resolve to BOTH constituent
+    transcripts (ATP8 + ATP6) for analysis.
     """
+    mapping: dict[str, list[str]] = {}
+    for _, row in annotation_df.iterrows():
+        transcript = str(row["transcript"]).strip()
+        if not transcript:
+            continue
+        chroms: list[str] = [str(row.get("sequence_name", "")).strip()]
+        chroms.extend(_split_aliases(row.get("sequence_aliases")))
+        # Always allow the transcript name itself as a chrom (some BEDs
+        # name the chromosome after the transcript directly).
+        chroms.append(transcript)
+        for chrom in chroms:
+            chrom = chrom.strip()
+            if not chrom:
+                continue
+            mapping.setdefault(chrom, [])
+            if transcript not in mapping[chrom]:
+                mapping[chrom].append(transcript)
+    return mapping
+
+
+# ---------------------------------------------------------------------------
+# Per-gene coverage extraction + normalisation
+# ---------------------------------------------------------------------------
+
+
+_BED_REQUIRED_COLS: tuple[str, ...] = (
+    "sample_name", "chrom", "read_length", "P_site",
+)
+_ANNOTATION_REQUIRED_COLS: tuple[str, ...] = (
+    "transcript", "sequence_name", "start_codon", "stop_codon", "l_tr",
+)
+
+
+def _resolve_site_offset(site: Site) -> int:
+    site = str(site).lower()  # type: ignore[assignment]
+    if site == "p":
+        return 0
+    if site == "a":
+        return 3
+    if site == "5p":
+        return 0
+    raise ValueError("site must be 'a', 'p', or '5p', got " + repr(site))
+
+
+def _build_window_coverage(
+    site_positions: np.ndarray, *, window: FourierWindow,
+) -> np.ndarray:
+    """Return a length-W coverage vector for the given window."""
     width = window.width
     out = np.zeros(width, dtype=float)
     if width == 0 or site_positions.size == 0:
@@ -215,311 +396,409 @@ def build_window_coverage(
     return out
 
 
-def compute_amplitude_spectrum(
-    coverage: np.ndarray,
-    *,
-    period_range: tuple[float, float] = DEFAULT_PERIOD_RANGE,
-) -> pd.DataFrame:
-    """Return ``DataFrame[period_nt, amplitude]`` from a 1-D coverage signal.
-
-    Subtracts the mean (so the DC component is dropped), runs
-    :func:`numpy.fft.rfft`, converts frequency bins (cycles per nt) to
-    period bins (nt per cycle), and restricts the result to the
-    requested period range (default 2-10 nt).
-
-    Amplitude is the single-sided spectrum ``|FFT[k]| * 2 / N`` for
-    k > 0 — the convention that gives back the peak amplitude of a
-    pure sinusoid in the input. See module docstring for why we do
-    NOT depth-normalise.
-
-    Returns an empty DataFrame for inputs with fewer than 2 *
-    ``ceil(period_range[1])`` samples or zero variance — there isn't
-    enough signal to estimate a spectrum at that resolution.
-    """
-    x = np.asarray(coverage, dtype=float)
-    n = x.size
-    period_lo, period_hi = float(period_range[0]), float(period_range[1])
-    if n < int(np.ceil(period_hi)) * 2:
-        return pd.DataFrame(columns=["period_nt", "amplitude"])
-    x_centered = x - float(np.nanmean(x))
-    if not np.isfinite(x_centered).any() or float(np.nanvar(x_centered)) <= 1e-12:
-        return pd.DataFrame(columns=["period_nt", "amplitude"])
-    spectrum = np.abs(np.fft.rfft(np.nan_to_num(x_centered)))
-    if n > 0:
-        spectrum = spectrum * (2.0 / n)
-    freqs = np.fft.rfftfreq(n, d=1.0)
-    if freqs.size < 2:
-        return pd.DataFrame(columns=["period_nt", "amplitude"])
-    nonzero = freqs > 0
-    periods = 1.0 / freqs[nonzero]
-    amplitudes = spectrum[nonzero]
-    keep = (periods >= period_lo) & (periods <= period_hi)
-    return pd.DataFrame({
-        "period_nt": periods[keep],
-        "amplitude": amplitudes[keep],
-    })
+def _normalize_and_window(
+    coverage: np.ndarray, *, hann: np.ndarray,
+) -> np.ndarray:
+    """Per-gene Wakigawa preprocessing: unit-mean, mean-centre, Hann."""
+    mean_cov = float(np.mean(coverage))
+    if mean_cov <= 0:
+        return np.zeros_like(coverage)
+    x = coverage / mean_cov
+    x = x - float(np.mean(x))
+    return x * hann
 
 
-# ---------------------------------------------------------------------------
-# Per (sample, length, gene, region) long-format table
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _PerGeneTrack:
+    """One qualifying per-(sample, read_length, gene_set, region, transcript) track."""
+    sample: str
+    read_length: int
+    gene_set: GeneSet
+    region: Region
+    transcript: str
+    n_sites: int
+    mean_coverage: float
+    raw_coverage: np.ndarray
+    normalized: np.ndarray  # unit-mean, mean-centred, Hann-windowed
 
 
-_ANNOTATION_REQUIRED_COLS: tuple[str, ...] = (
-    "transcript", "sequence_name", "stop_codon", "l_tr",
-)
-_BED_REQUIRED_COLS: tuple[str, ...] = (
-    "sample_name", "chrom", "read_length", "P_site",
-)
-
-
-def _resolve_site_offset(site: Site) -> int:
-    """Translate a site-name into a nt offset added to ``P_site``.
-
-    Wakigawa uses A-site assignment, so the default is +3.
-    """
-    site = str(site).lower()  # type: ignore[assignment]
-    if site == "p":
-        return 0
-    if site == "a":
-        return 3
-    if site == "5p":
-        # Caller must supply ``5p_site`` instead of ``P_site``; offset 0
-        # is recorded in metadata for provenance only.
-        return 0
-    raise ValueError(f"site must be 'a', 'p', or '5p', got {site!r}")
-
-
-def build_fourier_spectrum_table(
+def extract_per_gene_normalized_tracks(
     bed_with_psite_and_gene: pd.DataFrame,
     annotation_df: pd.DataFrame,
     *,
     samples: Iterable[str],
     window_nt: int = DEFAULT_WINDOW_NT,
-    period_range: tuple[float, float] = DEFAULT_PERIOD_RANGE,
+    drop_codons_after_start: int = DEFAULT_DROP_CODONS_AFTER_START,
+    drop_codons_before_stop: int = DEFAULT_DROP_CODONS_BEFORE_STOP,
+    min_mean_coverage: float = DEFAULT_MIN_MEAN_COVERAGE,
+    min_total_counts: int = DEFAULT_MIN_TOTAL_COUNTS,
     site: Site = "a",
-) -> pd.DataFrame:
-    """Long-format ``[sample, read_length, gene, region, period_nt, amplitude]`` table.
+) -> list[_PerGeneTrack]:
+    """Extract per-(sample, length, gene_set, region, transcript) tracks.
 
-    Iterates every (sample, read_length, transcript, region) cell,
-    builds the windowed coverage, and emits the amplitude spectrum.
-    Genes whose window falls off the transcript ends are dropped.
-
-    Adds an ``is_overlap_upstream_orf`` boolean column so downstream
-    consumers can split the combined-data view from the diagnostic
-    view without re-deriving the predicate.
+    Each track is the Wakigawa-preprocessed coverage vector ready to be
+    aggregated into a metagene. Tracks failing the min-coverage / min-
+    count filters are dropped silently and not returned.
     """
-    cols = [
-        "sample", "read_length", "gene", "transcript_id",
-        "region", "n_sites", "n_nt", "period_nt", "amplitude",
-        "is_overlap_upstream_orf",
-    ]
-    if bed_with_psite_and_gene is None or bed_with_psite_and_gene.empty:
-        return pd.DataFrame(columns=cols)
     missing = [c for c in _BED_REQUIRED_COLS if c not in bed_with_psite_and_gene.columns]
     if missing:
         raise ValueError(
-            f"bed_with_psite_and_gene is missing required column(s): {missing}"
+            "bed_with_psite_and_gene is missing required column(s): " + repr(missing)
         )
-    if annotation_df is None or annotation_df.empty:
-        return pd.DataFrame(columns=cols)
     ann_missing = [c for c in _ANNOTATION_REQUIRED_COLS if c not in annotation_df.columns]
     if ann_missing:
         raise ValueError(
-            f"annotation_df is missing required column(s): {ann_missing}"
+            "annotation_df is missing required column(s): " + repr(ann_missing)
         )
 
     samples_set = {str(s) for s in samples}
     if not samples_set:
-        return pd.DataFrame(columns=cols)
+        return []
 
     site_offset = _resolve_site_offset(site)
-
-    ann = annotation_df.set_index("transcript")[["stop_codon", "l_tr"]]
-    chrom_to_tx = annotation_df.set_index("sequence_name")["transcript"].to_dict()
+    chrom_to_txs = build_chrom_to_transcripts(annotation_df)
+    ann = annotation_df.set_index("transcript")[
+        ["start_codon", "stop_codon", "l_tr"]
+    ]
 
     df = bed_with_psite_and_gene.copy()
-    df["transcript"] = df["chrom"].map(chrom_to_tx).fillna(df["chrom"])
-    df = df[df["transcript"].isin(ann.index)]
     df = df[df["sample_name"].astype(str).isin(samples_set)]
     if df.empty:
-        return pd.DataFrame(columns=cols)
+        return []
     df["site_pos"] = df["P_site"].astype(int) + site_offset
     df["read_length"] = df["read_length"].astype(int)
 
-    rows: list[dict] = []
-    group_cols = ["sample_name", "transcript", "read_length"]
-    for (sample, transcript, read_length), group in df.groupby(group_cols):
-        try:
-            stop_codon = int(ann.loc[transcript, "stop_codon"])
-            l_tr = int(ann.loc[transcript, "l_tr"])
-        except (KeyError, TypeError, ValueError):
-            continue
+    hann = np.hanning(window_nt)
 
+    tracks: list[_PerGeneTrack] = []
+    group_cols = ["sample_name", "chrom", "read_length"]
+    for (sample, chrom, read_length), group in df.groupby(group_cols):
+        chrom_str = str(chrom)
+        transcripts = chrom_to_txs.get(chrom_str, [])
+        if not transcripts:
+            continue
         site_positions = group["site_pos"].astype(int).to_numpy()
-        for region in ("orf", "utr3"):
-            window = _resolve_window(
-                transcript=transcript,
-                region=region,
-                stop_codon=stop_codon,
-                transcript_length=l_tr,
-                window_nt=window_nt,
-            )
-            if not window.valid:
+        for transcript in transcripts:
+            try:
+                start_codon = int(ann.loc[transcript, "start_codon"])
+                stop_codon = int(ann.loc[transcript, "stop_codon"])
+                l_tr = int(ann.loc[transcript, "l_tr"])
+            except (KeyError, TypeError, ValueError):
                 continue
-            coverage = build_window_coverage(site_positions, window=window)
-            n_sites = float(coverage.sum())
-            if n_sites <= 0:
-                continue
-            spectrum = compute_amplitude_spectrum(
-                coverage, period_range=period_range,
-            )
-            if spectrum.empty:
-                continue
-            is_overlap = bool(is_overlap_upstream_orf(transcript))
-            for _, srow in spectrum.iterrows():
-                rows.append({
-                    "sample": str(sample),
-                    "read_length": int(read_length),
-                    "gene": str(transcript),
-                    "transcript_id": str(transcript),
-                    "region": str(region),
-                    "n_sites": int(n_sites),
-                    "n_nt": int(window.width),
-                    "period_nt": float(srow["period_nt"]),
-                    "amplitude": float(srow["amplitude"]),
-                    "is_overlap_upstream_orf": is_overlap,
-                })
-    return pd.DataFrame(rows, columns=cols)
+
+            gene_set = _classify_transcript(transcript)
+
+            for region in REGIONS:
+                # Skip regions that don't apply to this gene_set/transcript
+                # combination (ATP86/ND4L4 use only one transcript per panel).
+                if not _transcript_drives_region(gene_set, region, transcript):
+                    continue
+
+                window = _resolve_window(
+                    transcript=transcript,
+                    region=region,
+                    start_codon=start_codon,
+                    stop_codon=stop_codon,
+                    transcript_length=l_tr,
+                    window_nt=window_nt,
+                    drop_codons_after_start=drop_codons_after_start,
+                    drop_codons_before_stop=drop_codons_before_stop,
+                )
+                if not window.valid:
+                    continue
+
+                raw = _build_window_coverage(site_positions, window=window)
+                n_sites = int(raw.sum())
+                mean_cov = float(np.mean(raw))
+                if mean_cov < float(min_mean_coverage):
+                    continue
+                if n_sites < int(min_total_counts):
+                    continue
+
+                normalized = _normalize_and_window(raw, hann=hann)
+                tracks.append(_PerGeneTrack(
+                    sample=str(sample),
+                    read_length=int(read_length),
+                    gene_set=gene_set,
+                    region=region,
+                    transcript=transcript,
+                    n_sites=n_sites,
+                    mean_coverage=mean_cov,
+                    raw_coverage=raw,
+                    normalized=normalized,
+                ))
+    return tracks
+
+
+def _classify_transcript(transcript: str) -> GeneSet:
+    """Return the gene_set this transcript belongs to."""
+    if _is_in_set(transcript, ATP86_GENE_SET):
+        return "ATP86"
+    if _is_in_set(transcript, ND4L4_GENE_SET):
+        return "ND4L4"
+    return "combined"
+
+
+def _transcript_drives_region(
+    gene_set: GeneSet, region: Region, transcript: str,
+) -> bool:
+    """Whether *transcript* contributes to (gene_set, region) in the figure.
+
+    ATP86 figure: orf_stop panel uses ATP8 only; orf_start panel uses
+    ATP6 only. ND4L4 figure: orf_stop uses ND4L; orf_start uses ND4.
+    Combined figure: every non-overlap-pair transcript drives both
+    panels.
+    """
+    if gene_set == "combined":
+        return True
+    panel_map = (
+        _ATP86_PANEL_TRANSCRIPT if gene_set == "ATP86" else _ND4L4_PANEL_TRANSCRIPT
+    )
+    expected = panel_map.get(region)
+    if expected is None:
+        return False
+    return _normalize_gene_name(transcript) == _normalize_gene_name(expected)
 
 
 # ---------------------------------------------------------------------------
-# Derived per-gene scalars
+# Metagene aggregation + DFT
 # ---------------------------------------------------------------------------
 
 
-def _nearest_period_bin(periods: np.ndarray, target: float) -> int:
-    """Index of the period bin closest to *target* (defaults to nt=3)."""
-    return int(np.argmin(np.abs(periods - target)))
+def build_metagene(tracks: list[_PerGeneTrack]) -> np.ndarray:
+    """Element-wise mean across qualifying per-gene normalised tracks.
+
+    Returns a length-W vector. Returns an empty array if *tracks* is
+    empty.
+    """
+    if not tracks:
+        return np.array([], dtype=float)
+    stacked = np.stack([t.normalized for t in tracks], axis=0)
+    return np.mean(stacked, axis=0)
 
 
-def build_period3_score_table(
-    spectrum_table: pd.DataFrame,
+def direct_dft_amplitude(x: np.ndarray, *, period: float) -> float:
+    """Direct DFT amplitude at an arbitrary period (not bin-snapped).
+
+    Formula: ``|sum_n x[n] * exp(-2j*pi*n / period)| / sqrt(sum(x**2))``.
+    Amplitude is in [0, 1]: 1.0 means x is a pure sinusoid at that
+    period; 0 means no projection onto that frequency.
+
+    Returns NaN for empty / zero-norm inputs.
+    """
+    x = np.asarray(x, dtype=float)
+    n = x.size
+    if n == 0:
+        return float("nan")
+    norm = float(np.sqrt(np.sum(x ** 2)))
+    if not np.isfinite(norm) or norm <= 0:
+        return float("nan")
+    indices = np.arange(n)
+    z = np.sum(x * np.exp(-2j * np.pi * indices / float(period)))
+    return float(np.abs(z) / norm)
+
+
+def compute_spectrum_grid(
+    metagene: np.ndarray,
     *,
+    periods: np.ndarray = DEFAULT_PERIOD_GRID,
+) -> pd.DataFrame:
+    """Direct DFT amplitudes evaluated on a dense period grid.
+
+    Returns ``DataFrame[period_nt, amplitude]`` with one row per period
+    in *periods*. Returns an empty DataFrame for empty input.
+    """
+    if metagene.size == 0:
+        return pd.DataFrame(columns=["period_nt", "amplitude"])
+    amps = np.array([direct_dft_amplitude(metagene, period=p) for p in periods])
+    return pd.DataFrame({
+        "period_nt": np.asarray(periods, dtype=float),
+        "amplitude": amps,
+    })
+
+
+def compute_spectral_ratio_3nt(
+    metagene: np.ndarray,
+    *,
+    periods: np.ndarray = DEFAULT_PERIOD_GRID,
     target_period: float = 3.0,
-    reference_periods: tuple[float, ...] = (4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0),
-) -> pd.DataFrame:
-    """Per (sample, read_length, gene, region) period-3 amplitude + score.
+    exclude_window: tuple[float, float] = (2.8, 3.2),
+) -> tuple[float, float]:
+    """Return ``(amp_at_3nt, spectral_ratio_3nt)``.
 
-    For each spectrum cell:
+    * ``amp_at_3nt`` is the direct DFT amplitude exactly at period 3.0.
+    * ``spectral_ratio_3nt`` is ``amp_at_3nt / median(background)``
+      where background is the amplitudes at all *periods* outside the
+      exclusion window around 3 nt.
 
-    * ``period3_amplitude`` is the amplitude at the period-bin closest
-      to *target_period* (default 3 nt).
-    * ``period3_score`` is ``period3_amplitude / mean(amplitude in
-      period bins closest to each value of *reference_periods*)``.
-      This is the new auditable scalar that replaces the legacy
-      ``fft_period3_power`` column. NaN when the reference mean is 0.
-
-    The ``is_overlap_upstream_orf`` column is propagated unchanged so
-    callers can filter out the contaminated genes when aggregating.
+    Returns ``(nan, nan)`` for empty input or zero background.
     """
-    cols = [
-        "sample", "read_length", "gene", "transcript_id", "region",
-        "n_sites", "n_nt", "period3_amplitude", "period3_score",
-        "is_overlap_upstream_orf",
-    ]
-    if spectrum_table is None or spectrum_table.empty:
-        return pd.DataFrame(columns=cols)
+    if metagene.size == 0:
+        return float("nan"), float("nan")
+    amp3 = direct_dft_amplitude(metagene, period=float(target_period))
+    grid = compute_spectrum_grid(metagene, periods=periods)
+    if grid.empty:
+        return amp3, float("nan")
+    lo, hi = float(exclude_window[0]), float(exclude_window[1])
+    background = grid[
+        (grid["period_nt"] < lo) | (grid["period_nt"] > hi)
+    ]["amplitude"].to_numpy()
+    background = background[np.isfinite(background)]
+    if background.size == 0:
+        return amp3, float("nan")
+    median_bg = float(np.median(background))
+    if median_bg <= 0:
+        return amp3, float("nan")
+    return amp3, amp3 / median_bg
+
+
+def snr_call_for_ratio(ratio: float) -> str:
+    """Map a 3-nt spectral ratio to a publication-grade QC tier.
+
+    Wakigawa-style thresholds:
+      * >= 10x  : excellent
+      * >=  5x  : healthy
+      * >=  2x  : modest
+      * <   2x  : broken (likely frame-shifted or wrong offset)
+    """
+    if not np.isfinite(ratio):
+        return "no_signal"
+    r = float(ratio)
+    if r >= 10.0:
+        return "excellent"
+    if r >= 5.0:
+        return "healthy"
+    if r >= 2.0:
+        return "modest"
+    return "broken"
+
+
+# ---------------------------------------------------------------------------
+# Aggregate-table builders
+# ---------------------------------------------------------------------------
+
+
+_SPECTRUM_COMBINED_COLS: tuple[str, ...] = (
+    "sample", "read_length", "gene_set", "region",
+    "n_genes", "n_sites_total", "n_nt",
+    "period_nt", "amplitude",
+)
+
+_SCORE_COMBINED_COLS: tuple[str, ...] = (
+    "sample", "read_length", "gene_set", "region",
+    "n_genes", "n_sites_total", "n_nt",
+    "amp_at_3nt", "background_amp_median", "spectral_ratio_3nt",
+    "snr_call", "transcripts",
+)
+
+
+def _group_tracks(
+    tracks: list[_PerGeneTrack],
+) -> dict[tuple[str, int, GeneSet, Region], list[_PerGeneTrack]]:
+    grouped: dict[tuple[str, int, GeneSet, Region], list[_PerGeneTrack]] = {}
+    for t in tracks:
+        key = (t.sample, t.read_length, t.gene_set, t.region)
+        grouped.setdefault(key, []).append(t)
+    return grouped
+
+
+def build_fourier_spectrum_combined_table(
+    tracks: list[_PerGeneTrack],
+    *,
+    periods: np.ndarray = DEFAULT_PERIOD_GRID,
+) -> pd.DataFrame:
+    """Build the per-(sample, length, gene_set, region) spectrum table.
+
+    Columns: sample, read_length, gene_set, region, n_genes,
+    n_sites_total, n_nt, period_nt, amplitude.
+
+    One row per (sample, read_length, gene_set, region, period_nt). The
+    metagene is the element-wise mean of qualifying per-gene normalised
+    tracks; amplitude is the direct DFT amplitude at the period.
+    """
+    if not tracks:
+        return pd.DataFrame(columns=_SPECTRUM_COMBINED_COLS)
 
     rows: list[dict] = []
-    group_cols = ["sample", "read_length", "gene", "region"]
-    for keys, group in spectrum_table.groupby(group_cols, sort=False):
-        sample, read_length, gene, region = keys
-        periods = group["period_nt"].to_numpy()
-        amps = group["amplitude"].to_numpy()
-        if periods.size == 0:
+    grouped = _group_tracks(tracks)
+    for (sample, read_length, gene_set, region), group in grouped.items():
+        metagene = build_metagene(group)
+        if metagene.size == 0:
             continue
-        target_bin = _nearest_period_bin(periods, target_period)
-        period3_amp = float(amps[target_bin])
-        ref_indices = sorted({
-            _nearest_period_bin(periods, p) for p in reference_periods
-        })
-        # Drop the target bin itself in case a reference period coincides.
-        ref_indices = [i for i in ref_indices if i != target_bin]
-        if not ref_indices:
-            score = float("nan")
-        else:
-            ref_mean = float(np.mean(amps[ref_indices]))
-            score = period3_amp / ref_mean if ref_mean > 0 else float("nan")
-        first_row = group.iloc[0]
-        rows.append({
-            "sample": str(sample),
-            "read_length": int(read_length),
-            "gene": str(gene),
-            "transcript_id": str(first_row["transcript_id"]),
-            "region": str(region),
-            "n_sites": int(first_row["n_sites"]),
-            "n_nt": int(first_row["n_nt"]),
-            "period3_amplitude": period3_amp,
-            "period3_score": score,
-            "is_overlap_upstream_orf": bool(first_row["is_overlap_upstream_orf"]),
-        })
-    return pd.DataFrame(rows, columns=cols)
+        spectrum = compute_spectrum_grid(metagene, periods=periods)
+        n_genes = len(group)
+        n_sites_total = int(sum(t.n_sites for t in group))
+        n_nt = int(metagene.size)
+        for _, srow in spectrum.iterrows():
+            amp = float(srow["amplitude"])
+            if not np.isfinite(amp):
+                continue
+            rows.append({
+                "sample": sample,
+                "read_length": int(read_length),
+                "gene_set": str(gene_set),
+                "region": str(region),
+                "n_genes": int(n_genes),
+                "n_sites_total": n_sites_total,
+                "n_nt": n_nt,
+                "period_nt": float(srow["period_nt"]),
+                "amplitude": amp,
+            })
+    return pd.DataFrame(rows, columns=list(_SPECTRUM_COMBINED_COLS))
 
 
-def build_period3_summary_table(
-    score_table: pd.DataFrame,
+def build_fourier_period3_score_combined_table(
+    tracks: list[_PerGeneTrack],
+    *,
+    periods: np.ndarray = DEFAULT_PERIOD_GRID,
+    target_period: float = 3.0,
+    exclude_window: tuple[float, float] = (2.8, 3.2),
 ) -> pd.DataFrame:
-    """Per (sample, read_length, region) combined summary.
+    """Per-(sample, length, gene_set, region) period-3 amplitude + ratio.
 
-    Two parallel views per cell:
+    Headline scalar: ``spectral_ratio_3nt``. Includes ``snr_call``
+    tier ({"excellent", "healthy", "modest", "broken", "no_signal"})
+    per Wakigawa thresholds.
 
-    * ``*_combined`` columns aggregate over genes EXCLUDING any with
-      ``is_overlap_upstream_orf=True``. This is the headline number
-      that should track translation phasing without contamination from
-      the downstream ORF.
-    * ``*_overlap_upstream`` columns aggregate over the excluded genes
-      only — surfaced separately so reviewers can check that the
-      contaminated 3′ UTR window in those genes really does show
-      translation-like signal (which is the biological expectation).
+    The ``transcripts`` column is a semicolon-joined list of the
+    transcripts that contributed to the metagene — auditability.
     """
-    cols = [
-        "sample", "read_length", "region",
-        "n_genes_combined", "median_period3_score_combined",
-        "max_period3_score_combined", "n_genes_overlap_upstream",
-        "median_period3_score_overlap_upstream",
-        "max_period3_score_overlap_upstream",
-    ]
-    if score_table is None or score_table.empty:
-        return pd.DataFrame(columns=cols)
+    if not tracks:
+        return pd.DataFrame(columns=_SCORE_COMBINED_COLS)
 
     rows: list[dict] = []
-    group_cols = ["sample", "read_length", "region"]
-    for keys, group in score_table.groupby(group_cols, sort=False):
-        sample, read_length, region = keys
-        combined = group[~group["is_overlap_upstream_orf"]]
-        overlap = group[group["is_overlap_upstream_orf"]]
+    grouped = _group_tracks(tracks)
+    for (sample, read_length, gene_set, region), group in grouped.items():
+        metagene = build_metagene(group)
+        if metagene.size == 0:
+            continue
+        amp3, ratio = compute_spectral_ratio_3nt(
+            metagene,
+            periods=periods,
+            target_period=target_period,
+            exclude_window=exclude_window,
+        )
+        # Compute background median exposed in output for audit.
+        grid = compute_spectrum_grid(metagene, periods=periods)
+        lo, hi = float(exclude_window[0]), float(exclude_window[1])
+        bg = grid[(grid["period_nt"] < lo) | (grid["period_nt"] > hi)]["amplitude"]
+        bg_med = float(np.median(bg.dropna())) if not bg.dropna().empty else float("nan")
         rows.append({
-            "sample": str(sample),
+            "sample": sample,
             "read_length": int(read_length),
+            "gene_set": str(gene_set),
             "region": str(region),
-            "n_genes_combined": int(len(combined)),
-            "median_period3_score_combined": (
-                float(combined["period3_score"].median())
-                if not combined.empty else float("nan")
-            ),
-            "max_period3_score_combined": (
-                float(combined["period3_score"].max())
-                if not combined.empty else float("nan")
-            ),
-            "n_genes_overlap_upstream": int(len(overlap)),
-            "median_period3_score_overlap_upstream": (
-                float(overlap["period3_score"].median())
-                if not overlap.empty else float("nan")
-            ),
-            "max_period3_score_overlap_upstream": (
-                float(overlap["period3_score"].max())
-                if not overlap.empty else float("nan")
-            ),
+            "n_genes": int(len(group)),
+            "n_sites_total": int(sum(t.n_sites for t in group)),
+            "n_nt": int(metagene.size),
+            "amp_at_3nt": float(amp3),
+            "background_amp_median": bg_med,
+            "spectral_ratio_3nt": float(ratio),
+            "snr_call": snr_call_for_ratio(ratio),
+            "transcripts": ";".join(sorted(t.transcript for t in group)),
         })
-    return pd.DataFrame(rows, columns=cols)
+    # TODO(stats): bootstrap CI over genes (resample with replacement,
+    # recompute ratio, percentile) and circular-shift permutation null
+    # (shift each track by random offset, recompute ratio, empirical p).
+    # See run_taco1_periodicity_validation.sh notes on what these add.
+    return pd.DataFrame(rows, columns=list(_SCORE_COMBINED_COLS))

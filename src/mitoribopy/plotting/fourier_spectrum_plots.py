@@ -1,20 +1,31 @@
-"""Plot writers for the Wakigawa-style Fourier-spectrum analysis.
+"""Plot writers for the Wakigawa-style metagene Fourier spectrum.
 
-For each (sample, read_length) we render a stacked two-panel figure
-(ORF on top, 3' UTR on bottom) — one trace per gene, x = period [nt],
-y = amplitude. Two figures get written:
+Three figures land per `(sample, read_length)` under
+``<output>/qc/fourier_spectrum/<sample>/``:
 
-* ``<sample>_<read_length>nt_combined.{png,svg}`` — overlap-upstream
-  genes (MT-ATP8, MT-ND4L) are EXCLUDED. This is the publication-style
-  panel a reviewer reads first.
-* ``<sample>_<read_length>nt_overlap_upstream.{png,svg}`` — only the
-  overlap-upstream genes. Skipped when none are present in the input.
-  Surfaced separately so reviewers can audit them deliberately
-  ("analyze ATP8/ND4L, just don't combine them with the rest").
+* ``<sample>_<length>nt_combined.{png,svg}`` — combined-canonical
+  metagene (every transcript that is NOT in the ATP8/ATP6 or ND4L/ND4
+  overlap pair). Two stacked panels (orf_start top, orf_stop bottom),
+  ONE aggregated trace per panel.
+* ``<sample>_<length>nt_ATP86.{png,svg}`` — junction-bracketed
+  bicistronic analysis. Top panel: ATP6 frame (orf_start window of
+  ATP6, leaving the bicistronic junction). Bottom panel: ATP8 frame
+  (orf_stop window of ATP8, leading INTO the junction). The two
+  windows OVERLAP at the bicistronic junction so a period-3 peak in
+  each panel says which reading frame is dominant in that region.
+* ``<sample>_<length>nt_ND4L4.{png,svg}`` — same idea for the
+  ND4L/ND4 overlap pair. The 4-nt overlap is too short to fall inside
+  both windows; they flank the junction instead.
 
-Each rendered PNG carries the canonical per-plot ``.metadata.json``
-sidecar (Job 1 contract) so ``mitoribopy validate-figures`` can score
-the file without re-running matplotlib.
+Each figure carries:
+* The canonical per-plot ``.metadata.json`` sidecar (Job 1 contract)
+  so ``mitoribopy validate-figures`` can score it without re-running
+  matplotlib. The sidecar's ``panel_layout`` field records which
+  transcript / region drives each panel.
+* A vertical reference line at period = 3 nt.
+* In-figure annotations with the spectral_ratio_3nt and snr_call for
+  each panel — so a reviewer can read the headline number without
+  opening the TSV.
 """
 
 from __future__ import annotations
@@ -25,6 +36,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from ..analysis.fourier_spectrum import (
+    GENE_SETS,
+    REGIONS,
+    _ATP86_PANEL_TRANSCRIPT,
+    _ND4L4_PANEL_TRANSCRIPT,
+    snr_call_for_ratio,
+)
 from .figure_validator import write_plot_metadata
 from .style import apply_publication_style
 
@@ -37,123 +55,160 @@ __all__ = [
 ]
 
 
-# Palette — Okabe-Ito plus a few extras so the typical 11-12 mt-mRNA
-# overlay never has to recycle a colour. Keep the order stable so
-# repeated runs colour the same gene the same way.
-_GENE_PALETTE: tuple[str, ...] = (
-    "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
-    "#D55E00", "#CC79A7", "#999999", "#000000", "#882255",
-    "#117733", "#88CCEE", "#AA4499",
-)
+# Trace colours per gene_set — Okabe-Ito-friendly, distinguishable.
+_TRACE_COLOR: dict[str, str] = {
+    "combined": "#0072B2",  # blue
+    "ATP86":    "#D55E00",  # vermilion
+    "ND4L4":    "#009E73",  # bluish green
+}
+
+# Per-region panel titles. For ATP86/ND4L4 we override with the
+# transcript-specific title in the panel-rendering code.
+_DEFAULT_PANEL_TITLES: dict[str, str] = {
+    "orf_start": "Downstream of start codon (post-initiation)",
+    "orf_stop":  "Upstream of stop codon (pre-termination — Wakigawa)",
+}
+
+_SNR_TIER_DESCRIPTION: dict[str, str] = {
+    "excellent":  "ratio >= 10x",
+    "healthy":    "ratio >= 5x",
+    "modest":     "ratio >= 2x",
+    "broken":     "ratio < 2x",
+    "no_signal":  "no data",
+}
 
 
-def _colour_for_gene(gene: str, ordered_genes: list[str]) -> str:
-    try:
-        idx = ordered_genes.index(gene)
-    except ValueError:
-        idx = abs(hash(gene)) % len(_GENE_PALETTE)
-    return _GENE_PALETTE[idx % len(_GENE_PALETTE)]
+def _panel_title(*, gene_set: str, region: str) -> str:
+    """Per-(gene_set, region) panel title for the plot."""
+    if gene_set == "ATP86":
+        tx = _ATP86_PANEL_TRANSCRIPT.get(region, "?")
+        if region == "orf_start":
+            return f"ATP6 frame — downstream of {tx} start codon"
+        return f"ATP8 frame — upstream of {tx} stop codon"
+    if gene_set == "ND4L4":
+        tx = _ND4L4_PANEL_TRANSCRIPT.get(region, "?")
+        if region == "orf_start":
+            return f"ND4 frame — downstream of {tx} start codon"
+        return f"ND4L frame — upstream of {tx} stop codon"
+    return _DEFAULT_PANEL_TITLES.get(region, region)
 
 
 def _plot_one_panel(
     ax,
-    region_table: pd.DataFrame,
     *,
+    spectrum: pd.DataFrame,  # cols: period_nt, amplitude
+    score_row: pd.Series | None,
     title: str,
-    ordered_genes: list[str],
+    color: str,
 ) -> int:
-    """Draw the per-gene amplitude curves on *ax*.
-
-    Returns the count of trace points actually drawn (sum of
-    ``len(period_nt)`` across all gene curves) so the caller can record
-    it in the per-plot sidecar.
-    """
-    n_drawn = 0
-    if region_table.empty:
+    """Draw the metagene amplitude curve on *ax*. Returns n_points drawn."""
+    if spectrum is None or spectrum.empty:
         ax.set_title(title, fontsize=11)
         ax.set_xlabel("Period [nt]")
-        ax.set_ylabel("Amplitude")
+        ax.set_ylabel("Normalized amplitude")
         ax.text(
             0.5, 0.5, "no data", transform=ax.transAxes,
             ha="center", va="center", color="0.6", fontsize=10,
         )
-        return n_drawn
+        return 0
 
-    for gene, sub in region_table.groupby("gene", sort=False):
-        sub = sub.sort_values("period_nt")
-        ax.plot(
-            sub["period_nt"].to_numpy(),
-            sub["amplitude"].to_numpy(),
-            color=_colour_for_gene(str(gene), ordered_genes),
-            linewidth=1.2,
-            label=str(gene),
-        )
-        n_drawn += int(len(sub))
+    sub = spectrum.sort_values("period_nt")
+    periods = sub["period_nt"].to_numpy()
+    amps = sub["amplitude"].to_numpy()
+    ax.plot(periods, amps, color=color, linewidth=1.5)
+    ax.fill_between(periods, 0, amps, color=color, alpha=0.10, linewidth=0)
+
+    # Reference line at period = 3 nt (the headline frequency).
+    ax.axvline(3.0, color="0.4", linestyle="--", linewidth=0.8, alpha=0.7)
+
     ax.set_title(title, fontsize=11)
     ax.set_xlabel("Period [nt]")
-    ax.set_ylabel("Amplitude")
-    # Period axis: integer ticks across the published 2-10 range.
-    period_lo = float(region_table["period_nt"].min())
-    period_hi = float(region_table["period_nt"].max())
-    integer_ticks = list(range(
-        int(np.ceil(period_lo)), int(np.floor(period_hi)) + 1,
-    ))
-    if integer_ticks:
-        ax.set_xticks(integer_ticks)
+    ax.set_ylabel("Normalized amplitude")
+    ax.set_xticks([2, 3, 4, 5, 6, 7, 8, 9, 10])
+    ax.set_xlim(2.0, 10.0)
+    if amps.size > 0:
+        amp_max = float(np.nanmax(amps))
+        if np.isfinite(amp_max) and amp_max > 0:
+            ax.set_ylim(0, amp_max * 1.15)
     ax.grid(True, alpha=0.25, linewidth=0.5)
-    return n_drawn
+
+    if score_row is not None:
+        ratio = float(score_row.get("spectral_ratio_3nt", float("nan")))
+        snr_tier = str(score_row.get("snr_call", "no_signal"))
+        n_genes = int(score_row.get("n_genes", 0))
+        n_sites = int(score_row.get("n_sites_total", 0))
+        text = (
+            f"3-nt spectral ratio: {ratio:.2f}x  ({snr_tier})\n"
+            f"n genes = {n_genes}  |  n sites = {n_sites:,}"
+        )
+        ax.text(
+            0.97, 0.93, text,
+            transform=ax.transAxes,
+            ha="right", va="top", fontsize=8,
+            bbox=dict(facecolor="white", edgecolor="0.7", alpha=0.85, pad=4),
+        )
+    return int(periods.size)
 
 
-def _render_two_panel(
-    spectrum_subset: pd.DataFrame,
+def _render_two_panel_figure(
     *,
     sample: str,
     read_length: int,
+    gene_set: str,
+    spectrum_block: pd.DataFrame,
+    score_block: pd.DataFrame,
     out_path: Path,
-    title_suffix: str,
     source_data: str,
-    plot_type: str,
-    ordered_genes: list[str],
 ) -> int | None:
-    """Write a stacked two-panel (ORF / 3' UTR) figure to *out_path*.
+    """Two-panel (orf_start top, orf_stop bottom) figure for one gene_set.
 
-    Returns the per-plot ``n_points_drawn`` (integer) or ``None`` when
-    the subset is empty (no figure written).
+    Returns ``n_points_drawn`` total across both panels, or None if the
+    block is empty (no figure written).
     """
-    if spectrum_subset.empty:
+    if spectrum_block.empty:
         return None
 
     fig, axes = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
-    ax_orf, ax_utr = axes
+    color = _TRACE_COLOR.get(gene_set, "#444444")
 
-    orf = spectrum_subset[spectrum_subset["region"] == "orf"]
-    utr = spectrum_subset[spectrum_subset["region"] == "utr3"]
-
-    n_orf = _plot_one_panel(
-        ax_orf, orf,
-        title=f"ORF (upstream of stop codon){title_suffix}",
-        ordered_genes=ordered_genes,
-    )
-    n_utr = _plot_one_panel(
-        ax_utr, utr,
-        title="3' UTR (downstream of stop codon)",
-        ordered_genes=ordered_genes,
-    )
-
-    # Shared legend on the right of the upper panel — keeps the data
-    # area clean and matches Wakigawa's figure convention.
-    handles, labels = ax_orf.get_legend_handles_labels()
-    if handles:
-        ax_orf.legend(
-            handles, labels,
-            loc="upper left", bbox_to_anchor=(1.02, 1.0),
-            fontsize=8, frameon=False, borderaxespad=0.0,
+    n_drawn = 0
+    panel_layout: list[dict] = []
+    for ax, region in zip(axes, REGIONS):
+        sub_spec = spectrum_block[spectrum_block["region"] == region]
+        sub_score = score_block[score_block["region"] == region]
+        score_row = sub_score.iloc[0] if not sub_score.empty else None
+        title = _panel_title(gene_set=gene_set, region=region)
+        n_drawn += _plot_one_panel(
+            ax,
+            spectrum=sub_spec,
+            score_row=score_row,
+            title=title,
+            color=color,
         )
+        # Record what drove this panel — for the sidecar.
+        if gene_set == "ATP86":
+            tx = _ATP86_PANEL_TRANSCRIPT.get(region)
+        elif gene_set == "ND4L4":
+            tx = _ND4L4_PANEL_TRANSCRIPT.get(region)
+        else:
+            tx = "<combined>"
+        panel_layout.append({
+            "region": region,
+            "transcript": tx,
+            "n_genes": int(score_row["n_genes"]) if score_row is not None else 0,
+            "n_sites_total": int(score_row["n_sites_total"]) if score_row is not None else 0,
+            "spectral_ratio_3nt": (
+                float(score_row["spectral_ratio_3nt"])
+                if score_row is not None and pd.notna(score_row.get("spectral_ratio_3nt"))
+                else None
+            ),
+        })
 
     fig.suptitle(
-        f"{sample}  |  {read_length} nt", fontsize=12, fontweight="bold",
+        f"{sample}  |  {read_length} nt  |  gene_set={gene_set}",
+        fontsize=12, fontweight="bold",
     )
-    fig.tight_layout(rect=(0, 0, 0.85, 0.96))
+    fig.tight_layout(rect=(0, 0, 1.0, 0.96))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     svg_path = out_path.with_suffix(".svg")
@@ -161,10 +216,9 @@ def _render_two_panel(
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    n_drawn = n_orf + n_utr
     write_plot_metadata(
         out_path,
-        plot_type=plot_type,
+        plot_type=f"fourier_spectrum_{gene_set}",
         stage="rpf",
         source_data=source_data,
         n_points_expected=n_drawn,
@@ -174,70 +228,64 @@ def _render_two_panel(
         extra={
             "sample": str(sample),
             "read_length": int(read_length),
-            "n_genes": int(spectrum_subset["gene"].nunique()),
+            "gene_set": str(gene_set),
+            "panel_layout": panel_layout,
         },
     )
     return n_drawn
 
 
 def render_fourier_spectrum_panels(
-    spectrum_table: pd.DataFrame,
+    spectrum_combined_table: pd.DataFrame,
+    score_combined_table: pd.DataFrame,
     *,
     output_dir: Path | str,
-    source_data_relpath: str = "fourier_spectrum.tsv",
+    source_data_relpath: str = "fourier_spectrum_combined.tsv",
 ) -> list[Path]:
-    """Render every (sample, read_length) two-panel overlay figure.
+    """Render every (sample, read_length, gene_set) two-panel figure.
 
-    Writes per-sample subdirectories under *output_dir* with two
-    figures per (sample, read_length): a ``*_combined.png`` (overlap-
-    upstream genes excluded) and, when applicable, a
-    ``*_overlap_upstream.png`` (only the excluded genes).
+    Writes per-sample subdirectories under *output_dir* with up to three
+    figures per (sample, read_length): one each for gene_set in
+    {combined, ATP86, ND4L4}. Skips figures whose corresponding gene_set
+    is empty.
 
     Returns the list of PNG paths written.
     """
     output_dir = Path(output_dir)
     written: list[Path] = []
-    if spectrum_table is None or spectrum_table.empty:
+    if spectrum_combined_table is None or spectrum_combined_table.empty:
         return written
 
-    # Stable gene-colour order across plots (alphabetical).
-    ordered_genes = sorted(spectrum_table["gene"].astype(str).unique())
-
     group_cols = ["sample", "read_length"]
-    for (sample, read_length), block in spectrum_table.groupby(group_cols):
+    for (sample, read_length), block in spectrum_combined_table.groupby(group_cols):
         sample_dir = output_dir / str(sample)
-        combined = block[~block["is_overlap_upstream_orf"]]
-        overlap = block[block["is_overlap_upstream_orf"]]
-
-        combined_png = sample_dir / f"{sample}_{int(read_length)}nt_combined.png"
-        n = _render_two_panel(
-            combined,
-            sample=str(sample),
-            read_length=int(read_length),
-            out_path=combined_png,
-            title_suffix="",
-            source_data=source_data_relpath,
-            plot_type="fourier_spectrum_combined",
-            ordered_genes=ordered_genes,
+        score_block_all = (
+            score_combined_table[
+                (score_combined_table["sample"] == sample)
+                & (score_combined_table["read_length"] == int(read_length))
+            ]
+            if score_combined_table is not None and not score_combined_table.empty
+            else pd.DataFrame()
         )
-        if n is not None:
-            written.append(combined_png)
-
-        if not overlap.empty:
-            overlap_png = (
-                sample_dir / f"{sample}_{int(read_length)}nt_overlap_upstream.png"
+        for gene_set in GENE_SETS:
+            sub_spec = block[block["gene_set"] == gene_set]
+            sub_score = (
+                score_block_all[score_block_all["gene_set"] == gene_set]
+                if not score_block_all.empty else pd.DataFrame()
             )
-            n = _render_two_panel(
-                overlap,
+            if sub_spec.empty:
+                continue
+            png = sample_dir / f"{sample}_{int(read_length)}nt_{gene_set}.png"
+            n = _render_two_panel_figure(
                 sample=str(sample),
                 read_length=int(read_length),
-                out_path=overlap_png,
-                title_suffix=" — overlap-upstream ORFs (analysed only, NOT combined)",
+                gene_set=str(gene_set),
+                spectrum_block=sub_spec,
+                score_block=sub_score,
+                out_path=png,
                 source_data=source_data_relpath,
-                plot_type="fourier_spectrum_overlap_upstream",
-                ordered_genes=ordered_genes,
             )
             if n is not None:
-                written.append(overlap_png)
+                written.append(png)
 
     return written

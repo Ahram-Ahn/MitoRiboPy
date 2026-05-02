@@ -112,62 +112,47 @@ Selected highlights:
 
 ### Standalone `mitoribopy periodicity` flags
 
-The `rpf` stage always emits the periodicity QC bundle under
-`<output>/rpf/qc/` with built-in defaults
-(`good_frame_fraction=0.60`, `warn_frame_fraction=0.50`,
-`min_reads_per_length=1000`, `min_reads_per_gene=50`,
-`exclude_start_codons=0`, `exclude_stop_codons=0` — the codon-edge
-defaults are 0 in the pipeline path to preserve historical pooled
-numbers). To re-score periodicity with different thresholds without
-re-running offset selection, use the standalone subcommand on a saved
-site table:
+The `rpf` stage emits the Wakigawa metagene Fourier QC bundle under
+`<output>/rpf/qc/`. Built-in defaults: window 99 nt = 33 codons, drop
+5 codons after AUG (initiation peak), drop 1 codon before stop
+(termination peak), min mean coverage 0.1, min total counts 30. To
+re-score periodicity from a saved site table without re-running
+offset selection, use the standalone subcommand:
 
 ```bash
 mitoribopy periodicity \
   --site-table runs/full/rpf/qc/site_table.tsv \
   --output     runs/full/rpf/qc/standalone_periodicity \
   --site p \
-  --good-frame-fraction 0.60 \
-  --warn-frame-fraction 0.50 \
-  --min-reads-per-length 1000 \
-  --min-reads-per-gene 50 \
-  --exclude-start-codons 6 \
-  --exclude-stop-codons 3 \
-  --phase-score \
-  --fourier-window-nt 100
+  --fourier-window-nt 99 \
+  --drop-codons-after-start 5 \
+  --drop-codons-before-stop 1 \
+  --min-mean-coverage 0.1 \
+  --min-total-counts 30
 ```
 
-The standalone CLI applies `--exclude-start-codons` / `--exclude-stop-codons`
-uniformly to both the per-(sample, length) frame counts and the per-(sample,
-gene) frame counts, so initiation- and termination-proximal codons are
-excluded consistently. `--phase-score` adds a ribotricer-style
-gene-level consistency column to `gene_periodicity.tsv`.
-
-The Wakigawa-style Fourier amplitude spectrum (`fourier_spectrum.tsv`,
-`fourier_period3_score.tsv`, `fourier_period3_summary.tsv`, plus the
-per-`(sample, read_length)` two-panel overlay plots under
-`fourier_spectrum/`) is **enabled by default** — pass
-`--no-fourier-spectrum` to skip. Tunables: `--fourier-window-nt`
-(default 100, the Wakigawa published value), `--fourier-period-min` /
-`--fourier-period-max` (defaults 2 and 10), `--fourier-no-plots` (TSVs
-only). Overlap-upstream genes (`MT-ATP8`, `MT-ND4L`) are scored
-individually but excluded from the combined-data view; their score
-rows carry `is_overlap_upstream_orf=true` and the summary table reports
-them in separate `*_overlap_upstream` columns.
+The Fourier QC bundle outputs (`fourier_spectrum_combined.tsv`,
+`fourier_period3_score_combined.tsv`, plus the per-`(sample,
+read_length)` figures under `fourier_spectrum/<sample>/`) are
+**always emitted**. Three figures are written per `(sample,
+read_length)`: `*_combined.png` (canonical mt-mRNAs aggregated into a
+single trace per panel), `*_ATP86.png` (junction-bracketed
+ATP8/ATP6 bicistronic analysis: top panel = ATP8 frame, bottom panel
+= ATP6 frame, windows overlapping at the bicistronic junction at
+nt 177-202), and `*_ND4L4.png` (junction-bracketed ND4L/ND4 analysis;
+windows flank the 4-nt overlap junction).
 
 Required columns in the input site table: `sample`, `gene`,
 `transcript_id`, `read_length`, `site_type` (`p` or `a`), `site_pos`
 (transcript-coordinate, 0-based), `cds_start`, `cds_end`. Optional
 `count` column is honoured for weighted counting (defaults to 1 per
-row when absent). Optional `is_overlap` column masks rows when
-present (override with `--include-overlaps`).
+row when absent).
 
-Outputs always include the publication-grade bundle described in
-[the v0.6.2 release notes](../release-notes/v0.6.2.md#periodicity-qc-bundle-extension):
-`qc_summary.tsv`, `qc_summary.md`, `frame_counts_by_sample_length.tsv`,
-`gene_periodicity.tsv`, and `periodicity.metadata.json`. The Fourier-
-spectrum bundle ships alongside (see [periodicity.md](periodicity.md)
-for the full output reference).
+The frame-fraction QC bundle (`qc_summary.tsv`,
+`frame_counts_*.tsv`, `gene_periodicity.tsv`, the four named frame-
+heatmap plots, `--phase-score` and the threshold flags) was retired
+in v0.8.0; see [periodicity.md](periodicity.md) for the migration
+recipe.
 
 ---
 

@@ -8,43 +8,20 @@ Mitochondrial ribosome profiling (mt-Ribo-seq) analysis, end to end.
 
 MitoRiboPy is a Python package + CLI for analysing mt-Ribo-seq data from raw FASTQ all the way through translation-efficiency integration with paired RNA-seq. Every per-sample decision (kit, dedup, offsets) is independent, so mixed-library batches just work.
 
-The package is built around four pipeline subcommands plus seven utility subcommands:
+The package is built around four pipeline subcommands plus six utilities. Pass `--help` on any of them for the full flag list, or see [docs/reference/cli.md](docs/reference/cli.md).
 
-| Subcommand | What it does |
-|---|---|
-| `mitoribopy align` | FASTQ → BAM → BED6 + per-sample read counts (cutadapt + bowtie2 + umi_tools + pysam) |
-| `mitoribopy rpf` | BED/BAM → offsets, translation profile, codon usage, coverage plots |
-| `mitoribopy rnaseq` | Translation efficiency from paired RNA-seq + Ribo-seq. **Default flow:** pass `--rna-fastq` + `--ribo-fastq` + `--reference-fasta` and the subcommand runs trimming → bowtie2 → counting → pyDESeq2 → TE / ΔTE / plots end-to-end (requires the `[fastq]` extra: `pip install 'mitoribopy[fastq]'`). **Alternative:** pass `--de-table` from an external DESeq2 / Xtail / Anota2Seq run + a prior rpf run; this path is mutually exclusive with `--rna-fastq` and enforces a SHA256 reference-consistency gate. |
-| `mitoribopy all` | End-to-end orchestrator that runs align + rpf + (optional) rnaseq from one YAML config and writes a composed `run_manifest.json` |
-| `mitoribopy validate-config` | Pre-flight check: parse + canonicalise legacy keys + check paths + validate `rnaseq.mode` against supplied inputs. Exit 0 / 2. Use before launching long-running cluster jobs. |
-| `mitoribopy validate-reference` | Pre-flight a custom mt-transcriptome FASTA + annotation pair (matching IDs, matching lengths, CDS divisible by 3, valid start / stop codons under the chosen codon table). Exit 0 / 2. |
-| `mitoribopy periodicity` | Standalone 3-nt periodicity QC bundle. Re-scores an already-assigned P-site / A-site coordinate table without re-running offset selection; useful for re-tuning thresholds (`--good-frame-fraction`, `--exclude-start-codons`, `--phase-score`, …) on a finished run. Writes `qc_summary.tsv` + `qc_summary.md` + `frame_counts_by_sample_length.tsv` + `gene_periodicity.tsv` to the output directory. |
-| `mitoribopy validate-figures` | Mechanically validate every plot under a finished run root: check label / legend / stat-box overlap, label clipping, point counts vs source TSV, SVG text editability, PNG dpi, and metadata sidecars. Writes `figure_qc.tsv`. Exit 0 / 1 / 2 (clean / warn-only / fail; `--strict` upgrades warn → fail). |
-| `mitoribopy migrate-config` | Rewrite legacy YAML keys to canonical names (e.g. `merge_density:` → `codon_density_window:`, `strain: h` → `strain: h.sapiens`). Pipe stdout to a new file or pass `--in-place`. |
-| `mitoribopy summarize` | Regenerate `SUMMARY.md` and `summary_qc.tsv` from a finished run by reading `run_manifest.json` and per-stage outputs. Auto-invoked by `mitoribopy all` after every run. |
-| `mitoribopy benchmark` | Time + RSS + disk-measure a `mitoribopy all` invocation. `--subsample N` reservoir-samples each FASTQ for fast tuning runs; outputs `benchmark.tsv` + `benchmark_summary.md`. |
-
-### Which command should I use?
-
-| Situation | Command |
-|---|---|
-| I have raw mt-Ribo-seq FASTQ and want everything | `mitoribopy all --config pipeline_config.yaml --output results/` |
-| I only want adapter trimming + alignment | `mitoribopy align --config align_config.yaml ...` |
-| I already have BED / BAM files | `mitoribopy rpf --config rpf_config.yaml ...` |
-| I have full-transcriptome RNA-seq DE results + RPF counts (publication route) | `mitoribopy rnaseq --rnaseq-mode de_table --de-table de.tsv --ribo-dir runs/full/rpf` |
-| I want a quick exploratory mt-only RNA/Ribo TE run | `mitoribopy rnaseq --rnaseq-mode from_fastq --rna-fastq rna/ --ribo-fastq ribo/` |
-| I have a non-human / non-yeast organism | `mitoribopy rpf --strain custom --annotation_file ... --codon_tables_file ...` |
-| I want to check my config without running anything | `mitoribopy validate-config pipeline_config.yaml` |
-| I want to pre-flight a custom mt-transcriptome FASTA + annotation pair | `mitoribopy validate-reference --fasta custom_mt.fa --annotation custom_mt.csv` |
-| I want to mechanically QC every plot in a finished run | `mitoribopy validate-figures runs/full/ --strict` |
-| I want to re-score periodicity with different thresholds on a finished run | `mitoribopy periodicity --site-table runs/full/rpf/qc/site_table.tsv --output runs/full/rpf/qc/standalone_periodicity --site p --phase-score` |
-| I want to inspect what `all` would actually do | `mitoribopy all --print-canonical-config --config ... --output ...` |
-| I want to estimate cluster time / memory / disk | `mitoribopy benchmark --config ... --output bench/ --subsample 200000` |
-| My config uses old key names (e.g. `merge_density:`, `strain: h`) | `mitoribopy migrate-config old.yaml > new.yaml` |
-| I want to (re-)render the summary of an old run | `mitoribopy summarize runs/full/` |
-| I want to safely resume a partially completed run | `mitoribopy all --config ... --output runs/full/ --resume` |
-
-The `mitoribopy all --resume` skip is **hash-validated** against the prior run's `run_manifest.json`: edits to the config / sample sheet / reference FASTA cause the affected stage(s) to re-run rather than silently re-using stale outputs. Pass `--force-resume` (or set `MITORIBOPY_FORCE_RESUME=1`) to bypass the guard for known-safe edits.
+| Subcommand | What it does | Typical use |
+|---|---|---|
+| `mitoribopy align` | FASTQ → BAM → BED6 (cutadapt + bowtie2 + umi_tools + pysam) | "I only want trimming + alignment" |
+| `mitoribopy rpf` | BED/BAM → offsets, translation profile, codon usage, coverage plots, Wakigawa Fourier QC | "I already have aligned BEDs" |
+| `mitoribopy rnaseq` | Translation efficiency from paired RNA-seq + Ribo-seq. `--rna-fastq` runs trimming → bowtie2 → counting → pyDESeq2 → TE/ΔTE end-to-end (needs `pip install 'mitoribopy[fastq]'`); `--de-table` accepts an external DE table + a prior rpf run (SHA256-gated). | "TE / ΔTE" |
+| `mitoribopy all` | End-to-end orchestrator (align + rpf + optional rnaseq from one YAML); writes a composed `run_manifest.json`. `--resume` is hash-validated against the prior manifest. | "I have raw FASTQ and want everything" |
+| `mitoribopy validate-config` | Parse + canonicalise + check paths + validate `rnaseq.mode`. Exit 0 / 2. | Before long cluster jobs |
+| `mitoribopy validate-reference` | Pre-flight a custom mt-transcriptome FASTA + annotation pair. Exit 0 / 2. | Custom organisms |
+| `mitoribopy validate-figures` | Mechanically QC every plot under a finished run; writes `figure_qc.tsv`. Exit 0 / 1 / 2 (`--strict` upgrades warn → fail). | After a run |
+| `mitoribopy periodicity` | Standalone Wakigawa metagene Fourier QC on a saved site table. | Re-tune Fourier window without re-running offsets |
+| `mitoribopy summarize` | Regenerate `SUMMARY.md` from `run_manifest.json`. Auto-invoked by `all`. | Re-render an old run's summary |
+| `mitoribopy benchmark` | Time + RSS + disk for a `mitoribopy all` invocation. `--subsample N` reservoir-samples each FASTQ. | Cluster sizing |
 
 ---
 
@@ -113,18 +90,9 @@ Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no N
 
 ## Installation
 
-### Publication / manuscript compatibility
+The README and `examples/templates/` describe the current **v0.8.0** interface. Verify with `mitoribopy --version`. See [CHANGELOG.md](CHANGELOG.md) for breaking-change notes between releases — most notably the v0.8.0 retirement of the frame-fraction QC bundle in favour of a Wakigawa-faithful metagene Fourier analysis.
 
-| What | Value |
-|---|---|
-| Manuscript-target version | **v0.6.2** (publication freeze) |
-| Minimum supported version | v0.6.2 |
-| Verify installed version | `mitoribopy --version` |
-| Git tag | `v0.6.2` |
-
-The README, CLI help, and `examples/templates/` in this repository all describe the **v0.6.2** interface. v0.6.2 is the fourth-edit cleanup release: it adds a top-level `execution:` resource-planning block, run-root `resource_plan.json`, an extended periodicity QC bundle (`qc_summary.tsv` + gene-level / phase-score / Wakigawa-style Fourier amplitude spectrum, with depth-aware best-length selection, codon-edge masking, and a per-frame split coverage plot — the legacy single-scalar `fft_period3_power.tsv` was retired in v0.7.0; see [docs/reference/periodicity.md](docs/reference/periodicity.md) for the migration recipe), a stable warning-code registry, and canonicalises `dedup_strategy: umi_coordinate` (legacy `umi-tools` still accepted). The standalone `mitoribopy periodicity` subcommand re-scores an already-assigned site table without re-running the rpf pipeline. Older PyPI builds (≤ v0.5.1) shipped a different rpf flag style and a now-removed no-subcommand fallback; do not pin to those for a publication-grade reanalysis.
-
-### From source (recommended for the manuscript build)
+### From source (recommended)
 
 ```bash
 git clone https://github.com/Ahram-Ahn/MitoRiboPy.git
@@ -599,314 +567,52 @@ Every subcommand inherits these shared options:
 
 ### `mitoribopy align`
 
-Preprocesses FASTQ inputs into BAM + BED6 + per-sample read counts. Pipeline (per sample):
+FASTQ → BAM → BED6 per sample: adapter detection → cutadapt → bowtie2 (contam → mt-transcriptome) → MAPQ filter → dedup → BED6.
 
-1. Adapter detection (head-of-FASTQ scan)
-2. cutadapt trim (kit-aware; optional UMI extraction)
-3. bowtie2 contaminant subtraction
-4. bowtie2 mt-transcriptome alignment (Path A: per-mRNA FASTA records)
-5. MAPQ filter (NUMT suppression)
-6. Deduplication (`umi-tools` for UMI samples, `skip` for no-UMI)
-7. BAM → BED6 (strand-aware)
+**Required**: `--contam-index`, `--mt-index`, `--output`, plus FASTQ inputs (`--fastq-dir DIR` or repeated `--fastq PATH`). See `mitoribopy align --help` or [docs/reference/cli.md](docs/reference/cli.md) for the full flag list.
 
-#### Inputs
+**Kit presets** (`--kit-preset`): `auto` (per-sample detection, default), `pretrimmed` (skip `-a`), `illumina_smallrna`, `illumina_truseq`, `illumina_truseq_umi` (8 nt 5' UMI), `qiaseq_mirna` (12 nt 3' UMI), `custom` (`--adapter SEQ` required). Dual-end UMI libraries (xGen Duplex, Twist) use `custom` with `--umi-position both` plus `--umi-length-5p` / `--umi-length-3p`. The per-sample resolved kit is written to `<output>/kit_resolution.tsv`.
 
-| Flag | Default | Description |
-|---|---|---|
-| `--fastq-dir DIR` | — | Directory of `*.fq(.gz)` / `*.fastq(.gz)`. |
-| `--fastq PATH` | — | Individual FASTQ; repeatable. Pass `--fastq-dir` OR `--fastq` (or both). |
-| `--contam-index BT2_PREFIX` | — | bowtie2 index prefix for the contaminant panel (rRNA + tRNA + spike-ins). Build with `bowtie2-build contaminants.fa <prefix>`. **Required** for non-dry-run. |
-| `--mt-index BT2_PREFIX` | — | bowtie2 index prefix for the mt-transcriptome (one FASTA record per mt-mRNA). **Required** for non-dry-run. |
-| `--output DIR` | — | Output directory. **Required**. |
+**Adapter detection** (`--adapter-detection`): `auto` (scan + per-sample fallback to your `--kit-preset` or `pretrimmed`), `strict` (hard-fail on disagreement), `off` (trust `--kit-preset`).
 
-#### Library prep
+**Dedup** (`--dedup-strategy`): `auto` (default; `umi-tools` for UMI samples, `skip` otherwise) | `umi-tools` | `skip`. Coordinate-only dedup (picard MarkDuplicates) was removed in v0.4.5 — it destroys codon-occupancy signal on low-complexity mt libraries (see [docs/validation/taco1_ko_regression.md](docs/validation/taco1_ko_regression.md)).
 
-| Flag | Default | Description |
-|---|---|---|
-| `--kit-preset PRESET` | `auto` | Library-prep adapter family. See [Kit presets](#kit-presets) below for the canonical list. |
-| `--adapter SEQ` | — | Explicit 3' adapter sequence. **Required** when `--kit-preset custom`; otherwise an optional fallback used only when detection fails. |
-| `--umi-length N` | from preset | Override the kit preset's UMI length. For `--umi-position=both` this MUST equal `--umi-length-5p + --umi-length-3p`; auto-derived from the per-end sum when omitted. |
-| `--umi-position {5p,3p,both}` | from preset | Override the kit preset's UMI position. `both` is dual-end UMI (e.g. xGen Duplex, Twist) — pass 1 extracts the 5' UMI, pass 2 extracts the 3' UMI and APPENDS to the QNAME so umi_tools dedups on the concatenated token. |
-| `--umi-length-5p N` | 0 | Per-end 5' UMI length. Used only when `--umi-position=both`. |
-| `--umi-length-3p N` | 0 | Per-end 3' UMI length. Used only when `--umi-position=both`. |
-| `--adapter-detection MODE` | `auto` | `auto` (default), `strict`, or `off`. See [Adapter detection](#adapter-detection) below. |
-| `--adapter-detect-reads N` | 5000 | FASTQ reads scanned per sample during detection. |
-| `--adapter-detect-min-rate FRAC` | 0.30 | Minimum fraction of scanned reads with adapter signal for the kit to be considered detected. |
-| `--adapter-detect-min-len N` | 12 | Adapter prefix length used as the search needle (nt). |
-| `--adapter-detect-pretrimmed-threshold FRAC` | 0.05 | When EVERY kit's match rate is at or below this, classify as already-trimmed. |
-| `--no-pretrimmed-inference` | off | Disable the auto-fallback to `pretrimmed`. With this flag, adapter detection failure with no `--kit-preset` fallback raises an error instead of silently routing to the `pretrimmed` kit. |
-| `--library-strandedness {forward,reverse,unstranded}` | `forward` | `forward` enforces bowtie2 `--norc`; `reverse` enforces `--nofw`; `unstranded` leaves bowtie2 permissive. |
-| `--min-length NT` | 15 | Minimum read length kept after trimming. |
-| `--max-length NT` | 45 | Maximum read length kept after trimming. |
-| `--quality Q` | 20 | cutadapt `-q` Phred+33 3' quality trim threshold. |
-
-##### Kit presets
-
-| Preset | 3' adapter | UMI | Covers (representative) |
-|---|---|---|---|
-| `auto` | per-sample detection | per-sample | default; scans every input FASTQ |
-| `pretrimmed` | none | none | Already-trimmed FASTQs (SRA-deposited, prior trim step). cutadapt skips `-a` |
-| `custom` | user-supplied via `--adapter` | configurable | anything not in the table |
-| `illumina_smallrna` | `TGGAATTCTCGGGTGCCAAGG` | none | Illumina TruSeq Small RNA |
-| `illumina_truseq` | `AGATCGGAAGAGCACACGTCTGAACTCCAGTCA` | none | NEBNext Multiplex Small RNA, TruSeq Stranded Total RNA Gold, Takara SMARTer Stranded Total v3 Pico, Bio-Rad SEQuoia Express Standard, … (any Illumina R1 adapter without a UMI) |
-| `illumina_truseq_umi` | `AGATCGGAAGAGCACACGTCTGAACTCCAGTCA` | 8 nt 5' | NEBNext Ultra II UMI, Bio-Rad SEQuoia Complete UMI, … |
-| `qiaseq_mirna` | `AACTGTAGGCACCATCAAT` | 12 nt 3' | QIAseq miRNA Library Kit |
-| `custom` (dual-end) | user-supplied via `--adapter` | 5p + 3p (set `--umi-position both` plus `--umi-length-5p` / `--umi-length-3p`) | xGen Duplex, Twist, and other dual-end UMI library preps. cutadapt extracts the 5' UMI in pass 1 and APPENDS the 3' UMI to the QNAME in pass 2; umi_tools dedups on the concatenated token. |
-
-Vendor-specific kit names (`truseq_smallrna`, `nebnext_smallrna`, `nebnext_ultra_umi`, `truseq_stranded_total`, `smarter_pico_v3`, `sequoia_express`) are also accepted as synonyms for the adapter-family preset they map to.
-
-##### Adapter detection
-
-| Mode | Behaviour |
-|---|---|
-| `auto` (default) | Scan each FASTQ; pick the matching preset per sample. Samples whose scan fails fall back to the user's `--kit-preset` / `--adapter` if supplied; otherwise fall through to `pretrimmed` when the data shows no adapter signal at all. |
-| `strict` | Scan; HARD-FAIL any sample whose scan disagrees with an explicit `--kit-preset` or yields no match. Use for batch / CI runs where silent surprises are unacceptable. |
-| `off` | Skip the scan entirely; trust `--kit-preset` / `--adapter` for every sample (requires an explicit non-`auto` preset). |
-
-The per-sample resolution table (sample, detected_kit, applied_kit, match_rate, dedup_strategy, source) is written to `<output>/kit_resolution.tsv` and embedded under `run_settings.json -> per_sample`. The `source` column distinguishes `detected`, `user_fallback`, `inferred_pretrimmed`, `explicit_off`, and `dry_run_*`.
-
-#### Alignment
-
-| Flag | Default | Description |
-|---|---|---|
-| `--mapq Q` | 10 | MAPQ threshold for the post-alignment filter (NUMT suppression). |
-| `--seed N` | 42 | bowtie2 `--seed` value (deterministic output). |
-
-#### Deduplication
-
-| Flag | Default | Description |
-|---|---|---|
-| `--dedup-strategy {auto,umi-tools,skip}` | `auto` | Per-sample resolved. `auto` → `umi-tools` for UMI samples, `skip` otherwise. When the resolved strategy is `skip`, the orchestrator does **not** write a duplicate `deduped/<sample>.dedup.bam` — the upstream `aligned/<sample>.mapq.bam` is fed straight into BED conversion. The legacy `mark-duplicates` (picard) option was removed in v0.4.5 because coordinate-only dedup destroys codon-occupancy signal on mt-Ribo-seq libraries (see [docs/validation/taco1_ko_regression.md](docs/validation/taco1_ko_regression.md) for the empirical evidence). |
-| `--umi-dedup-method {unique,percentile,cluster,adjacency,directional}` | `unique` | umi_tools `--method`. `unique` collapses only on exact coord+UMI match; other methods may over-collapse in low-complexity mt regions. |
-
-#### Execution / concurrency
-
-Per-sample work in `align` (cutadapt → bowtie2 → MAPQ → dedup → BAM→BED) is independent across samples — each sample writes only to its own per-sample paths. `--max-parallel-samples N` runs that work concurrently in a thread pool while the joint `mitoribopy rpf` stage stays serial (offsets are selected across all samples and aggregate `rpf_counts.tsv` requires a single pass).
-
-| Flag | Default | Description |
-|---|---|---|
-| `--max-parallel-samples N` | `1` | Number of samples to align concurrently. With `--threads T`, each worker's external tools (cutadapt, bowtie2, umi_tools) get `max(1, T // N)` threads, so total CPU use stays ≈ T regardless of N. Default `1` = serial (current behaviour, fully backward-compatible). Resume-cached samples skip the pool entirely. On any per-sample failure the run is fail-fast: pending futures are cancelled and the first exception is re-raised. |
-
-**Sizing guidance.** A reasonable starting point on a workstation or HPC node: pick `T` = total CPU budget (cores you can use), then choose `N` so each worker still gets ≥ 2 threads — i.e. `N ≤ T / 2`. Examples:
-
-| Cores available | Suggested `--threads` | Suggested `--max-parallel-samples` | Per-tool threads |
-|---|---|---|---|
-| 8 | 8 | 4 | 2 |
-| 16 | 16 | 4 | 4 |
-| 16 | 16 | 8 | 2 |
-| 32 | 32 | 8 | 4 |
-
-I/O-bound stages (FASTQ gzip read, BAM write) can saturate disk bandwidth before they saturate CPU; if your alignment outputs live on slow networked storage, smaller `N` (more threads per worker, fewer concurrent samples) often wins over larger `N`. The joint `rpf` stage is unaffected — it runs in a single process regardless of this flag.
-
-#### Intermediate files
-
-| Flag | Default | Description |
-|---|---|---|
-| `--keep-intermediates` | off | Keep the per-step intermediate files (`trimmed/<sample>.trimmed.fq.gz`, `contam_filtered/<sample>.nocontam.fq.gz`, `aligned/<sample>.bam` pre-MAPQ). By default these are deleted as soon as the next step has consumed them, since they are large, regenerable, and not consumed by any downstream stage. Pass this flag when debugging a sample or comparing per-step intermediate counts; expect a 2–3× increase in disk footprint per sample. |
+**Concurrency**: `--max-parallel-samples N` aligns N samples concurrently; with `--threads T` each worker's external tools get `max(1, T // N)` threads, keeping total CPU ≈ T. Sizing rule of thumb: `N ≤ T / 2` so every worker still gets ≥ 2 threads.
 
 ---
 
 ### `mitoribopy rpf`
 
-Runs the Ribo-seq analysis pipeline against a directory of BED (or BAM) files. Pipeline:
+Runs the Ribo-seq analysis against a directory of BED (or BAM) files: filter BED on the RPF length window → offset enrichment → per-sample offset selection → translation profile → coverage plots → Wakigawa metagene Fourier QC. `mitoribopy rpf --help` lists every flag; what follows is the publication-grade highlights.
 
-1. Load + filter BED on the RPF length window
-2. Compute offset enrichment (combined + per sample)
-3. Select offsets per read length (combined + per sample, depending on `--offset_mode`)
-4. Render diagnostic plots (heatmaps, line plots, drift plot)
-5. Translation profile: A-/P-/E-site footprint density, frame usage, codon usage (per sample, per requested site)
-6. Coverage profile plots (per sample, per requested site)
-7. Optional modules: structure-density export, codon correlation
+**Required**: `-f FASTA`, `-d BED_DIR`, `-o OUTPUT_DIR`. `-s {h.sapiens,s.cerevisiae,custom}` (default `h.sapiens`); `--footprint_class {monosome,disome,custom}` picks `-rpf MIN MAX` defaults (h.sapiens monosome → 28-34). `--strain custom` requires `--annotation_file` and `-rpf MIN MAX`.
 
-Plain `mitoribopy <flags>` (no subcommand) routes to `mitoribopy rpf` and prints a one-line notice; prefer the explicit subcommand form.
+**Offset enrichment + selection**: `-a {start,stop}` anchor, `-r RANGE`. End-specific bounds `--min_5_offset`, `--max_5_offset`, `--min_3_offset`, `--max_3_offset` are preferred over the shared `--min_offset` / `--max_offset`. `--offset_mode {per_sample,combined}` defaults to `per_sample`; switch to `combined` only when individual samples have very low coverage. `--analysis_sites {p,a,both}` controls which downstream sites are generated (default `both` = parallel P-site + A-site outputs).
 
-#### Core inputs
+**Read-count normalization**: `--rpm_norm_mode {total,mt_mrna}` (`mt_mrna` for mt-only RPM); `--read_counts_file` is auto-wired from `align/read_counts.tsv` when running through `mitoribopy all`.
 
-| Flag | Default | Description |
-|---|---|---|
-| `-f, --fasta REF_FASTA` | — | Reference FASTA for the transcript/annotation context. **Required**. |
-| `-s, --strain {h.sapiens,s.cerevisiae,custom}` | `h.sapiens` | Reference preset; see [Strain presets](#strain-presets-and-footprint-classes). |
-| `-d, --directory BED_DIR` | cwd | Directory of `.bed` and/or `.bam` files. BAMs are auto-converted to BED6 via pysam. |
-| `--bam_mapq Q` | 10 | MAPQ threshold for BAM inputs before BAM→BED6 conversion. Set 0 to disable. |
-| `-rpf MIN_LEN MAX_LEN` | strain/class default | Inclusive read-length filter range, e.g. `-rpf 29 34`. |
-| `--footprint_class {monosome,disome,custom}` | `monosome` | Picks `-rpf` and `--unfiltered_read_length_range` defaults. |
-| `--annotation_file ANNOTATION.csv` | — | Per-transcript annotation CSV. Required for `--strain custom`; the built-in `h.sapiens` and `s.cerevisiae` tables are used otherwise. See [Custom organisms](#custom-organisms) for the schema. |
-| `--codon_tables_file CODON_TABLES.json` | — | Codon-table JSON override. |
-| `--codon_table_name TABLE_NAME` | strain default | Codon table to load (built-in or from `--codon_tables_file`). 27 built-in tables ship; run `--help` for the full list. |
-| `--start_codons CODON [CODON ...]` | strain default | Allowed start codons. Defaults: `h.sapiens` → `ATG ATA`, `s.cerevisiae` → `ATG`, `custom` → `ATG`. |
-| `--atp8_atp6_baseline {ATP6,ATP8}` | `ATP6` | Baseline name for the bicistronic ATP8/ATP6 transcript. Titles remain ATP8/ATP6. |
-| `--nd4l_nd4_baseline {ND4,ND4L}` | `ND4` | Baseline name for the bicistronic ND4L/ND4 transcript. Titles remain ND4L/ND4. |
+**Optional modules**: `--cor_plot` (codon correlation, requires `--base_sample NAME`), `--igv_export` (per-sample BedGraph tracks for IGV), `--structure_density` (log2/scaled density export).
 
-#### Offset enrichment + selection
+**Coverage-profile outputs** under `coverage_profile_plots/`:
+- `read_coverage_*` — full-footprint depth across each transcript; `_rpm` / `_raw` variants, optional `_codon`-binned across the CDS.
+- `{p_site,a_site}_density_*` — single-nt density at the chosen site, with `_frame` (3-frame overlay) and `_frame_split` (3 stacked sub-rows) variants. Frame-0 dominance (~70-90 % of CDS density on frame 0) is the canonical mt-Ribo-seq QC signature.
 
-| Flag | Default | Description |
-|---|---|---|
-| `-a, --align {start,stop}` | `start` | Anchor offset enrichment around the start or stop codon. |
-| `-r, --range NT` | 20 | Plot offsets from -range to +range around the anchor codon. |
-| `--min_offset NT` | 11 | Shared minimum absolute offset (used only when end-specific bounds are not provided). |
-| `--max_offset NT` | 20 | Shared maximum absolute offset (used only when end-specific bounds are not provided). |
-| `--min_5_offset NT`, `--max_5_offset NT` | from `--min_offset` / `--max_offset` | End-specific 5' selection bounds. **Preferred** over the shared bounds. |
-| `--min_3_offset NT`, `--max_3_offset NT` | from `--min_offset` / `--max_offset` | End-specific 3' selection bounds. **Preferred**. |
-| `--offset_mask_nt NT` | 5 | Mask near-anchor bins from -N..-1 and +1..+N in summaries and plots. |
-| `--offset_pick_reference {p_site,reported_site}` | `p_site` | `p_site`: pick in canonical P-site space, then convert to the reported space. `reported_site`: pick directly in the final `--offset_site` space (no P↔A conversion). |
-| `--offset_type {5,3}` | `5` | Which read end the offset is measured from. |
-| `--offset_site {p,a}` | `p` | Coordinate space for the SELECTED OFFSETS table (the values in `p_site_offsets_<align>.csv`). Does NOT control which downstream outputs are generated; use `--analysis_sites` for that. |
-| `--analysis_sites {p,a,both}` | `both` | Which downstream sites to generate. `both` writes parallel P-site and A-site codon usage + coverage plots, side by side under per-site subdirs. `p` or `a` restricts to one site. |
-| `--codon_overlap_mode {full,any}` | `full` | How a read counts toward the codon-level enrichment table at the anchor codon. `full` (default, right for ribo-seq): the read must cover ALL 3 nt of the anchor codon. Example with anchor codon at positions 101–103 — a 30-nt read at 100–129 counts (read covers 101, 102, 103); a read at 102–131 does NOT count (does not cover 101). `any`: any 1-nt overlap counts; the same 102–131 read above WOULD count. Use `any` only for very short reads relative to a codon (rare for ribo-seq). |
-| `-p, --psite_offset NT` | — | Use one fixed offset for every read length and sample. Bypasses enrichment-based selection. |
-| `--offset_mode {per_sample,combined}` | `per_sample` | `per_sample`: each sample uses its own offsets; drift surfaced in `offset_drift_<align>.svg` and audited per sample in `offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv`. `combined`: pool all samples and apply one offset table to every sample (use this when individual samples have very low coverage and the per-sample selection is noisy). |
+**Periodicity QC** under `qc/`: see [3-nt periodicity QC](#3-nt-periodicity-qc) and [docs/reference/periodicity.md](docs/reference/periodicity.md).
 
-#### Outputs and plotting
-
-| Flag | Default | Description |
-|---|---|---|
-| `-o, --output DIR` | `analysis_results` | Base output directory. |
-| `--downstream_dir NAME` | `footprint_density` | Per-sample subdirectory name for frame and codon analyses. |
-| `--plot_dir NAME` | `offset_diagnostics` | Subdirectory name for offset CSVs and plots. CSVs (offset tables, per-sample offsets, summaries) land under `<plot_dir>/csv/`; PNG/SVG diagnostics under `<plot_dir>/plots/`. Per-sample offsets live at `<plot_dir>/csv/per_sample_offset/<sample>/`. |
-| `-fmt, --plot_format {png,pdf,svg}` | `png` | File format for saved plots. SVG recommended for publication-ready vector output. |
-| `--x_breaks NT [NT ...]` | — | Optional custom x-axis tick marks for offset line plots. |
-| `--line_plot_style {combined,separate}` | `combined` | Draw 5'/3' offsets in one panel or two. |
-| `--cap_percentile FRAC` | 0.999 | Upper percentile cap for coverage-style plots. |
-| `-m, --codon_density_window` | off | When set, the codon-level density at each codon centre is summed with its ±1 nt neighbours (a 3-nt sliding window) before being written into the codon coverage / usage tables and plots. Smooths short-window noise around the codon centre. |
-| `--order_samples NAME [NAME ...]` | — | Optional explicit sample order for plots and aggregated outputs. |
-
-#### Read-count normalization
-
-| Flag | Default | Description |
-|---|---|---|
-| `--read_counts_file PATH` | `read_counts_summary.txt` | Read-count table for RPM normalization. Auto-wired from `align/read_counts.tsv` when running through `mitoribopy all`. |
-| `--read_counts_sample_col NAME` | auto | Sample column override; defaults to case-insensitive name match, then column 1. |
-| `--read_counts_reads_col NAME` | auto | Read-count column override; defaults to `reads` / `read_count` / `counts`, then column 3. |
-| `--read_counts_reference_col NAME` | auto | Reference column override; needed for `--rpm_norm_mode mt_mrna` if auto-detection fails. |
-| `--unfiltered_read_length_range MIN MAX` | `[15, 50]` | Range for the unfiltered QC summary and heatmaps. Broaden for disome studies. |
-| `--rpm_norm_mode {total,mt_mrna}` | `total` | RPM denominator: sum all rows or only mt-mRNA rows. |
-| `--mt_mrna_substring_patterns PATTERN [PATTERN ...]` | `mt_genome mt-mrna mt_mrna` | When `--rpm_norm_mode mt_mrna` is selected, the RPM denominator uses only rows from the read-count table whose value in the reference column (set via `--read_counts_reference_col`, or auto-detected) contains ANY of these substrings. Example: in a read-count table with rows for `rrna`, `trna`, `mt_mrna_ND1`, and `mt_mrna_COX1`, the default pattern keeps the latter two and drops the (r/t)RNA rows. |
-
-#### Optional modules
-
-| Flag | Default | Description |
-|---|---|---|
-| `--structure_density` | off | Export log2 and scaled density values from footprint-density tables. |
-| `--structure_density_norm_perc FRAC` | 0.99 | Upper percentile used to cap and scale structure-density values. |
-| `--cor_plot` | off | Generate publication-quality codon-correlation plots (one per non-base sample). When `--analysis_sites=both`, produces parallel outputs under `<output>/codon_correlation/p_site/` AND `<output>/codon_correlation/a_site/`; with single-site analysis only the matching folder appears. Each figure is rendered as both SVG (vector, for figures) and 300 dpi PNG (for slides), with: identity (y = x) line, OLS regression line, an `r / R² / p / slope / intercept / N` stat box, an Okabe-Ito colour-blind safe palette per Category, and leader-line labels for the 10 codons farthest from the regression line (placed greedily to avoid overlap). When `--cor_plot` is set but skipped (e.g., `--base_sample` missing), the pipeline log explicitly states the reason. |
-| `--base_sample NAME` | — | Reference sample for codon-correlation comparisons. Required by `--cor_plot`. Must match an existing sample directory name. |
-| `--cor_mask_method {percentile,fixed,none}` | `percentile` | Masking rule for extreme codon-correlation outliers. The masked-version plot drops codons above the threshold so the bulk of the distribution is visible. |
-| `--cor_mask_percentile FRAC` | 0.99 | Used when `--cor_mask_method percentile`. |
-| `--cor_mask_threshold FLOAT` | — | Used when `--cor_mask_method fixed`. |
-| `--read_coverage_raw` / `--no-read_coverage_raw` | on | Toggle the `coverage_profile_plots/read_coverage_raw[_codon]/` folders. Independent of `--read_coverage_rpm`. |
-| `--read_coverage_rpm` / `--no-read_coverage_rpm` | on | Toggle the `coverage_profile_plots/read_coverage_rpm[_codon]/` folders. Independent of `--read_coverage_raw`. |
-| `--igv_export` / `--no-igv_export` | off | Write per-sample IGV-loadable BedGraph tracks under `<output>/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph`. P-site tracks default to forest green, A-site to dark orange (set via `track color=` header); load alongside the same FASTA the BEDs were aligned to. |
-
-#### Coverage-profile output reference
-
-`coverage_profile_plots/` always contains two kinds of figures (v0.4.4 flat layout):
-
-- **`read_coverage_*`** (top-level, site-independent) — depth across the transcript using the FULL read footprint (broad peak). The same plot regardless of `--analysis_sites`. Variants: `_rpm` (RPM-normalised), `_raw` (raw counts), `_rpm_codon` / `_raw_codon` (codon-binned across the CDS). Each `_rpm` and `_raw` family is independently toggleable via `--read_coverage_rpm` / `--read_coverage_raw`.
-- **`{p_site,a_site}_density_*`** (per-site, single-nucleotide P-site or A-site density, sibling of `read_coverage_*`) — narrow peak at the chosen ribosomal site. The legacy nested `p/` / `a/` subfolders are gone; the site is encoded in the filename prefix. Variants:
-  - `{p_site,a_site}_density_rpm` / `_density_raw` — full-transcript density.
-  - `{p_site,a_site}_density_rpm_codon` / `_density_raw_codon` — same density but binned per CDS codon.
-  - `{p_site,a_site}_density_rpm_frame` / `_density_raw_frame` — **frame-coloured CDS-only nt plots (overlay)**. All three frames in one panel per sample; bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind-safe palette. Frame-0 dominance (~70–90% of CDS density on frame 0) is the canonical mt-Ribo-seq QC signature; if frames 1 and 2 are visible, the library has spurious offset selection, mis-trimmed reads, or contamination from non-ribosome-protected RNA.
-  - `{p_site,a_site}_density_rpm_frame_split` / `_density_raw_frame_split` — **per-frame split companion** (added v0.6.2). Stacks three sub-rows per sample (frame 0, +1, +2) sharing the y-axis, so low-frame signal is no longer hidden under tall same-position bars from another frame. Shares the same `frame = (assigned-site nt − CDS-start nt) mod 3` definition as the overlay, recorded in the `coverage_plot.metadata.json` sidecar each folder ships. Use the split when the overlay's tallest frame is ambiguous (e.g. fused overlapping ORFs like human `ATP86` where the ATP6 ORF is +2 nt offset from ATP8 and the +2 stack would otherwise dominate the visual).
-
-For the translation-efficiency integration, use the dedicated `mitoribopy rnaseq` subcommand.
-
-#### Synonyms
-
-The following short / legacy spellings are accepted as synonyms for the canonical names. They emit a single `[mitoribopy] DEPRECATED:` line on first use so users know to migrate, then keep working.
-
-| Synonym | Canonical |
-|---|---|
-| `-s h` / `--strain h` | `-s h.sapiens` |
-| `-s y` / `--strain y` | `-s s.cerevisiae` |
-| `--merge_density`, YAML `merge_density:` | `--codon_density_window`, YAML `codon_density_window:` |
-| `--mrna_ref_patterns`, YAML `mrna_ref_patterns:` | `--mt_mrna_substring_patterns`, YAML `mt_mrna_substring_patterns:` |
-| `--offset_pick_reference selected_site` | `--offset_pick_reference reported_site` |
+**Synonyms** (emit a one-line deprecation notice, then keep working): `-s h` → `h.sapiens`, `-s y` → `s.cerevisiae`, `--merge_density` → `--codon_density_window`, `--mrna_ref_patterns` → `--mt_mrna_substring_patterns`, `--offset_pick_reference selected_site` → `reported_site`.
 
 ---
 
 ### `mitoribopy rnaseq`
 
-Two ways to drive this subcommand. They are mutually exclusive — passing both `--rna-fastq` and `--de-table` exits with code 2.
+Two mutually exclusive flows (passing both `--rna-fastq` and `--de-table` exits 2):
 
-**Default flow — from raw FASTQ.** Pass `--rna-fastq` + `--ribo-fastq` + `--reference-fasta` and the subcommand runs the whole pipeline: SE vs PE auto-detected from filename mate tokens, adapter auto-detected via the existing `align.adapter_detect`, UMI presence inferred from per-position Shannon entropy, cutadapt + bowtie2 per sample, reads counted per transcript, pyDESeq2 fit on the RNA side, then a fall-through into the same TE / ΔTE / plot path. When any condition has only one biological sample, the run **fails fast** (publication-safe default) with a message naming the offending condition and pointing at three resolutions: supply biological replicates, switch to the `--de-table` flow with externally-computed DE, or opt into the FASTQ-record-parity pseudo-replicate fallback by passing `--allow-pseudo-replicates-for-demo-not-publication` for tutorial / smoke-test use. When the opt-in flag is used the run continues but stamps `pseudo_replicate_mode: true` in `run_settings.json` and writes an `EXPLORATORY.md` sidecar that calls out which outputs are NOT defensible (padj, "significant" markers, dispersion estimates). The reference-consistency hard-gate is skipped in this flow — instead the FASTA SHA256 is recorded in `run_settings.json` under `from_fastq.reference_checksum`. Requires the `[fastq]` optional-dependency extra:
+- **Default — from raw FASTQ** (`--rna-fastq` + `--ribo-fastq` + `--reference-fasta`): SE/PE auto-detection, adapter auto-detection, cutadapt + bowtie2, per-transcript counting, pyDESeq2 fit, then TE / ΔTE / plots. Conditions with n=1 fail fast (publication-safe); pass `--allow-pseudo-replicates-for-demo-not-publication` to opt into a tutorial-only fallback that stamps `pseudo_replicate_mode: true` and writes an `EXPLORATORY.md` sidecar. Requires `pip install 'mitoribopy[fastq]'`.
+- **Alternative — bring your own DE table** (`--de-table` + `--ribo-dir`): publication-grade route. Run DE on the full transcriptome externally (DESeq2 / Xtail / Anota2Seq) and feed it here. Enforces a SHA256 reference-consistency gate against the rpf run's manifest.
 
-```bash
-pip install 'mitoribopy[fastq]'
-```
+Both flows always emit `te.tsv`, `delta_te.tsv`, and 6 publication-grade plots (`mrna_vs_rpf`, `delta_te_volcano`, `ma`, `de_volcano_mrna`, `te_bar_by_condition`, `te_heatmap`) at 300 dpi PNG + editable-text SVG. With `--condition-map` + `--base-sample` + `--compare-sample`, two more plots emit (`te_compare_scatter`, `te_log2fc_bar`). The default flow additionally writes `sample_pca` and `de_volcano_rpf`.
 
-**Alternative flow — bring your own DE table.** Pass `--de-table` from a prior external DESeq2 / Xtail / Anota2Seq run together with a prior `mitoribopy rpf` run (`--ribo-dir`). This is the right path for publication-grade DE statistics — run DE on the full transcriptome in R / Python and feed the result here. Enforces a SHA256 reference-consistency gate: Ribo-seq and RNA-seq must hash to the identical transcript set, otherwise the run aborts with a `MISMATCH` banner.
-
-Both flows produce the same `te.tsv` / `delta_te.tsv` / `plots/` shape. The plot set splits into three tiers by availability:
-
-- **Always emitted (both flows):** `mrna_vs_rpf`, `delta_te_volcano`, `ma`, `de_volcano_mrna`, `te_bar_by_condition`, `te_heatmap` — six comparison plots driven only by the DE table + Ribo counts.
-- **Conditional (both flows, when `--condition-map` + `--base-sample` + `--compare-sample` are all set):** `te_compare_scatter`, `te_log2fc_bar` — these need replicate-per-condition information to compute per-condition TE means, so they are skipped in `--de-table` runs that omit a condition map.
-- **Default flow only:** `sample_pca` (PCA needs the full sample × gene counts matrix that only the default flow has on hand), and `de_volcano_rpf` (driven by an `rpf_de_table.tsv` from a second pyDESeq2 fit on the Ribo-seq subset; skipped with a stderr WARNING when the Ribo subset has fewer than two condition levels).
-
-Every PNG is rendered at **300 dpi** under a shared publication style (Okabe-Ito colour-blind-safe palette, sans-serif fonts, white-bbox gene labels with leader lines, stat boxes on the volcanos, replicate dots overlaid on the bar plot, condition strip on the heatmap, quadrant captions on `mrna_vs_rpf`) and is co-emitted as an **editable-text SVG sidecar** with the same stem (`mrna_vs_rpf.png` + `mrna_vs_rpf.svg`, etc.). The default flow additionally writes intermediate counts matrices, a generated `de_table.tsv`, and the `rpf_de_table.tsv` mentioned above.
-
-#### Inputs (default flow, from raw FASTQ)
-
-| Flag | Default | Description |
-|---|---|---|
-| `--rna-fastq PATH [PATH ...]` | — | RNA-seq FASTQ files or directories. **Required for the default flow.** Mutually exclusive with `--de-table`. |
-| `--ribo-fastq PATH [PATH ...]` | — | Ribo-seq FASTQ files or directories. Optional; when omitted the run short-circuits after writing `de_table.tsv` (manifest mode `from-fastq-rna-only`). |
-| `--reference-fasta PATH` | — | Transcriptome FASTA. **Required for the default flow.** SHA256 recorded under `from_fastq.reference_checksum` in `run_settings.json`. |
-| `--bowtie2-index PREFIX` | — | Pre-built bowtie2 index prefix; skips `bowtie2-build`. `--reference-fasta` is still required for hashing. |
-| `--workdir DIR` | `<output>/work` | Scratch directory for trim / index / per-sample BAM artefacts. |
-| `--align-threads N` | `4` | Threads passed to cutadapt and bowtie2. (`--threads` separately drives BLAS / pyDESeq2 thread caps.) |
-| `--allow-pseudo-replicates-for-demo-not-publication` | off | **Opt-IN** to the FASTQ-record-parity split for any condition with n=1. Default behaviour without this flag is a hard error (exit 2) — pyDESeq2 cannot fit dispersion on n=1 designs, and pseudo-replicates produce padj that is **NOT** publication-grade. Use only for demos / tutorials. When set, `run_settings.json` records `pseudo_replicate_mode: true` and an `EXPLORATORY.md` sidecar is written. The legacy `--no-auto-pseudo-replicate` flag is accepted as a deprecated no-op. |
-
-In the default flow the `--condition-map` table must list every input sample (RNA + Ribo). When pseudo-replicate mode is opted into, the auto-generated `rep1` / `rep2` sample names are written to `<output>/condition_map.augmented.tsv` and the existing TE / ΔTE step picks them up automatically. PE + UMI is currently `NotImplementedError` — preprocess UMIs into the read name first, or use the alternative `--de-table` flow with your own pre-computed DE results.
-
-#### Alternative flow inputs (bring your own DE table)
-
-| Flag | Default | Description |
-|---|---|---|
-| `--de-table PATH` | — | DE results table (CSV or TSV). **Required to enter the alternative flow.** Mutually exclusive with `--rna-fastq`. |
-| `--de-format {auto,deseq2,xtail,anota2seq,custom}` | `auto` | DE table format; `auto` detects from column headers. |
-| `--de-gene-col NAME` | — | Column name for gene IDs. Used when `--de-format custom`. |
-| `--de-log2fc-col NAME` | — | Column name for log2 fold change. |
-| `--de-padj-col NAME` | — | Column name for adjusted p-value. |
-| `--de-basemean-col NAME` | — | Column name for basemean. |
-
-#### Gene identifiers
-
-| Flag | Default | Description |
-|---|---|---|
-| `--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}` | — | **Required, no default**. Mismatched conventions silently produce zero-match runs. Examples: `hgnc` → `MT-ND1`; `bare` → `ND1`; `ensembl` → `ENSG00000198888`; `refseq` → `YP_003024026.1`; `mt_prefixed` → `MT-ND1`. |
-| `--organism {h.sapiens,s.cerevisiae}` | `h.sapiens` | Organism for the mt-mRNA registry. Short / spelled-out forms (`h`, `y`, `human`, `yeast`) are accepted as synonyms. |
-
-#### Ribo-seq inputs (alternative flow only)
-
-| Flag | Default | Description |
-|---|---|---|
-| `--ribo-dir DIR` | — | Output directory of a prior `mitoribopy rpf` run. Must contain `rpf_counts.tsv` and `run_settings.json` (or `run_manifest.json`) with a recorded `reference_checksum`. Required when using `--de-table`. |
-| `--ribo-counts PATH` | `<ribo-dir>/rpf_counts.tsv` | Explicit path to the per-sample per-gene RPF counts table. |
-
-#### Reference-consistency gate (alternative flow only; exactly one)
-
-| Flag | Default | Description |
-|---|---|---|
-| `--reference-gtf PATH` | — | Reference used by RNA-seq; `mitoribopy rnaseq` hashes this and verifies it matches the hash in the rpf run's manifest. |
-| `--reference-checksum SHA256` | — | Precomputed SHA-256, useful when the reference file is not on the rnaseq host. |
-
-#### Conditions
-
-| Flag | Default | Description |
-|---|---|---|
-| `--condition-map PATH` | — | TSV with columns `sample` and `condition`. **Required in the default flow** (drives the pyDESeq2 contrast). In the `--de-table` flow it is optional and enables a replicate-based Ribo log2FC for ΔTE. |
-| `--base-sample NAME` | — | **Reference condition** (denominator of the contrast; the "baseline" used as the x-axis of every TE / DE comparison plot). Required in the default flow. Alias for `--condition-a` — pick whichever spelling you prefer; the YAML key matches `base_sample` for parity with the `rpf` config block. When both `--base-sample` and `--condition-a` are set they must agree. |
-| `--compare-sample NAME` | — | **Comparison condition** (numerator of the contrast). Required in the default flow. Alias for `--condition-b`; same equality rule applies when both are set. |
-| `--condition-a NAME` | — | Legacy spelling of `--base-sample` (still accepted; identical semantics). |
-| `--condition-b NAME` | — | Legacy spelling of `--compare-sample`. |
-
-Without a condition map in the `--de-table` flow, `mitoribopy rnaseq` computes a point-estimate ΔTE using only the DE table's mRNA log2FC and emits rows with a `single_replicate_no_statistics` note.
-
-#### Output
-
-| Flag | Default | Description |
-|---|---|---|
-| `--output DIR` | — | Output directory for `te.tsv`, `delta_te.tsv`, and plots. |
+**Required flags**: `--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}` — mismatches silently produce zero-match runs. Default-flow runs also need `--condition-map`, `--base-sample`, `--compare-sample`. See `mitoribopy rnaseq --help` for the complete flag list including DE-table column overrides (`--de-format`, `--de-gene-col`, etc.) and reference-consistency knobs.
 
 ---
 
@@ -914,41 +620,11 @@ Without a condition map in the `--de-table` flow, `mitoribopy rnaseq` computes a
 
 End-to-end orchestrator: align + rpf + (optional) rnaseq. Reads one YAML/JSON/TOML config and dispatches to the per-stage subcommands; writes a composed `run_manifest.json` covering every parameter, tool version, and reference checksum.
 
-| Flag | Default | Description |
-|---|---|---|
-| `--config PATH` | — | Configuration file with `align:` / `rpf:` / `rnaseq:` sections. **Required** unless using `--print-config-template` or `--show-stage-help`. |
-| `--output DIR` | — | Run root. Each stage writes under `<output>/align/`, `<output>/rpf/`, `<output>/rnaseq/`. |
-| `--resume` | off | Skip stages whose sentinel output already exists: `align/read_counts.tsv`, `rpf/rpf_counts.tsv`, `rnaseq/delta_te.tsv`. |
-| `--skip-align` | off | Skip the align stage even when an `align:` section exists. |
-| `--skip-rpf` | off | Skip the rpf stage. |
-| `--skip-rnaseq` | off | Skip the rnaseq stage even when an `rnaseq:` section exists. |
-| `--manifest PATH` | `run_manifest.json` | Manifest filename (relative to `--output`). |
-| `--show-stage-help STAGE` | — | Print the full help for one stage (`align`, `rpf`, or `rnaseq`) and exit. Useful because `--help` shows only orchestrator flags. |
-| `--print-config-template` | — | Print a commented YAML template covering every stage and exit. |
-| `--print-canonical-config` | — | Load `--config`, apply every auto-wiring + sample-sheet expansion that `mitoribopy all` would normally apply, then print the resulting **canonical config** to stdout (YAML if PyYAML is available, JSON otherwise) and exit. The same blob is embedded in `run_manifest.json` under `config_canonical` on real runs, so this is the right way to preview "what is `mitoribopy all` actually going to run with?" before committing to a full pipeline. |
+**Required**: `--config PATH`, `--output DIR`. Useful flags: `--resume` (hash-validated against the prior `run_manifest.json` — config / sample sheet / FASTA edits force the affected stage(s) to re-run), `--skip-align` / `--skip-rpf` / `--skip-rnaseq`, `--print-config-template` (commented YAML template), `--print-canonical-config` (preview the fully-wired config that would actually run), `--show-stage-help STAGE`.
 
-#### Auto-wiring
+**Auto-wiring**: when stages run together, `mitoribopy all` chains `rpf.directory` ← `<run_root>/align/bed`, `rpf.read_counts_file` ← `<run_root>/align/read_counts.tsv`, and `rnaseq.ribo_dir` ← `<run_root>/rpf`. Each stage's own `--output` defaults to `<run_root>/<stage>/`.
 
-When `align` and `rpf` both run, `mitoribopy all` auto-wires:
-
-- `rpf.directory` → `<run_root>/align/bed`
-- `rpf.read_counts_file` → `<run_root>/align/read_counts.tsv`
-
-When `rpf` and `rnaseq` both run:
-
-- `rnaseq.ribo_dir` → `<run_root>/rpf`
-
-Each stage's own `--output` defaults to `<run_root>/<stage>/`.
-
-#### YAML config shape
-
-Every key under a section maps to that subcommand's CLI flag with hyphens converted to underscores:
-
-- `align:` keys use the **hyphen** flag style (`--kit-preset` → `kit_preset`).
-- `rpf:` keys use the **underscore** flag style (`--offset_type` → `offset_type`) because the rpf parser uses underscored flag names directly.
-- `rnaseq:` keys use the hyphen style (`--gene-id-convention` → `gene_id_convention`).
-
-The orchestrator handles both styles transparently. Booleans emit the bare flag (`true`) or are omitted entirely (`false`); `null` values are dropped.
+**YAML config shape**: every key under a section maps to that subcommand's CLI flag, hyphens converted to underscores. `align:` and `rnaseq:` use hyphen style (`--kit-preset` → `kit_preset`); `rpf:` uses underscore style (`--offset_type` → `offset_type`). Booleans emit the bare flag (`true`) or are omitted (`false`); `null` is dropped.
 
 ---
 
@@ -1016,36 +692,27 @@ When a from-FASTQ flow run is launched with `--allow-pseudo-replicates-for-demo-
 
 ### 3-nt periodicity QC
 
-After per-read-length P-site (or A-site) assignment, MitoRiboPy classifies every site by its codon phase:
-
-```
-frame = (assigned_site_nt − CDS_start_nt) mod 3
-```
-
-`frame == 0` is the annotated coding frame; a healthy mt-Ribo-seq library, after correct offset assignment, drops most P-sites onto frame 0. The bundle under `<output>/rpf/qc/` records this at three resolutions plus a soft per-sample QC verdict:
+The bundle under `<output>/rpf/qc/` is a faithful re-implementation of the metagene Fourier method published in Wakigawa et al. 2025 (bioRxiv 2025.05.03.652009). The frame-fraction QC bundle (`qc_summary.tsv`, `frame_counts_*.tsv`, `gene_periodicity.tsv`, frame heatmaps, phase score) was retired in v0.8.0 — the Wakigawa `spectral_ratio_3nt` + `snr_call` columns now carry the headline QC verdict.
 
 | Output | What it answers |
 |---|---|
-| `qc_summary.tsv` + `qc_summary.md` | "Is this sample's periodicity good enough to interpret?" One row / one block per sample with `overall_qc_call`, the best read length picked **after** the depth filter, and the depth-weighted global frame fractions. |
-| `frame_counts_by_sample_length.tsv` | "Which read length is well-phased?" Per-(sample, read_length) frame fractions, `expected_frame_enrichment` (frame 0 over the mean of the other two), `entropy_bias` (1 − base-3 entropy across the three fractions), and a soft `qc_call`. |
-| `gene_periodicity.tsv` | "Which gene is well-phased?" Per-(sample, gene) frame fractions, optional ribotricer-style `phase_score` (enable with `mitoribopy periodicity --phase-score`), and an `is_overlap_pair` boolean for the human mt-mRNA overlap pairs. |
-| `fourier_spectrum.tsv` + `fourier_period3_score.tsv` + `fourier_period3_summary.tsv` + `fourier_spectrum/<sample>/*_combined.{png,svg}` | Wakigawa-style discrete-Fourier amplitude spectrum on the 100-nt window upstream of (`orf`) and downstream of (`utr3`) every canonical stop codon, computed per-`(sample, read_length, gene, region)`. The headline figure is the per-`(sample, read_length)` two-panel overlay (ORF on top, 3' UTR on bottom): a healthy library shows a sharp peak at period 3 nt in the ORF panel and a flat 3' UTR panel. Replaced the legacy `fft_period3_power.tsv` single-scalar in v0.7.0; see [docs/reference/periodicity.md](docs/reference/periodicity.md) for the full schema and the overlap-upstream policy (MT-ATP8 / MT-ND4L analysed individually but excluded from the combined-data view). |
-| `periodicity_metagene.png/.svg` | Start- and stop-anchored 3-nt periodicity, bars frame-coloured. The community-standard "show me 3-nt phasing" plot. |
-| `by_length/frame_by_length_heatmap.png/.svg` | Read-length × frame-fraction heatmap with red borders on excluded length classes. |
-| `by_length/periodicity.metadata.json` | Frame formula, threshold values, `exclude_start_codons` / `exclude_stop_codons`, and Fourier knobs (`fourier_spectrum_enabled`, `fourier_window_nt`, `fourier_period_range`) actually applied — so a reviewer can re-derive every number from disk. |
+| `metagene_start.tsv` / `metagene_stop.tsv` + `metagene_{start,stop}_<site>_site.svg` | Start- and stop-anchored P-site density profiles. The community-standard "show me 3-nt phasing" sanity check, used to verify offset assignment. |
+| `fourier_spectrum_combined.tsv` | Per-(sample, read_length, gene_set, region) metagene amplitude curve over period 2-10 nt. `gene_set ∈ {combined, ATP86, ND4L4}`; `region ∈ {orf_start, orf_stop}`. |
+| `fourier_period3_score_combined.tsv` | Per-(sample, read_length, gene_set, region) headline 3-nt spectral ratio. Columns: `amp_at_3nt`, `background_amp_median`, `spectral_ratio_3nt`, `snr_call ∈ {excellent, healthy, modest, broken, no_signal}` (Wakigawa thresholds: ≥10× / ≥5× / ≥2× / <2× / NaN), `transcripts` (semicolon-joined list of contributing transcripts). |
+| `fourier_spectrum/<sample>/*.png` and `*.svg` | Three figures per (sample, read_length): `*_combined.png` (canonical mt-mRNAs aggregated), `*_ATP86.png` (junction-bracketed ATP8/ATP6 bicistronic analysis: top = ATP8 frame, bottom = ATP6 frame), `*_ND4L4.png` (junction-bracketed ND4L/ND4 analysis). Each panel shows ONE aggregated trace; in-figure annotations report `spectral_ratio_3nt` and `snr_call`. |
+| `periodicity.metadata.json` | Sidecar JSON recording the Wakigawa knobs that produced the tables: `method = wakigawa_metagene_dft`, `fourier_window_nt`, `drop_codons_after_start`, `drop_codons_before_stop`, `min_mean_coverage`, `min_total_counts`, `regions`, `gene_sets`. |
 
-#### Default thresholds
+#### Method defaults (Wakigawa-faithful)
 
 | Knob | Default | Where to override |
 |---|---|---|
-| `good_frame_fraction` | 0.60 | `mitoribopy periodicity --good-frame-fraction` |
-| `warn_frame_fraction` | 0.50 | `mitoribopy periodicity --warn-frame-fraction` |
-| `min_reads_per_length` | 1000 | `mitoribopy periodicity --min-reads-per-length` |
-| `min_reads_per_gene` | 50 | `mitoribopy periodicity --min-reads-per-gene` |
-| `exclude_start_codons` | 6 (standalone CLI) / 0 (pipeline path) | `mitoribopy periodicity --exclude-start-codons` |
-| `exclude_stop_codons` | 3 (standalone CLI) / 0 (pipeline path) | `mitoribopy periodicity --exclude-stop-codons` |
+| Window width | 99 nt = 33 codons (multiple of 3) | `--periodicity-fourier-window-nt` |
+| Codons skipped after AUG | 5 (15 nt — initiation peak) | `mitoribopy periodicity --drop-codons-after-start` |
+| Codons skipped before stop | 1 (3 nt — termination peak) | `mitoribopy periodicity --drop-codons-before-stop` |
+| Min mean coverage in window | 0.1 | `mitoribopy periodicity --min-mean-coverage` |
+| Min total site counts in window | 30 | `mitoribopy periodicity --min-total-counts` |
 
-`exclude_start_codons` / `exclude_stop_codons` mask the initiation- and termination-proximal codons (initiation pause, stop-codon stacking) from frame statistics. They default to 0 inside the pipeline path so historical pooled numbers stay reproducible; the standalone subcommand applies the spec defaults of 6 / 3 to both the per-length and gene-level tables.
+Per-gene processing: divide by window mean → mean-centre → Hann window → element-wise mean across qualifying genes → direct DFT at exactly period 3.0 (not bin-snapped). See [docs/reference/periodicity.md](docs/reference/periodicity.md) for the math and the rationale for each step.
 
 #### QC labels
 
@@ -1074,243 +741,97 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
 
 ```text
 <output>/
-  run_manifest.json                    # composed provenance: align + rpf + rnaseq settings,
-                                       # tool versions, reference_checksum, stages_run
+  run_manifest.json                    # composed provenance: settings, tool versions,
+                                       # reference_checksum, stages_run
+  SUMMARY.md, summary_qc.tsv,          # auto-rendered after every run
+  warnings.tsv, figure_qc.tsv,
+  outputs_index.tsv
+
   align/
-    mitoribopy.log
-    read_counts.tsv                    # per-stage counts (input → trimmed → contam → mt → MAPQ → dedup)
-    kit_resolution.tsv                 # per-sample kit + dedup decisions; the provenance spine
-    run_settings.json                  # includes per_sample[] block with detected_kit, applied_kit,
-                                       # match_rate, dedup_strategy, source per sample
-    trimmed/                           # only *.cutadapt.json (per-sample);
-                                       # the trimmed *.fq.gz is deleted after
-                                       # contam_filter runs unless
-                                       # --keep-intermediates is passed
-    contam_filtered/                   # empty unless --keep-intermediates
-    aligned/                           # *.mapq.bam (kept; pre-mapq *.bam is
-                                       # deleted unless --keep-intermediates)
-    deduped/                           # only created when at least one sample
-                                       # uses umi-tools; for dedup=skip the
-                                       # orchestrator wires mapq.bam straight
-                                       # into BED conversion so no duplicate
-                                       # dedup.bam is written
-    bed/                               # *.bed -- strand-aware BED6 inputs to rpf
-  rpf/
-    mitoribopy.log
-    rpf_counts.tsv                     # per-sample per-gene RPF counts; feeds rnaseq
-    run_settings.json                  # includes reference_checksum (SHA256 of --fasta)
-    offset_diagnostics/                # renamed from plots_and_csv/ in v0.4.4
-      csv/                             # all CSV diagnostics live here
-        offset_<align>.csv             # COMBINED enrichment summary
-        p_site_offsets_<align>.csv     # COMBINED selected offsets
-        read_length_summary.csv        # filtered RPF window per sample
-        per_sample_offset/             # renamed from per_sample/ in v0.4.4
-          <sample>/
-            offset_<align>.csv         # per-sample enrichment summary
-            p_site_offsets_<align>.csv # per-sample selected offsets
-            offset_applied.csv         # exact offsets row applied to <sample>
-                                       # (audit so reviewers can verify
-                                       # per-sample selection from disk)
-      plots/                           # all PNG/SVG diagnostics live here
-        offset_drift_<align>.svg       # per-sample 5'/3' offset comparison; read this FIRST
-        offset_*.svg                   # heatmaps + line plots
-        unfiltered_heatmap_*.svg
-        <sample>_read_length_distribution.svg
-    translation_profile/               # FLAT layout (v0.4.4): one folder per sample,
-      <sample>/                        # site is encoded in filename prefix.
-        footprint_density/             # <transcript>_footprint_density.csv (cols:
-                                       #   Position, Nucleotide, A_site, P_site)
-                                       # + <transcript>_p_site_depth.png and/or
-                                       #   <transcript>_a_site_depth.png
-        translating_frame/             # p_site_frame_usage_total.csv, p_site_*_by_transcript.csv,
-                                       # a_site_frame_usage_total.csv, a_site_*_by_transcript.csv,
-                                       # plus matching _plot.png files
-        codon_usage/                   # p_site_codon_usage_<transcript>.csv (P-site, stop-masked),
-                                       # p_site_codon_usage_total.csv,
-                                       # a_site_codon_usage_<transcript>.csv (A-site, no mask),
-                                       # a_site_codon_usage_total.csv, plus matching _plot.png files
-    coverage_profile_plots/            # FLAT layout (v0.4.4): site is the filename prefix.
-      read_coverage_rpm/               # SITE-INDEPENDENT (gated by --read_coverage_rpm)
-      read_coverage_raw/               # SITE-INDEPENDENT (gated by --read_coverage_raw)
-      read_coverage_rpm_codon/
-      read_coverage_raw_codon/
-      p_site_density_rpm/              # P-site nt-resolution density (RPM)
-      p_site_density_raw/              # P-site nt-resolution density (raw)
-      p_site_density_rpm_codon/        # codon-binned across CDS, RPM
-      p_site_density_raw_codon/        # codon-binned across CDS, raw
-      p_site_density_rpm_frame/        # CDS-only nt plot, frame-coloured overlay (0/1/2 vs CDS start);
-                                       # frame-0 dominance is the canonical mt-Ribo-seq QC.
-      p_site_density_raw_frame/        # same but raw counts
-      p_site_density_rpm_frame_split/  # v0.6.2: per-frame split companion, 3 sub-rows per sample
-      p_site_density_raw_frame_split/  #         (frame 0, +1, +2) sharing y-axis. Use when the
-                                       #         overlay's tallest frame hides low-frame signal
-                                       #         (e.g. fused overlap ORFs like ATP86).
-      a_site_density_*/                # A-site mirror folders (only when analysis_sites in {a,both})
-    structure_density/                 # if --structure_density (uses P-site by default)
-    codon_correlation/                 # if --cor_plot
-      p_site/<base>_vs_<sample>_{all,masked}.{csv,svg,png}    # P-site correlation
-      a_site/<base>_vs_<sample>_{all,masked}.{csv,svg,png}    # A-site correlation
-    igv_tracks/                        # if --igv_export
-      <sample>/
-        <sample>_p_site.bedgraph       # P-site footprint density (forest green track)
-        <sample>_a_site.bedgraph       # A-site footprint density (dark orange track)
-    qc/                                # 3-nt periodicity QC bundle (always written by rpf)
-      qc_summary.tsv                   # one row per sample: best_read_length,
-                                       # best_read_length_expected_frame_fraction,
-                                       # best_read_length_dominant_frame/_fraction,
-                                       # global_expected_frame_fraction, global_entropy_bias,
-                                       # n_good/_warn/_poor/_low_depth_lengths,
-                                       # overall_qc_call (good/warn/poor/low_depth) + notes
-      qc_summary.md                    # human-readable companion of qc_summary.tsv
-      frame_counts_by_sample_length.tsv# per-(sample, read_length) frame fractions,
-                                       # expected_frame_enrichment, entropy_bias, qc_call
-      gene_periodicity.tsv             # per-(sample, gene) frame fractions, optional
-                                       # phase_score, qc_call, is_overlap_pair (true for
-                                       # MT-ATP8/MT-ATP6 + MT-ND4L/MT-ND4 plus the fused
-                                       # ATP86 / ND4L4 transcript spellings)
-      frame_summary.tsv                # legacy pooled per-sample frame fractions
-      periodicity_metagene.png/.svg    # start- and stop-aligned 3-nt periodicity plots,
-                                       # bars frame-coloured (0 / +1 / +2)
-      periodicity_start.tsv            # start-anchored metagene table
-      periodicity_stop.tsv             # stop-anchored metagene table
-      strand_sanity.tsv                # per-sample minus-strand fraction (should be 0
-                                       # on a forward-stranded mt-transcriptome library)
-      by_length/
-        frame_by_length.tsv            # per-length inclusion-policy diagnostics
-        length_inclusion_decisions.tsv # distilled include/exclude verdict per length
-        periodicity.metadata.json      # frame formula + thresholds + exclude_codon settings
-        frame_by_length_heatmap.png/.svg# read-length × frame fraction heatmap
-  rnaseq/                              # if rnaseq config supplied
-    te.tsv                             # one row per (sample, gene): rpf_count, mrna_abundance, te
-    delta_te.tsv                       # one row per gene: mrna_log2fc, rpf_log2fc, delta_te_log2,
-                                       # padj, note
-    plots/                               # every entry below also has a sibling .svg
-                                         # at 300 dpi (PNG) + editable-text SVG (vector,
-                                         # Illustrator-friendly). Okabe-Ito colour-blind-
-                                         # safe palette across all plots; titles wear
-                                         # `<base> vs <compare>` from --base-sample /
-                                         # --compare-sample so reviewers know the
-                                         # contrast at a glance.
-      mrna_vs_rpf.png   (+ .svg)         # four-quadrant log2FC scatter (mRNA vs RPF) with
-                                         # faint quadrant captions (co-regulated up / buffered
-                                         # up / co-regulated down / buffered down) and points
-                                         # coloured by quadrant; identity y=x line drawn
-      delta_te_volcano.png   (+ .svg)    # ΔTE (log2) vs -log10(padj) with stat box
-                                         # (n_TE_up / n_TE_down / n_n.s.) and threshold
-                                         # guides at padj=0.05 + |ΔTE|=1
-      ma.png   (+ .svg)                  # log10(baseMean) vs log2FoldChange; sig up = vermillion,
-                                         # sig down = blue, n.s. = grey; sig genes labelled
-                                         # with white-bbox + leader line
-      de_volcano_mrna.png   (+ .svg)     # mRNA DE volcano (log2FC vs -log10 padj),
-                                         # vermillion = sig up, blue = sig down, grey = n.s.,
-                                         # threshold guides at padj=0.05 and |L2FC|=1;
-                                         # stat box reports counts; smart label placer
-                                         # spreads labels around dense clusters
-      de_volcano_rpf.png   (+ .svg)      # Ribo-seq DE volcano (default flow only;
-                                         # second pyDESeq2 fit on the Ribo subset; skipped
-                                         # with stderr WARNING when Ribo subset has fewer
-                                         # than two condition levels)
-      te_bar_by_condition.png   (+ .svg) # log2(TE) per gene, bars grouped by condition + SE
-                                         # error bars; every replicate also drawn as a
-                                         # black dot jittered along x within the bar's
-                                         # footprint (so the sample size behind each mean
-                                         # is visible by eye)
-      te_heatmap.png   (+ .svg)          # gene × sample log2(TE) heatmap (RdBu_r, centred
-                                         # at 0); coloured condition strip above the columns
-                                         # spells the assignment in white-bold; cell-value
-                                         # annotations get auto-contrast (white on saturated,
-                                         # black on faint)
-      te_compare_scatter.png   (+ .svg)  # per-gene mean log2(TE) in <base> (x) vs <compare>
-                                         # (y) with identity y=x line; per-replicate cloud
-                                         # behind gene-mean dots; gene-means coloured by
-                                         # direction; Pearson r in stat box. Emitted only
-                                         # when --condition-map + --base-sample +
-                                         # --compare-sample are all set.
-      te_log2fc_bar.png   (+ .svg)       # sorted bar of log2(TE_compare / TE_base) per gene
-                                         # with the numeric log2FC printed at each bar's
-                                         # tip; bars above zero (vermillion) mean TE up
-                                         # in the compare condition. Same conditions as
-                                         # te_compare_scatter.
-      sample_pca.png   (+ .svg)          # PC1 vs PC2 from log1p counts; condition = colour,
-                                         # assay = marker shape; variance % on axes
-                                         # (default flow only — needs the full counts matrix)
+    read_counts.tsv                    # per-stage funnel (input → trim → contam → mt → MAPQ → dedup)
+    kit_resolution.tsv                 # per-sample kit + UMI + dedup decisions
     run_settings.json
-    # --- default flow (--rna-fastq) only -----------------------------
-    de_table.tsv                       # mRNA pyDESeq2 result in canonical DESeq2 schema
-    rpf_de_table.tsv                   # Ribo-seq pyDESeq2 result (same schema, drives
-                                       # de_volcano_rpf.png; absent when the Ribo subset
-                                       # has fewer than two condition levels)
-    rna_counts.tsv                     # wide gene × sample RNA-seq counts
-    rpf_counts.tsv                     # long-format Ribo-seq counts (sample\tgene\tcount)
-    rpf_counts_matrix.tsv              # wide gene × sample Ribo-seq counts
-    condition_map.augmented.tsv        # original entries + auto-generated rep1 / rep2 names
+    aligned/<sample>.mapq.bam          # MAPQ-filtered BAMs (kept)
+    deduped/<sample>.dedup.bam         # only when at least one sample uses umi-tools
+    bed/<sample>.bed                   # strand-aware BED6 inputs to rpf
+    trimmed/, contam_filtered/         # only --keep-intermediates
+
+  rpf/
+    rpf_counts.tsv                     # per-(sample, gene) counts; feeds rnaseq
+    run_settings.json                  # includes reference_checksum
+    offset_diagnostics/
+      csv/                             # offset_<align>.csv (combined),
+                                       # per_sample_offset/<sample>/offset_applied.csv
+      plots/                           # offset_drift_<align>.svg, heatmaps, line plots
+    translation_profile/<sample>/
+      footprint_density/, translating_frame/, codon_usage/   # site is in the filename prefix
+    coverage_profile_plots/
+      read_coverage_{rpm,raw}[_codon]/         # full-footprint depth (site-independent)
+      {p_site,a_site}_density_{rpm,raw}/       # single-nt density at the chosen site
+      {p_site,a_site}_density_*_frame/         # frame-coloured CDS overlay (frame-0 dominance = QC)
+      {p_site,a_site}_density_*_frame_split/   # 3 stacked sub-rows per sample (frame 0, +1, +2)
+    qc/                                # Wakigawa metagene Fourier QC bundle (always emitted)
+      fourier_spectrum_combined.tsv          # per-(sample, length, gene_set, region) amplitude curve
+      fourier_period3_score_combined.tsv     # spectral_ratio_3nt + snr_call tier (excellent/healthy/modest/broken)
+      periodicity.metadata.json
+      fourier_spectrum/<sample>/<sample>_<length>nt_{combined,ATP86,ND4L4}.{png,svg}
+      metagene_{start,stop}.tsv              # P-site metagene tables
+      metagene_{start,stop}_p_site.svg       # 3-nt periodicity plots
+      strand_sanity.tsv                      # per-sample minus-strand fraction (should be 0)
+    codon_correlation/{p_site,a_site}/       # if --cor_plot
+    igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph     # if --igv_export
+    structure_density/                       # if --structure_density
+
+  rnaseq/                              # if rnaseq config supplied
+    te.tsv, delta_te.tsv               # headline tables
+    plots/                             # 6 always-emitted publication plots; up to 3 more
+                                       # (mrna_vs_rpf, delta_te_volcano, ma, de_volcano_mrna,
+                                       # te_bar_by_condition, te_heatmap, [te_compare_scatter,
+                                       # te_log2fc_bar, sample_pca]) at 300 dpi PNG + editable SVG
+    de_table.tsv, rpf_de_table.tsv,    # default flow only (from raw FASTQ)
+    rna_counts.tsv, rpf_counts.tsv,
+    rpf_counts_matrix.tsv,
+    condition_map.augmented.tsv
 ```
 
-In v0.4.4 the legacy `p/` / `a/` subfolders under `translation_profile/` and `coverage_profile_plots/` were dropped. The site is encoded in filename prefixes (`p_site_*` / `a_site_*`) so a single per-sample folder hosts both sites without ambiguity, and downstream tooling never has to branch on `--analysis_sites`.
+### What to inspect first
 
-### What should I inspect first?
+After every run, walk these files in order. The first three (`SUMMARY.md`, `warnings.tsv`, `summary_qc.tsv`) catch ~90 % of gotchas without digging into per-stage TSVs.
 
-After every run, walk these files in order. The first three (`SUMMARY.md`,
-`warnings.tsv`, `summary_qc.tsv`) catch ~90% of the gotchas without having
-to dig into per-stage TSVs.
+1. **`SUMMARY.md`** — one-page human-readable view of what ran and what was produced.
+2. **`warnings.tsv`** — every structured warning (`stage / sample_id / severity / code / message / suggested_action`). Header-only = nothing flagged.
+3. **`summary_qc.tsv`** — per-sample QC roll-up across all stages.
+4. **`align/kit_resolution.tsv`** — per-sample kit / UMI / dedup decisions; the `source` column tells you whether it was `detected`, `user_fallback`, `inferred_pretrimmed`, or set explicitly.
+5. **`align/read_counts.tsv`** — per-stage drop-off; invariants `rrna_aligned + post_rrna_filter == post_trim` and `mt_aligned + unaligned_to_mt == post_rrna_filter` must hold.
+6. **`rpf/offset_diagnostics/plots/offset_drift_<align>.svg`** — per-sample offset drift, visible by eye.
+7. **`rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv`** — exact offset row applied downstream.
+8. **`rpf/qc/fourier_period3_score_combined.tsv`** — Wakigawa periodicity verdict per `(sample, read_length, gene_set, region)`. Look at `gene_set=combined` rows: `snr_call ∈ {excellent, healthy}` is publication-grade; `modest` is borderline; `broken` means offset assignment is suspect for that read length. **Read this before trusting any downstream codon-level table.**
+9. **`rpf/qc/fourier_spectrum/<sample>/*.png`** — three figures per (sample, length): `combined`, `ATP86`, `ND4L4`. Each panel reports its `spectral_ratio_3nt` and `snr_call` in-figure.
+10. **`rpf/coverage_profile_plots/p_site_density_rpm_frame/<transcript>_*.svg`** — frame-coloured CDS density. Frame-0 dominance (~70-90 %) is the canonical mt-Ribo-seq QC signature; flat or jittery frames suggest contamination or poor offset selection. The `_frame_split/` companion stacks each frame in its own sub-row when the overlay's tallest frame would hide low-frame signal.
+11. **`rpf/rpf_counts.tsv`** + sidecar — per-(sample, gene) RPF count matrix.
+12. **`rnaseq/te.tsv` + `rnaseq/delta_te.tsv`** — translation efficiency and ΔTE (when the rnaseq stage ran).
+13. **`figure_qc.tsv`** (after `mitoribopy validate-figures runs/full/`) — mechanical pass/warn/fail per plot.
 
-1. `SUMMARY.md` — one-page human-readable view of what ran and what was produced.
-2. `warnings.tsv` — every structured warning (`stage / sample_id / severity / code / message / suggested_action`). An empty file (header only) means nothing was flagged.
-3. `summary_qc.tsv` — per-sample QC across all stages.
-4. `align/kit_resolution.tsv` — confirm each sample resolved to the right kit / UMI / dedup strategy.
-5. `align/read_counts.tsv` — per-stage read funnel (trim → contam → mt → MAPQ → dedup).
-6. `rpf/offset_diagnostics/plots/offset_drift_*.svg` — per-sample offset drift in a single glance.
-7. `rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv` — exact offset table actually applied.
-8. `rpf/qc/qc_summary.md` — one-block-per-sample human-readable periodicity verdict (`good` / `warn` / `poor` / `low_depth`); `rpf/qc/qc_summary.tsv` is the machine-readable companion. **Read this before trusting any downstream codon-level table** — a `poor` call here means the offsets did not produce the expected codon phasing, and codon-occupancy interpretation is unsafe.
-9. `rpf/rpf_counts.tsv` (+ `rpf/rpf_counts.metadata.json` sidecar) — per-(sample, gene) RPF count matrix.
-10. `rnaseq/te.tsv` and `rnaseq/delta_te.tsv` — translation efficiency and ΔTE tables (when the rnaseq stage ran).
-11. `figure_qc.tsv` (after `mitoribopy validate-figures runs/full/`) — mechanical pass/warn/fail per plot (label overlap, point counts, SVG editability).
+### Common reasons NOT to trust the output
 
-### When NOT to trust the output
+The pipeline can finish exit-0 under several conditions that should still make a reviewer pause. Check `warnings.tsv` first; the `suggested_action` column tells you what to do.
 
-The pipeline finishes "successfully" (exit 0) under a number of conditions
-that should still make a reviewer pause. Check `warnings.tsv` for any of
-the codes below; each row's `suggested_action` tells you what to do.
+- **Adapter detection low confidence** (`source=user_fallback` in `kit_resolution.tsv`).
+- **High contaminant fraction** (>50 % of post-trim reads filtered as rRNA / contaminant).
+- **Low mt-mRNA alignment fraction** (`mt_aligned / post_rrna_filter < 0.05`).
+- **No clear offset peak** in `offset_*.svg` — selected offset was a fallback, not a real peak.
+- **Periodicity `broken` or `no_signal`** in `fourier_period3_score_combined.tsv` — offsets did not produce codon phasing for that read length; cross-check `metagene_start_p_site.svg` for the same length.
+- **Pseudo-replicate mode** — `rnaseq/EXPLORATORY.md` exists. DE statistics are exploratory only.
+- **Gene-ID match rate below threshold** — `warnings.tsv` row `GENE_ID_MATCH_RATE_LOW`. DE table and rpf reference do not match.
+- **`figure_qc.tsv` has any `fail` row** — overlapping labels, clipped text, or point-count mismatch.
 
-- **Adapter detection low confidence** — `align/kit_resolution.tsv` has `source=user_fallback` or a small `confidence_margin`. The detection picked something but wasn't sure; spot-check the assigned adapter against the FASTQ.
-- **High contaminant fraction** — `read_counts.tsv` shows >50% of post-trim reads filtered out as rRNA / contaminant. The library may not be the libraryyou think it is.
-- **Low mt-mRNA alignment fraction** — `mt_aligned / post_rrna_filter < 0.05`. The reference, the strain preset, or the input may be off.
-- **No clear offset peak** — `rpf/offset_diagnostics/plots/offset_*.svg` shows a flat enrichment landscape. The selected offset was a fallback, not a real peak.
-- **Weak frame-0 dominance** — `rpf/qc/qc_summary.tsv` reports `overall_qc_call=poor` (or `warn`), or coverage plots in `rpf/coverage_profile_plots/p_site_density_rpm_frame/` show ≪70% frame-0 density. Inspect `frame_counts_by_sample_length.tsv` to see whether one bad read length is contaminating an otherwise clean library, then `gene_periodicity.tsv` to see whether one gene (often a fused overlap pair like `ATP86` or `ND4L4`, flagged with `is_overlap_pair=true`) is dragging the pooled call down.
-- **Best read length picked from a low-depth row** — fixed in v0.6.2: `build_qc_summary` now restricts `best_read_length` selection to rows clearing `min_reads_per_length` when at least one such row exists. If every length is below threshold the sample is reported as `low_depth` rather than crowning a 5-read lucky frame-0 spike.
-- **Sample-specific offset fallback** — a sample's `offset_applied.csv` row shows the global fallback offset rather than the per-sample optimum. Either too few reads or a flat landscape.
-- **Pseudo-replicate mode** — `rnaseq/EXPLORATORY.md` exists. The DE statistics are exploratory only — re-run with biological replicates for publication.
-- **Inferred UMI without declaration** — `kit_resolution.tsv` shows `umi_source=inferred`. Confirm with the wet-lab record before trusting dedup.
-- **Gene-ID match rate below threshold** — `warnings.tsv` has a `GENE_ID_MATCH_RATE_LOW` row. Your DE table and rpf reference may not match.
-- **`figure_qc.tsv` has any `fail` row** — overlapping labels, clipped text, or a point-count mismatch with the source TSV. A `--strict` `validate-figures` run will exit 2 in this case.
+### Publication route
 
-### Publication route (recommended for figures + tables in a paper)
-
-For a publication-grade analysis, run the pipeline on the full
-transcriptome externally (DESeq2 / Xtail / Anota2Seq) and let MitoRiboPy
-handle the mt-translation-efficiency layer:
-
-1. `mitoribopy align` + `mitoribopy rpf` to get RPF counts.
-2. Run RNA-seq DE externally on the FULL transcriptome with your tool of choice.
-3. `mitoribopy rnaseq --rnaseq-mode de_table --de-table de.tsv --ribo-dir runs/full/rpf/` to compute TE / ΔTE on top.
+1. `mitoribopy align` + `mitoribopy rpf` for RPF counts + Fourier QC.
+2. Run RNA-seq DE externally on the FULL transcriptome with your tool of choice (DESeq2 / Xtail / Anota2Seq) for publication-grade statistics.
+3. `mitoribopy rnaseq --de-table de.tsv --ribo-dir runs/full/rpf/` to compute TE / ΔTE on top.
 4. `mitoribopy validate-figures runs/full/ --strict` to mechanically QC every plot.
-5. Bundle `run_manifest.json`, `summary_qc.tsv`, `figure_qc.tsv`, and the SVG sidecars into the paper's supplement / repository — together they record every parameter and pass each plot through a defined QC contract.
-
-### Key files to look at first
-
-- **`align/kit_resolution.tsv`** — confirm each sample resolved to the right kit and dedup strategy. The `source` column tells you whether it was `detected`, `user_fallback`, `inferred_pretrimmed`, or set explicitly.
-- **`align/read_counts.tsv`** — track per-stage drop-off. The invariants `rrna_aligned + post_rrna_filter == post_trim` and `mt_aligned + unaligned_to_mt == post_rrna_filter` must hold; if they don't, something is wrong with alignment.
-- **`rpf/offset_diagnostics/plots/offset_drift_<align>.svg`** — per-sample offset comparison. Outliers are visible by eye in seconds.
-- **`rpf/offset_diagnostics/plots/offset_<align>.svg`** (heatmap + line plots) — the combined enrichment around the anchor codon. A sharp peak at the canonical P-site offset (~12–15 nt from the 5' end for most mt-Ribo-seq libraries) confirms library quality.
-- **`rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv`** — exact offsets row applied to `<sample>` downstream. New in v0.4.4 so a reviewer can confirm from disk that per-sample offset selection was honoured by the translation-profile and coverage-profile steps.
-- **`rpf/translation_profile/<sample>/codon_usage/p_site_codon_usage_total.csv`** — overall P-site codon occupancy. Compare against `a_site_codon_usage_total.csv` (same folder) to see the A-site picture.
-- **`rpf/coverage_profile_plots/p_site_density_rpm_frame/<transcript>_*.svg`** — frame-coloured single-nucleotide P-site density across the CDS only (overlay; one panel per sample, all three frames in the same axes). Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind safe palette. **Frame-0 dominance is the canonical mt-Ribo-seq QC signature**: a healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region. The `p_site_density_raw_frame/` companion has the same plots in raw counts (use this when comparing against published per-codon counts; otherwise prefer the RPM version for cross-sample comparison).
-- **`rpf/coverage_profile_plots/p_site_density_rpm_frame_split/<transcript>_*.svg`** (v0.6.2) — **per-frame split** companion to the overlay above. Three sub-rows per sample (frame 0, +1, +2), shared y-axis, so a tall same-position bar in one frame can no longer hide low signal in another. Use this when the overlay has an ambiguous tallest frame: typical case is a fused overlapping ORF transcript like human `ATP86`, where the ATP6 ORF is +2 nt offset from ATP8 and a +2 stack near the start codon would otherwise dominate the visual. The `_density_raw_frame_split/` companion holds the same plots in raw counts.
-- **`rpf/qc/qc_summary.tsv` + `qc_summary.md`** — one row / one block per sample with the overall periodicity verdict (`good` ≥ 0.60 expected-frame fraction with ≥ `min_reads_per_length` depth, `warn` ≥ 0.50, `poor` < 0.50, `low_depth` < `min_reads_per_length`). The summary records the best read length **after** depth-aware filtering, the dominant frame at that length, the depth-weighted global frame fractions, and the per-length breakdown of `good/warn/poor/low_depth` counts. **Read this before trusting any downstream codon-level table.**
-- **`rpf/qc/frame_counts_by_sample_length.tsv`** — per-(sample, read_length) frame fractions (`frame0_fraction`, `frame1_fraction`, `frame2_fraction`), `expected_frame_enrichment` (frame 0 fraction divided by the mean of frames 1 + 2), `entropy_bias` (1 minus base-3 entropy across the three fractions), and a soft `qc_call` column. Use to spot a single read-length class that is contaminating the pool.
-- **`rpf/qc/gene_periodicity.tsv`** — per-(sample, gene) frame fractions plus an optional ribotricer-style `phase_score` (enable with `--phase-score` on the standalone subcommand) and an `is_overlap_pair` boolean flag. The flag is `true` for the canonical human mt-mRNA overlap pairs (`MT-ATP8`, `MT-ATP6`, `MT-ND4L`, `MT-ND4`) and the fused-ORF transcript spellings (`ATP86`, `ND4L4`) used by some FASTAs (including the bundled `input_data/human-mt-mRNA.fasta`). Treat `is_overlap_pair=true` rows as inherently ambiguous-frame even when the per-frame fractions look clean.
-- **`rpf/codon_correlation/{p_site,a_site}/<base>_vs_<other>_*.svg|png`** — publication-quality scatter of codon usage between samples, one folder per requested site (only when `--cor_plot` is set with `--base_sample`). Includes identity (y = x) line, OLS regression, an `r / R² / p / slope / intercept / N` stat box, and leader-line labels for the 10 codons farthest from the regression line.
-- **`rpf/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph`** — IGV-loadable footprint density tracks (only when `--igv_export` is set). Open them alongside the FASTA the BEDs were aligned to; P-site is forest green, A-site dark orange.
+5. Bundle `run_manifest.json`, `summary_qc.tsv`, `figure_qc.tsv`, and the SVG sidecars into the paper's supplement.
 
 ---
 
@@ -1425,42 +946,17 @@ Built-in annotation tables are stored as CSV and the bundled NCBI Genetic Codes 
 
 ## Examples
 
-### A. Single-command end-to-end (recommended)
+Three representative invocations. For more (footprint classes, custom organisms, mixed-UMI batches, resume semantics), see the templates under [examples/templates/](examples/templates/) and the tutorials under [docs/tutorials/](docs/tutorials/).
+
+### A. End-to-end on raw FASTQ (recommended)
 
 ```bash
 mitoribopy all --config pipeline_config.yaml --output results/ --threads 8
 ```
 
-### B. Just the align stage on a directory of FASTQs
+`--print-config-template` prints a commented YAML covering every stage. `--resume` is hash-validated — config / sample sheet / FASTA edits force the affected stage(s) to re-run. For mixed-kit / mixed-UMI batches, declare a per-sample list under `align.samples:` (overrides materialised to `<output>/align/sample_overrides.tsv`). For batches with many samples, set `align.max_parallel_samples` to align N samples concurrently while the joint `rpf` stage stays serial.
 
-```bash
-mitoribopy align \
-  --kit-preset auto \
-  --library-strandedness forward \
-  --fastq-dir input_data/ \
-  --contam-index input_data/indexes/rrna_contam \
-  --mt-index input_data/indexes/mt_tx \
-  --output results/align/ \
-  --threads 8
-```
-
-For batches with many samples, add `--max-parallel-samples N` to align several samples concurrently. `--threads` is divided across workers, so total CPU use stays ≈ 8 below — `4 workers × 2 threads/tool`:
-
-```bash
-mitoribopy align \
-  --kit-preset auto \
-  --library-strandedness forward \
-  --fastq-dir input_data/ \
-  --contam-index input_data/indexes/rrna_contam \
-  --mt-index input_data/indexes/mt_tx \
-  --output results/align/ \
-  --threads 8 \
-  --max-parallel-samples 4
-```
-
-The joint `mitoribopy rpf` stage is unaffected by this flag; offset selection and the aggregated `rpf_counts.tsv` always require a single pass over all samples together. See the [Execution / concurrency](#execution--concurrency) reference for sizing guidance.
-
-### C. Just the rpf stage on existing BEDs (human, monosome)
+### B. Just the rpf stage on existing BEDs
 
 ```bash
 mitoribopy rpf \
@@ -1468,186 +964,29 @@ mitoribopy rpf \
   -f references/human-mt-mRNA.fasta \
   --directory results/align/bed/ \
   -rpf 29 34 \
-  --align stop \
-  --offset_type 5 \
-  --offset_site p \
-  --offset_pick_reference p_site \
-  --offset_mode per_sample \
-  --analysis_sites both \
-  --min_5_offset 10 \
-  --max_5_offset 22 \
-  --min_3_offset 10 \
-  --max_3_offset 22 \
-  --offset_mask_nt 5 \
-  --plot_format svg \
-  --read_counts_file results/align/read_counts.tsv \
+  --offset_mode per_sample --analysis_sites both \
   --rpm_norm_mode mt_mrna \
+  --read_counts_file results/align/read_counts.tsv \
   --output results/rpf/ \
-  --codon_density_window
+  --plot_format svg
 ```
 
-### D. Disome (collided ribosome) study
+For disome studies, replace the explicit `-rpf 29 34` with `--footprint_class disome` (auto-widens to 50-70 nt for human, 60-90 nt for yeast). For custom organisms, use `-s custom` plus `--annotation_file` and `--codon_table_name`.
+
+### C. RNA-seq integration for translation efficiency
 
 ```bash
-mitoribopy rpf \
-  -s h.sapiens \
-  -f references/human-mt-mRNA.fasta \
-  --directory bed/ \
-  --footprint_class disome \
-  --output results_disome/
-```
-
-`--footprint_class disome` widens `-rpf` to 50–70 nt (h.sapiens) or 60–90 nt (s.cerevisiae) and `--unfiltered_read_length_range` to 40–100 nt automatically. You can still override either with `-rpf` / `--unfiltered_read_length_range`.
-
-### E. Short truncated RNase products
-
-```bash
-mitoribopy rpf \
-  -s h.sapiens \
-  -f references/human-mt-mRNA.fasta \
-  --directory bed/ \
-  --footprint_class short \
-  --output results_short/
-```
-
-`--footprint_class short` targets the 16–24 nt RNase truncation tail and widens the unfiltered QC window to 10–30 nt so the entire short tail is visible in the read-length heatmap.
-
-### F. Custom organism (mouse mt example)
-
-```bash
-mitoribopy rpf \
-  -s custom \
-  -f references/mouse-mt-mRNA.fasta \
-  --directory bed/ \
-  -rpf 28 34 \
-  --annotation_file references/mouse_annotation.csv \
-  --codon_table_name vertebrate_mitochondrial \
-  --output results_mouse/
-```
-
-See [Custom organisms](#custom-organisms) for the annotation CSV schema, the codon-table picker for other organisms, and how to supply your own JSON when the organism's code is not in the built-in NCBI list.
-
-### G. RNA-seq integration for translation efficiency
-
-**Default flow — raw FASTQ → pyDESeq2 → TE / ΔTE in one shot (`--rna-fastq`).**
-
-Requires the `[fastq]` extra (one-off):
-
-```bash
-pip install 'mitoribopy[fastq]'
-```
-
-Then:
-
-```bash
+# Default flow: raw FASTQ -> pyDESeq2 -> TE / ΔTE in one shot
+# (one-off setup: pip install 'mitoribopy[fastq]')
 mitoribopy rnaseq \
-  --rna-fastq input_data/rna_seq/        \
-  --ribo-fastq input_data/ribo_seq/      \
+  --rna-fastq input_data/rna_seq/  --ribo-fastq input_data/ribo_seq/ \
   --reference-fasta references/human-mt-mRNA.fasta \
-  --gene-id-convention bare              \
-  --condition-map samples.tsv            \
-  --base-sample control                  \
-  --compare-sample knockdown             \
-  --output results/rnaseq/               \
-  --align-threads 8
+  --gene-id-convention bare \
+  --condition-map samples.tsv --base-sample control --compare-sample knockdown \
+  --output results/rnaseq/  --align-threads 8
 ```
 
-`--base-sample` is the **reference** condition for the contrast (denominator of log2FC); `--compare-sample` is the **comparison** condition (numerator). Both are required in the default flow. They are aliases for the legacy `--condition-a` / `--condition-b` flags — pick whichever spelling reads better; passing both an alias and the legacy form simultaneously is allowed only when the values agree. The base condition seeds the labels on every WT-vs-X comparison plot (`mrna_vs_rpf`, `delta_te_volcano`, `de_volcano_mrna`, `de_volcano_rpf`, `te_compare_scatter`, `te_log2fc_bar`).
-
-`--rna-fastq` accepts files OR directories; SE vs PE is auto-detected from filename mate tokens (`_R1/_R2`, `_1/_2`, `.1./.2.`, `_R1_001/_R2_001`, `_read1/_read2`). When any condition has only one biological sample the run **fails fast** by default (publication-safe). To opt into the FASTQ-record-parity pseudo-replicate fallback for demo / tutorial use, pass `--allow-pseudo-replicates-for-demo-not-publication`; the run then continues but stamps `pseudo_replicate_mode: true` in `run_settings.json` and writes an `EXPLORATORY.md` sidecar that names the outputs (padj, "significant" markers, dispersion estimates) that are not statistically defensible.
-
-In the default flow, pyDESeq2 is fit **twice** — once on the RNA subset (writes `de_table.tsv`) and once on the Ribo subset (writes `rpf_de_table.tsv`). The Ribo fit is what powers `de_volcano_rpf.png` and lets reviewers see at a glance whether a gene's TE shift is driven by a footprint-level change, an mRNA-level change, or both. If the Ribo subset has fewer than two condition levels (e.g. you passed `--ribo-fastq` for only one condition) the second fit is skipped with a stderr WARNING and the RPF volcano is omitted.
-
-**Alternative flow — bring your own DE table (`--de-table`).**
-
-When you already ran DESeq2 / Xtail / Anota2Seq externally (which is the recommended path for publication-grade DE statistics over the full transcriptome), feed the result via `--de-table` and skip the alignment / pyDESeq2 work inside the subcommand:
-
-```bash
-mitoribopy rnaseq \
-  --de-table de.tsv \
-  --gene-id-convention hgnc \
-  --ribo-dir results/rpf \
-  --reference-gtf references/human-mt-mRNA.fasta \
-  --condition-map samples.tsv \
-  --base-sample control \
-  --compare-sample knockdown \
-  --output results/rnaseq/
-```
-
-The two flows are mutually exclusive — passing both `--rna-fastq` and `--de-table` exits with code 2.
-
-Templates: the shell-script template at [examples/templates/run_rnaseq.example.sh](examples/templates/run_rnaseq.example.sh) and the YAML template at [examples/templates/rnaseq_config.example.yaml](examples/templates/rnaseq_config.example.yaml) list every flag for both flows with its default value, with the default flow on top.
-
-### H. Resume a partial run
-
-```bash
-mitoribopy all --config pipeline_config.yaml --output results/ --resume
-```
-
-`--resume` works at two levels:
-
-1. **Stage level.** Each stage is skipped when its final sentinel file already exists: `align/read_counts.tsv`, `rpf/rpf_counts.tsv`, `rnaseq/delta_te.tsv`.
-2. **Per-sample inside the align stage.** Every sample that finishes successfully writes a small JSON marker at `<output>/align/.sample_done/<sample>.json` containing its read-count row. On a subsequent `--resume` run (when `read_counts.tsv` is missing because the previous run crashed mid-batch), samples whose marker is present are reloaded from JSON instead of re-run; the markers from completed samples are merged with the freshly-processed ones to produce the aggregated `read_counts.tsv`. This means a 50-sample run that died at sample 30 picks up at sample 31 the next time you pass `--resume`.
-
-The per-sample markers are written atomically (`.tmp` then rename) so a kill mid-write cannot leave a half-flushed file that would silently feed the wrong row into the aggregated table; corrupt or schema-drifted markers are treated as absent and the sample re-runs cleanly.
-
-### I. Pre-trimmed inputs (e.g. SRA-deposited)
-
-The `pretrimmed` preset name describes the **input state** ("the FASTQ has already been adapter-clipped"), not an action this pipeline takes. SRA-deposited FASTQs typically arrive in this state — the adapter and (when present) the UMI are already stripped before upload.
-
-No special configuration is needed — when adapter detection finds 0% across every kit, the resolver falls through to the `pretrimmed` kit automatically and cutadapt skips the `-a` flag (length and quality filtering still run). To opt in explicitly:
-
-```yaml
-align:
-  kit_preset: pretrimmed
-```
-
-To opt out of the auto-inference and force adapter detection failure to raise instead, pass `--no-pretrimmed-inference` (or set `allow_pretrimmed_inference: false` in YAML).
-
-> **Wording note:** `pretrimmed` describes the input. The per-sample read-count column `post_trim` describes the output stage (read count **after** the cutadapt step has run, regardless of whether anything was actually clipped).
-
-### J. Per-sample UMI / kit overrides (mixed-UMI batches)
-
-When samples in the same batch have different UMI lengths or positions (e.g. one library preps with the NEBNext UMI 5' kit, another with QIAseq miRNA 3' UMI, a third already-trimmed from SRA), put a per-sample list under `align.samples:`:
-
-```yaml
-align:
-  kit_preset: auto                 # global default for samples not listed below
-  fastq: input_data/seq            # FASTQ directory
-  contam_index: input_data/indexes/rrna_contam
-  mt_index: input_data/indexes/mt_tx
-  samples:
-    - name: sampleA                # FASTQ basename (sampleA.fq.gz -> sampleA)
-      kit_preset: illumina_truseq_umi
-      umi_length: 8
-      umi_position: 5p
-    - name: sampleB
-      kit_preset: qiaseq_mirna
-      umi_length: 12
-      umi_position: 3p
-    - name: sampleC                # SRA-deposited, already adapter-clipped
-      kit_preset: pretrimmed
-      umi_length: 0
-    - name: sampleD                # dual-end UMI library (xGen Duplex / Twist)
-      kit_preset: custom
-      adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
-      umi_position: both
-      umi_length_5p: 6
-      umi_length_3p: 6           # umi_length is auto-derived as 12
-```
-
-`mitoribopy all` materializes this block as a sidecar file at `<output>/align/sample_overrides.tsv` and passes it to `mitoribopy align` via `--sample-overrides`. Any field left unset in a sample entry falls through to the global default for that field, so a sample can override only its UMI length without restating the rest of the kit. Per-sample overrides are reported in `kit_resolution.tsv` with a `source` column starting with `per_sample_override:` so the provenance file tells the truth.
-
-You can also write the TSV by hand and skip the YAML samples list:
-
-```
-sample      kit_preset            adapter  umi_length  umi_position  dedup_strategy
-sampleA     illumina_truseq_umi              8           5p
-sampleB     qiaseq_mirna                     12          3p
-sampleC     pretrimmed                       0
-```
-
-then call `mitoribopy align --sample-overrides path/to/overrides.tsv …`.
+For publication-grade DE statistics, run DE on the full transcriptome externally (DESeq2 / Xtail / Anota2Seq) and feed the result via `--de-table`. The two flows are mutually exclusive (passing both exits 2). Templates: [examples/templates/run_rnaseq.example.sh](examples/templates/run_rnaseq.example.sh) and [examples/templates/rnaseq_config.example.yaml](examples/templates/rnaseq_config.example.yaml).
 
 ---
 

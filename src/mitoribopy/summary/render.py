@@ -145,8 +145,9 @@ def render_summary_md(
         f"- `{run_root.name}/align/` — per-sample read counts, kit resolution, BEDs",
         f"- `{run_root.name}/align/umi_qc.tsv` — UMI / dedup audit (when align ran)",
         f"- `{run_root.name}/rpf/` — RPF counts, offsets, P-site / A-site outputs",
-        f"- `{run_root.name}/rpf/qc/` — 3-nt periodicity QC (qc_summary.tsv, "
-        "frame_counts_by_sample_length.tsv, gene_periodicity.tsv, by_length/)",
+        f"- `{run_root.name}/rpf/qc/` — Wakigawa metagene Fourier QC "
+        "(fourier_spectrum_combined.tsv, fourier_period3_score_combined.tsv, "
+        "metagene_start.tsv, metagene_stop.tsv, fourier_spectrum/<sample>/)",
         f"- `{run_root.name}/rpf/codon_correlation/{{p_site,a_site}}/` — "
         "codon-correlation metrics + sidecar metadata",
         f"- `{run_root.name}/rnaseq/` — TE / ΔTE tables and plots (when configured)",

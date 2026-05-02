@@ -42,15 +42,11 @@ import pandas as pd
 
 
 __all__ = [
-    "FrameSummary",
     "MetageneProfile",
     "StrandSanity",
     "compute_p_site_positions",
-    "compute_frame_summary",
-    "compute_frame_summary_by_length",
     "compute_metagene",
     "compute_strand_sanity",
-    "select_read_lengths_by_periodicity",
     "run_periodicity_qc",
 ]
 
@@ -78,18 +74,6 @@ DEFAULT_WINDOW_CODONS = DEFAULT_WINDOW_NT // 3
 # ---------------------------------------------------------------------------
 # Lightweight result containers (frozen for safe-by-default sharing)
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class FrameSummary:
-    """Per-sample frame fractions over every assigned P-site."""
-
-    sample: str
-    n_reads: int
-    frame_0: float
-    frame_1: float
-    frame_2: float
-    dominance: float  # frame_0 - max(frame_1, frame_2). >0.10 is healthy.
 
 
 @dataclass(frozen=True)
@@ -207,67 +191,6 @@ def compute_p_site_positions(
     return sub
 
 
-def compute_frame_summary(
-    bed_with_psite: pd.DataFrame,
-    annotation_df: pd.DataFrame,
-    *,
-    sample: str,
-    exclude_start_codons: int = 0,
-    exclude_stop_codons: int = 0,
-) -> FrameSummary:
-    """Frame-0/1/2 fractions across every CDS-resident P-site.
-
-    A read's frame is ``(P_site - start_codon) % 3`` evaluated only for
-    reads whose P-site lies inside the annotated CDS (start_codon
-    inclusive, stop_codon exclusive). Non-CDS reads are excluded so
-    UTR-bound contamination cannot inflate one frame artificially.
-
-    ``exclude_start_codons`` and ``exclude_stop_codons`` mask the
-    initiation- and termination-proximal codons (in nt, 3 * codons)
-    to keep initiation pause and stop-codon stacking out of the frame
-    fraction. Defaults are 0 to preserve historical pooled numbers;
-    callers (``run_periodicity_qc``, the standalone CLI) can pass the
-    spec defaults of 6 / 3.
-    """
-    if bed_with_psite.empty or "P_site" not in bed_with_psite.columns:
-        return FrameSummary(sample=sample, n_reads=0,
-                            frame_0=0.0, frame_1=0.0, frame_2=0.0,
-                            dominance=0.0)
-
-    ann = annotation_df.set_index("transcript")[["start_codon", "l_cds"]]
-    chrom_to_tx = annotation_df.set_index("sequence_name")["transcript"].to_dict()
-
-    df = bed_with_psite.copy()
-    df["transcript"] = df["chrom"].map(chrom_to_tx).fillna(df["chrom"])
-    df = df[df["transcript"].isin(ann.index)]
-    if df.empty:
-        return FrameSummary(sample=sample, n_reads=0,
-                            frame_0=0.0, frame_1=0.0, frame_2=0.0,
-                            dominance=0.0)
-
-    starts = df["transcript"].map(ann["start_codon"]).astype(int)
-    cds_lens = df["transcript"].map(ann["l_cds"]).astype(int)
-    edge_lo = starts + 3 * int(exclude_start_codons)
-    edge_hi = starts + cds_lens - 3 * int(exclude_stop_codons)
-    in_cds = (df["P_site"] >= edge_lo) & (df["P_site"] < edge_hi)
-    df = df[in_cds]
-    n_reads = len(df)
-    if n_reads == 0:
-        return FrameSummary(sample=sample, n_reads=0,
-                            frame_0=0.0, frame_1=0.0, frame_2=0.0,
-                            dominance=0.0)
-    frames = ((df["P_site"] - starts.loc[df.index]) % 3).astype(int)
-    counts = frames.value_counts().to_dict()
-    f0 = counts.get(0, 0) / n_reads
-    f1 = counts.get(1, 0) / n_reads
-    f2 = counts.get(2, 0) / n_reads
-    dominance = f0 - max(f1, f2)
-    return FrameSummary(
-        sample=sample, n_reads=n_reads,
-        frame_0=f0, frame_1=f1, frame_2=f2, dominance=dominance,
-    )
-
-
 def compute_metagene(
     bed_with_psite: pd.DataFrame,
     annotation_df: pd.DataFrame,
@@ -343,164 +266,6 @@ def compute_metagene(
     )
 
 
-def compute_frame_summary_by_length(
-    bed_with_psite: pd.DataFrame,
-    annotation_df: pd.DataFrame,
-    *,
-    sample: str,
-    min_cds_reads_per_length: int = _DEFAULT_MIN_CDS_READS_PER_LENGTH,
-    min_frame0_fraction: float = _DEFAULT_MIN_FRAME0_FRACTION,
-    min_frame0_dominance: float = _DEFAULT_MIN_FRAME0_DOMINANCE,
-    max_frame_entropy: float = _DEFAULT_MAX_FRAME_ENTROPY,
-    exclude_start_codons: int = 0,
-    exclude_stop_codons: int = 0,
-) -> pd.DataFrame:
-    """Per-read-length frame fractions, dominance, entropy and inclusion call.
-
-    Stratifies frame phasing by ``read_length`` instead of pooling. This
-    is the QC layer the publication review (and riboWaltz) demand: a
-    pooled frame-0 number can look healthy when one bad length class is
-    contaminating an otherwise clean library, and a length that looks
-    pooled-bad can be salvaged by reporting its own offset.
-
-    Returns a dataframe with one row per length actually present in
-    ``bed_with_psite``. Length classes with no CDS reads are still
-    reported (``include_for_downstream=False``, ``exclusion_reason=
-    "no_cds_reads"``) so the manifest distinguishes "absent" from "tested
-    and rejected".
-    """
-    cols = [
-        "sample_id",
-        "read_length",
-        "n_reads_total",
-        "n_reads_cds",
-        "frame0_fraction",
-        "frame1_fraction",
-        "frame2_fraction",
-        "dominant_frame",
-        "frame0_dominance",
-        "periodicity_score",
-        "frame_entropy",
-        "include_for_downstream",
-        "exclusion_reason",
-    ]
-    if (
-        bed_with_psite.empty
-        or "P_site" not in bed_with_psite.columns
-        or "read_length" not in bed_with_psite.columns
-    ):
-        return pd.DataFrame(columns=cols)
-
-    ann = annotation_df.set_index("transcript")[["start_codon", "l_cds"]]
-    chrom_to_tx = annotation_df.set_index("sequence_name")["transcript"].to_dict()
-
-    df = bed_with_psite.copy()
-    df["transcript"] = df["chrom"].map(chrom_to_tx).fillna(df["chrom"])
-    df = df[df["transcript"].isin(ann.index)]
-
-    rows: list[dict] = []
-    if df.empty:
-        return pd.DataFrame(columns=cols)
-
-    starts = df["transcript"].map(ann["start_codon"]).astype(int)
-    cds_lens = df["transcript"].map(ann["l_cds"]).astype(int)
-    edge_lo = starts + 3 * int(exclude_start_codons)
-    edge_hi = starts + cds_lens - 3 * int(exclude_stop_codons)
-    in_cds_mask = (df["P_site"] >= edge_lo) & (df["P_site"] < edge_hi)
-    df_cds = df.loc[in_cds_mask].copy()
-    df_cds["frame"] = (
-        (df_cds["P_site"].astype(int) - starts.loc[df_cds.index]) % 3
-    ).astype(int)
-
-    all_lengths = sorted({int(x) for x in bed_with_psite["read_length"].unique()})
-    cds_groups = dict(tuple(df_cds.groupby("read_length")))
-    total_groups = (
-        bed_with_psite.groupby("read_length").size().to_dict()
-    )
-
-    for read_length in all_lengths:
-        n_total = int(total_groups.get(read_length, 0))
-        sub = cds_groups.get(read_length)
-        if sub is None or sub.empty:
-            rows.append({
-                "sample_id": sample,
-                "read_length": int(read_length),
-                "n_reads_total": n_total,
-                "n_reads_cds": 0,
-                "frame0_fraction": 0.0,
-                "frame1_fraction": 0.0,
-                "frame2_fraction": 0.0,
-                "dominant_frame": -1,
-                "frame0_dominance": 0.0,
-                "periodicity_score": 0.0,
-                "frame_entropy": float("nan"),
-                "include_for_downstream": False,
-                "exclusion_reason": "no_cds_reads",
-            })
-            continue
-
-        n_cds = int(len(sub))
-        counts = sub["frame"].value_counts().reindex([0, 1, 2], fill_value=0)
-        f0, f1, f2 = (counts.loc[i] / n_cds for i in (0, 1, 2))
-        f0, f1, f2 = float(f0), float(f1), float(f2)
-        dominance = f0 - max(f1, f2)
-        dominant_frame = int(counts.idxmax())
-        entropy = -sum(p * np.log2(p) for p in (f0, f1, f2) if p > 0)
-
-        if n_cds < min_cds_reads_per_length:
-            include = False
-            reason = "low_count"
-        elif f0 < min_frame0_fraction:
-            include = False
-            reason = "weak_periodicity"
-        elif dominance < min_frame0_dominance:
-            include = False
-            reason = "ambiguous_dominance"
-        elif entropy > max_frame_entropy:
-            include = False
-            reason = "high_entropy"
-        else:
-            include = True
-            reason = "none"
-
-        rows.append({
-            "sample_id": sample,
-            "read_length": int(read_length),
-            "n_reads_total": n_total,
-            "n_reads_cds": n_cds,
-            "frame0_fraction": f0,
-            "frame1_fraction": f1,
-            "frame2_fraction": f2,
-            "dominant_frame": dominant_frame,
-            "frame0_dominance": float(dominance),
-            "periodicity_score": float(dominance),
-            "frame_entropy": float(entropy),
-            "include_for_downstream": bool(include),
-            "exclusion_reason": reason,
-        })
-
-    return pd.DataFrame(rows, columns=cols)
-
-
-def select_read_lengths_by_periodicity(
-    frame_by_length: pd.DataFrame,
-) -> dict[str, list[int]]:
-    """Group included read lengths by sample.
-
-    Convenience wrapper that returns ``{sample_id: [read_length, ...]}``
-    for rows where ``include_for_downstream`` is true. Returns an empty
-    dict when the input is empty (caller decides whether that is a
-    fall-back-to-pooled situation).
-    """
-    if frame_by_length.empty:
-        return {}
-    out: dict[str, list[int]] = {}
-    keep = frame_by_length[frame_by_length["include_for_downstream"].astype(bool)]
-    for sample_id, group in keep.groupby("sample_id"):
-        out[str(sample_id)] = sorted(int(x) for x in group["read_length"])
-    return out
-
-
 def compute_strand_sanity(
     bed_df: pd.DataFrame, *, sample: str,
 ) -> StrandSanity:
@@ -527,19 +292,6 @@ def compute_strand_sanity(
 # ---------------------------------------------------------------------------
 
 
-def _write_frame_summary_tsv(
-    rows: Iterable[FrameSummary], path: Path,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as h:
-        h.write("sample\tn_reads\tframe_0\tframe_1\tframe_2\tdominance\n")
-        for r in rows:
-            h.write(
-                f"{r.sample}\t{r.n_reads}\t{r.frame_0:.6g}\t{r.frame_1:.6g}\t"
-                f"{r.frame_2:.6g}\t{r.dominance:.6g}\n"
-            )
-
-
 def _write_metagene_tsv(
     profiles: Iterable[MetageneProfile], path: Path,
 ) -> None:
@@ -561,139 +313,6 @@ def _write_strand_tsv(
             h.write(
                 f"{r.sample}\t{r.n_total}\t{r.n_minus}\t{r.minus_fraction:.6g}\n"
             )
-
-
-def _write_frame_by_length_tsv(
-    frame_tables: list[pd.DataFrame], path: Path,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not frame_tables:
-        path.write_text(
-            "sample_id\tread_length\tn_reads_total\tn_reads_cds\t"
-            "frame0_fraction\tframe1_fraction\tframe2_fraction\t"
-            "dominant_frame\tframe0_dominance\tperiodicity_score\t"
-            "frame_entropy\tinclude_for_downstream\texclusion_reason\n",
-            encoding="utf-8",
-        )
-        return
-    combined = pd.concat(frame_tables, ignore_index=True)
-    combined.to_csv(path, sep="\t", index=False, na_rep="")
-
-
-def _write_length_inclusion_decisions_tsv(
-    frame_tables: list[pd.DataFrame], path: Path,
-) -> None:
-    """Distil ``frame_by_length.tsv`` to the include/exclude decision.
-
-    A reviewer-friendly subset that pairs every (sample, read_length)
-    with its ``include`` boolean and the human-readable reason. Mirrors
-    riboWaltz's per-length QC table.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not frame_tables:
-        path.write_text(
-            "sample_id\tread_length\tn_reads_cds\tframe0_fraction\t"
-            "frame0_dominance\tinclude_for_downstream\texclusion_reason\n",
-            encoding="utf-8",
-        )
-        return
-    combined = pd.concat(frame_tables, ignore_index=True)
-    keep = [
-        "sample_id",
-        "read_length",
-        "n_reads_cds",
-        "frame0_fraction",
-        "frame0_dominance",
-        "include_for_downstream",
-        "exclusion_reason",
-    ]
-    combined[keep].to_csv(path, sep="\t", index=False, na_rep="")
-
-
-def _plot_frame_by_length_heatmap(
-    frame_tables: list[pd.DataFrame], out_path: Path,
-) -> None:
-    """Frame-fraction heatmap with read-length on Y, frame on X.
-
-    For each sample produces one column showing frame 0/1/2 fractions
-    across every read length encountered. A length that fails the
-    inclusion filter is annotated with a marker so the reader can tell
-    a "low frame-0 because rejected" cell from a "low frame-0, kept"
-    cell.
-    """
-    import matplotlib.pyplot as plt
-
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    if not frame_tables:
-        return
-    combined = pd.concat(frame_tables, ignore_index=True)
-    if combined.empty:
-        return
-    samples = sorted(combined["sample_id"].astype(str).unique())
-    n_samples = len(samples)
-    # Build the layout with an explicit colorbar column so the cbar
-    # cannot steal width from the last data panel.
-    from matplotlib.gridspec import GridSpec
-
-    fig = plt.figure(figsize=(3.4 * n_samples + 1.2, 4.2))
-    width_ratios = [1.0] * n_samples + [0.06]
-    gs = GridSpec(
-        nrows=1,
-        ncols=n_samples + 1,
-        width_ratios=width_ratios,
-        wspace=0.18,
-        figure=fig,
-    )
-    data_axes = []
-    im = None
-    for col_i, sample in enumerate(samples):
-        ax = fig.add_subplot(
-            gs[0, col_i],
-            sharey=data_axes[0] if data_axes else None,
-        )
-        data_axes.append(ax)
-        sub = combined[combined["sample_id"].astype(str) == sample].sort_values(
-            "read_length"
-        )
-        if sub.empty:
-            ax.set_visible(False)
-            continue
-        matrix = sub[["frame0_fraction", "frame1_fraction", "frame2_fraction"]].to_numpy()
-        im = ax.imshow(
-            matrix, aspect="auto", cmap="viridis",
-            vmin=0.0, vmax=1.0,
-            extent=(-0.5, 2.5, sub["read_length"].max() + 0.5,
-                    sub["read_length"].min() - 0.5),
-        )
-        # Mark excluded rows with a hatch / outline so the reader can
-        # distinguish "low signal because excluded" from "low signal
-        # included".
-        for _, row in sub.iterrows():
-            if not bool(row["include_for_downstream"]):
-                ax.add_patch(
-                    plt.Rectangle(
-                        (-0.5, float(row["read_length"]) - 0.5), 3, 1,
-                        fill=False, edgecolor="red", linewidth=0.8,
-                    )
-                )
-        ax.set_xticks([0, 1, 2])
-        ax.set_xticklabels(["F0", "F+1", "F+2"])
-        ax.set_title(sample, fontsize=10)
-        if col_i == 0:
-            ax.set_ylabel("read length (nt)")
-        else:
-            plt.setp(ax.get_yticklabels(), visible=False)
-    if im is not None:
-        cax = fig.add_subplot(gs[0, -1])
-        cbar = fig.colorbar(im, cax=cax)
-        cbar.set_label("frame fraction")
-    fig.suptitle("Per-read-length frame distribution (red border = excluded)")
-    fig.subplots_adjust(top=0.88, left=0.08, right=0.94, bottom=0.12)
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
-    if out_path.suffix.lower() == ".png":
-        fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")
-    plt.close(fig)
 
 
 def _plot_metagene_panels(
@@ -861,159 +480,6 @@ def _plot_metagene_single_anchor(
     plt.close(fig)
 
 
-def _plot_read_length_periodicity_barplot(
-    frame_tables: list[pd.DataFrame],
-    *,
-    expected_frame: int,
-    out_path: Path,
-) -> None:
-    """Per-sample bar of expected_frame_fraction by read length.
-
-    Spec output ``read_length_periodicity_barplot.svg``: x = read
-    length, y = expected_frame_fraction; dominant_frame_fraction is
-    overlaid as a hollow point so a reviewer can see at a glance when
-    the dominant frame is NOT the expected one.
-    """
-    import matplotlib.pyplot as plt
-
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    if not frame_tables:
-        return
-    combined = pd.concat(frame_tables, ignore_index=True)
-    if combined.empty:
-        return
-    samples = sorted(combined["sample_id"].astype(str).unique())
-    n_samples = len(samples)
-
-    fig, axes = plt.subplots(
-        n_samples, 1, figsize=(10, 2.4 * n_samples),
-        sharex=True, sharey=True, squeeze=False,
-    )
-    expected_col = f"frame{expected_frame}_fraction"
-    for i, sample in enumerate(samples):
-        ax = axes[i][0]
-        sub = combined[combined["sample_id"].astype(str) == sample].sort_values(
-            "read_length"
-        )
-        if sub.empty:
-            ax.set_visible(False)
-            continue
-        x = sub["read_length"].astype(int).to_numpy()
-        y_expected = sub[expected_col].astype(float).to_numpy()
-        ax.bar(x, y_expected, color="#0072B2", alpha=0.85,
-               label=f"expected frame {expected_frame} fraction")
-        # Dominant fraction overlay: hollow circle at max(f0,f1,f2).
-        y_dominant = sub[
-            ["frame0_fraction", "frame1_fraction", "frame2_fraction"]
-        ].astype(float).max(axis=1).to_numpy()
-        ax.scatter(
-            x, y_dominant, facecolors="none", edgecolors="black",
-            s=40, linewidth=1.2, label="dominant frame fraction",
-        )
-        ax.axhline(0.5, color="grey", linewidth=0.8, linestyle=":")
-        ax.axhline(0.6, color="grey", linewidth=0.8, linestyle="--")
-        ax.set_ylim(0, 1.05)
-        ax.set_ylabel(sample, fontsize=9, fontweight="bold")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        if i == 0:
-            ax.legend(
-                loc="upper right", fontsize=8, frameon=False,
-            )
-        if i == n_samples - 1:
-            ax.set_xlabel("read length (nt)", fontsize=11, fontweight="bold")
-    fig.suptitle(
-        f"Periodicity by read length (dotted = warn, dashed = good thresholds)",
-        fontsize=11,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _plot_gene_phase_score_dotplot(
-    gene_df: pd.DataFrame,
-    *,
-    out_path: Path,
-) -> None:
-    """Per-(sample, gene) dotplot of phase_score (or expected_frame_fraction).
-
-    Spec output ``gene_phase_score_dotplot.svg``. Falls back to
-    ``expected_frame_fraction`` when ``phase_score`` is absent or all
-    NaN. Dots are coloured by ``qc_call``.
-    """
-    import matplotlib.pyplot as plt
-
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    if gene_df is None or gene_df.empty:
-        return
-    df = gene_df.copy()
-    use_phase = (
-        "phase_score" in df.columns
-        and df["phase_score"].astype(float).notna().any()
-    )
-    y_col = "phase_score" if use_phase else "expected_frame_fraction"
-    if y_col not in df.columns:
-        return
-    df = df[df[y_col].astype(float).notna()]
-    if df.empty:
-        return
-
-    samples = sorted(df["sample_id"].astype(str).unique())
-    genes = sorted(df["gene"].astype(str).unique())
-    qc_palette = {
-        "good": "#009E73",
-        "warn": "#E69F00",
-        "poor": "#D55E00",
-        "low_depth": "#999999",
-    }
-    n_samples = len(samples)
-    fig, axes = plt.subplots(
-        n_samples, 1, figsize=(max(8.0, 0.45 * len(genes)), 2.6 * n_samples),
-        sharex=True, sharey=True, squeeze=False,
-    )
-    seen_qc: set[str] = set()
-    for i, sample in enumerate(samples):
-        ax = axes[i][0]
-        sub = df[df["sample_id"].astype(str) == sample]
-        if sub.empty:
-            ax.set_visible(False)
-            continue
-        x_idx = [genes.index(g) for g in sub["gene"].astype(str)]
-        y = sub[y_col].astype(float).to_numpy()
-        colors = [qc_palette.get(str(c), "#777777") for c in sub.get("qc_call", "")]
-        ax.scatter(x_idx, y, c=colors, s=60, edgecolors="black", linewidth=0.4)
-        seen_qc.update(str(c) for c in sub.get("qc_call", "") if pd.notna(c))
-        ax.set_xticks(range(len(genes)))
-        ax.set_xticklabels(genes, rotation=45, ha="right", fontsize=8)
-        ax.set_ylabel(f"{sample}\n{y_col}", fontsize=9, fontweight="bold")
-        ax.set_ylim(-0.02, 1.05)
-        ax.grid(axis="y", alpha=0.25, linewidth=0.6)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-
-    legend_handles = [
-        plt.Line2D([0], [0], marker="o", linestyle="", markerfacecolor=qc_palette[c],
-                   markeredgecolor="black", markersize=8, label=c)
-        for c in ("good", "warn", "poor", "low_depth") if c in seen_qc
-    ]
-    if legend_handles:
-        fig.legend(
-            handles=legend_handles, loc="lower center",
-            bbox_to_anchor=(0.5, -0.04), ncol=len(legend_handles),
-            frameon=False, fontsize=9,
-        )
-    fig.suptitle(
-        f"Gene-level periodicity ({y_col}) coloured by QC call",
-        fontsize=11,
-    )
-    fig.tight_layout(rect=(0, 0.04, 1, 0.96))
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
-
-
 def run_periodicity_qc(
     *,
     bed_df: pd.DataFrame,
@@ -1026,38 +492,48 @@ def run_periodicity_qc(
     output_dir: Path,
     window_nt: int = DEFAULT_WINDOW_NT,
     plot: bool = True,
+    fourier_window_nt: int | None = None,
+    fourier_render_plots: bool = True,
+    metagene_nt: int | None = None,
+    # Accepted for backwards-compatible call sites; ignored under the
+    # Wakigawa-only QC contract.
     min_cds_reads_per_length: int = _DEFAULT_MIN_CDS_READS_PER_LENGTH,
     min_frame0_fraction: float = _DEFAULT_MIN_FRAME0_FRACTION,
     min_frame0_dominance: float = _DEFAULT_MIN_FRAME0_DOMINANCE,
     max_frame_entropy: float = _DEFAULT_MAX_FRAME_ENTROPY,
     exclude_start_codons: int = 6,
     exclude_stop_codons: int = 3,
-    compute_phase_score: bool = True,
-    compute_fourier_spectrum: bool = True,
-    fourier_window_nt: int = 100,
-    fourier_period_range: tuple[float, float] = (2.0, 10.0),
-    fourier_render_plots: bool = True,
-    metagene_nt: int | None = None,
     qc_thresholds: dict[str, float] | None = None,
 ) -> dict:
-    """Compute frame summary + start/stop metagenes + strand sanity per sample.
+    """Compute start/stop metagenes + strand sanity + Wakigawa Fourier QC.
 
-    Writes ``frame_summary.tsv``, ``periodicity_start.tsv``,
-    ``periodicity_stop.tsv``, ``strand_sanity.tsv``, and (when
-    ``plot=True``) ``periodicity_metagene.png/.svg`` under
-    ``output_dir``. Returns a dict with the in-memory result objects so
-    callers can inline assertions in tests without re-reading from disk.
+    Writes:
+
+    * ``periodicity_start.tsv`` / ``periodicity_stop.tsv`` — per-sample
+      metagene profiles around start / stop codons (legacy filenames).
+    * ``metagene_start.tsv`` / ``metagene_stop.tsv`` — same data, spec
+      filenames.
+    * ``strand_sanity.tsv`` — per-sample read-strand check.
+    * ``periodicity_metagene.png/.svg`` — combined two-anchor metagene
+      figure (when ``plot=True``).
+    * ``metagene_{start,stop}_<site>_site.svg`` — single-anchor variants.
+
+    Plus the Wakigawa-faithful Fourier bundle written by
+    :func:`mitoribopy.analysis.periodicity_qc.run_periodicity_qc_bundle`:
+    ``fourier_spectrum_combined.tsv``, ``fourier_period3_score_combined.tsv``,
+    ``fourier_spectrum/<sample>/*.{png,svg}``, ``periodicity.metadata.json``.
+
+    The frame-fraction QC outputs (``frame_counts_*.tsv``, ``qc_summary.tsv``,
+    ``gene_periodicity.tsv``, ``frame_fraction_heatmap.svg``,
+    ``read_length_periodicity_barplot.svg``, ``gene_phase_score_dotplot.svg``)
+    were removed in v0.8.0 — the Fourier ``spectral_ratio_3nt`` +
+    ``snr_call`` columns now carry the headline QC story.
     """
     output_dir = Path(output_dir)
-    # Spec metagene window default is 90 nt around start/stop;
-    # `metagene_nt` overrides if set, otherwise honour the legacy
-    # `window_nt` (default 300) so existing tests stay green.
     effective_window_nt = int(metagene_nt) if metagene_nt is not None else int(window_nt)
-    frame_rows: list[FrameSummary] = []
     start_profiles: list[MetageneProfile] = []
     stop_profiles: list[MetageneProfile] = []
     strand_rows: list[StrandSanity] = []
-    frame_by_length_tables: list[pd.DataFrame] = []
 
     for sample in samples:
         psite = compute_p_site_positions(
@@ -1068,11 +544,6 @@ def run_periodicity_qc(
             offset_type=offset_type,
             offset_site=offset_site,
         )
-        frame_rows.append(compute_frame_summary(
-            psite, annotation_df, sample=sample,
-            exclude_start_codons=exclude_start_codons,
-            exclude_stop_codons=exclude_stop_codons,
-        ))
         start_profiles.append(compute_metagene(
             psite, annotation_df,
             sample=sample, anchor="start", window_nt=effective_window_nt,
@@ -1082,122 +553,45 @@ def run_periodicity_qc(
             sample=sample, anchor="stop", window_nt=effective_window_nt,
         ))
         strand_rows.append(compute_strand_sanity(bed_df, sample=sample))
-        frame_by_length_tables.append(
-            compute_frame_summary_by_length(
-                psite,
-                annotation_df,
-                sample=sample,
-                min_cds_reads_per_length=min_cds_reads_per_length,
-                min_frame0_fraction=min_frame0_fraction,
-                min_frame0_dominance=min_frame0_dominance,
-                max_frame_entropy=max_frame_entropy,
-                exclude_start_codons=exclude_start_codons,
-                exclude_stop_codons=exclude_stop_codons,
-            )
-        )
 
-    _write_frame_summary_tsv(frame_rows, output_dir / "frame_summary.tsv")
-    # Legacy names (kept for back-compat with existing tooling) +
-    # spec-named files (metagene_start.tsv / metagene_stop.tsv) so the
-    # publication-grade output layout matches the implementation
-    # specification verbatim.
     _write_metagene_tsv(start_profiles, output_dir / "periodicity_start.tsv")
     _write_metagene_tsv(stop_profiles, output_dir / "periodicity_stop.tsv")
     _write_metagene_tsv(start_profiles, output_dir / "metagene_start.tsv")
     _write_metagene_tsv(stop_profiles, output_dir / "metagene_stop.tsv")
     _write_strand_tsv(strand_rows, output_dir / "strand_sanity.tsv")
 
-    by_length_dir = output_dir / "by_length"
-    _write_frame_by_length_tsv(
-        frame_by_length_tables, by_length_dir / "frame_by_length.tsv",
-    )
-    _write_length_inclusion_decisions_tsv(
-        frame_by_length_tables,
-        by_length_dir / "length_inclusion_decisions.tsv",
+    # Stack per-sample P-site coordinates so the Fourier bundle has all
+    # the data in one BED-shaped DataFrame.
+    psite_frames: list[pd.DataFrame] = []
+    for sample in samples:
+        psite = compute_p_site_positions(
+            bed_df,
+            sample=sample,
+            selected_offsets_by_sample=selected_offsets_by_sample,
+            selected_offsets_combined=selected_offsets_combined,
+            offset_type=offset_type,
+            offset_site=offset_site,
+        )
+        if not psite.empty:
+            psite_frames.append(psite)
+    bed_with_psite_concat = (
+        pd.concat(psite_frames, ignore_index=True) if psite_frames else None
     )
 
-    # v0.6.2: emit the publication-grade QC bundle
-    # (frame_counts_by_sample_length.tsv + qc_summary.tsv +
-    # qc_summary.md + gene_periodicity.tsv) alongside the
-    # by_length/* legacy outputs.
     from .periodicity_qc import run_periodicity_qc_bundle as _qc_bundle
 
-    bed_with_psite_concat: pd.DataFrame | None = None
-    if frame_by_length_tables:
-        # Re-run compute_p_site_positions per sample and stack so the
-        # gene-level table has the per-read coordinates.
-        psite_frames: list[pd.DataFrame] = []
-        for sample in samples:
-            psite = compute_p_site_positions(
-                bed_df,
-                sample=sample,
-                selected_offsets_by_sample=selected_offsets_by_sample,
-                selected_offsets_combined=selected_offsets_combined,
-                offset_type=offset_type,
-                offset_site=offset_site,
-            )
-            if not psite.empty:
-                psite_frames.append(psite)
-        if psite_frames:
-            bed_with_psite_concat = pd.concat(psite_frames, ignore_index=True)
+    fourier_kwargs = {}
+    if fourier_window_nt is not None:
+        fourier_kwargs["window_nt"] = int(fourier_window_nt)
 
-    combined_frame_by_length = (
-        pd.concat(frame_by_length_tables, ignore_index=True)
-        if frame_by_length_tables
-        else pd.DataFrame()
-    )
     _qc_bundle(
-        frame_by_length=combined_frame_by_length,
         bed_with_psite=bed_with_psite_concat,
         annotation_df=annotation_df,
         samples=samples,
         output_dir=output_dir,
-        site_type=str(offset_site).lower() or "p",
-        thresholds=qc_thresholds,
-        compute_phase_score=compute_phase_score,
-        compute_fourier_spectrum=compute_fourier_spectrum,
-        fourier_window_nt=fourier_window_nt,
-        fourier_period_range=fourier_period_range,
-        fourier_render_plots=fourier_render_plots,
-        exclude_start_codons=exclude_start_codons,
-        exclude_stop_codons=exclude_stop_codons,
-    )
-
-    # Persist the thresholds the inclusion calls were made under so a
-    # reviewer can verify them from disk without re-running the CLI.
-    by_length_dir.mkdir(parents=True, exist_ok=True)
-    (by_length_dir / "periodicity.metadata.json").write_text(
-        json.dumps(
-            {
-                "thresholds": {
-                    "min_cds_reads_per_length": int(min_cds_reads_per_length),
-                    "min_frame0_fraction": float(min_frame0_fraction),
-                    "min_frame0_dominance": float(min_frame0_dominance),
-                    "max_frame_entropy": float(max_frame_entropy),
-                },
-                "exclude_start_codons": int(exclude_start_codons),
-                "exclude_stop_codons": int(exclude_stop_codons),
-                "phase_score_enabled": bool(compute_phase_score),
-                "fourier_spectrum_enabled": bool(compute_fourier_spectrum),
-                "fourier_window_nt": int(fourier_window_nt),
-                "fourier_period_range": [
-                    float(fourier_period_range[0]),
-                    float(fourier_period_range[1]),
-                ],
-                "metagene_nt": int(effective_window_nt),
-                "frame_formula": "(P_site_nt - CDS_start_nt) % 3",
-                "frame_0_definition": (
-                    "assigned P-site lies in the annotated coding frame"
-                ),
-                "site": "P-site",
-                "offset_type": str(offset_type),
-                "offset_site": str(offset_site),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+        site_type=str(offset_site).lower() or "p",  # type: ignore[arg-type]
+        render_plots=fourier_render_plots,
+        **fourier_kwargs,
     )
 
     if plot:
@@ -1205,10 +599,6 @@ def run_periodicity_qc(
             start_profiles, stop_profiles,
             out_path=output_dir / "periodicity_metagene.png",
         )
-        # Spec-named, single-anchor metagene plots (separate files for
-        # start vs stop). Re-uses the same panel renderer with one
-        # anchor stripped out so the on-disk output exactly matches
-        # the implementation specification's filenames.
         site_letter = str(offset_site).lower() or "p"
         _plot_metagene_single_anchor(
             start_profiles,
@@ -1222,46 +612,9 @@ def run_periodicity_qc(
             site_letter=site_letter,
             out_path=output_dir / f"metagene_stop_{site_letter}_site.svg",
         )
-        _plot_frame_by_length_heatmap(
-            frame_by_length_tables,
-            out_path=by_length_dir / "frame_by_length_heatmap.png",
-        )
-        # Spec-named alias of the heatmap, written next to the rest of
-        # the bundle so users can find it by the exact spec filename.
-        _plot_frame_by_length_heatmap(
-            frame_by_length_tables,
-            out_path=output_dir / "frame_fraction_heatmap.svg",
-        )
-        # Spec output: per-(sample, length) expected_frame_fraction
-        # barplot plus dominant_frame_fraction overlay.
-        if frame_by_length_tables:
-            _plot_read_length_periodicity_barplot(
-                frame_by_length_tables,
-                expected_frame=0,
-                out_path=output_dir / "read_length_periodicity_barplot.svg",
-            )
-        # Spec output: per-gene phase_score (or expected_frame_fraction
-        # when phase_score isn't computed) dotplot, coloured by qc_call.
-        gene_path = output_dir / "gene_periodicity.tsv"
-        if gene_path.is_file():
-            try:
-                gene_df = pd.read_csv(gene_path, sep="\t")
-            except (OSError, pd.errors.EmptyDataError):
-                gene_df = pd.DataFrame()
-            if not gene_df.empty:
-                _plot_gene_phase_score_dotplot(
-                    gene_df,
-                    out_path=output_dir / "gene_phase_score_dotplot.svg",
-                )
 
     return {
-        "frame_summary": frame_rows,
         "periodicity_start": start_profiles,
         "periodicity_stop": stop_profiles,
         "strand_sanity": strand_rows,
-        "frame_by_length": (
-            pd.concat(frame_by_length_tables, ignore_index=True)
-            if frame_by_length_tables
-            else pd.DataFrame()
-        ),
     }

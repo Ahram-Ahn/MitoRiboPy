@@ -856,13 +856,8 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
         if period_enabled:
             period_kwargs: dict = {}
             for cli_attr, kw in (
-                ("periodicity_exclude_start_codons", "exclude_start_codons"),
-                ("periodicity_exclude_stop_codons", "exclude_stop_codons"),
-                ("periodicity_phase_score", "compute_phase_score"),
-                ("periodicity_fourier_spectrum", "compute_fourier_spectrum"),
                 ("periodicity_fourier_window_nt", "fourier_window_nt"),
                 ("periodicity_metagene_nt", "metagene_nt"),
-                ("periodicity_min_reads_per_length", "min_cds_reads_per_length"),
             ):
                 val = getattr(context.args, cli_attr, None)
                 if val is not None:
