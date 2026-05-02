@@ -109,6 +109,52 @@ Selected highlights:
 
 ---
 
+### Standalone `mitoribopy periodicity` flags
+
+The `rpf` stage always emits the periodicity QC bundle under
+`<output>/rpf/qc/` with built-in defaults
+(`good_frame_fraction=0.60`, `warn_frame_fraction=0.50`,
+`min_reads_per_length=1000`, `min_reads_per_gene=50`,
+`exclude_start_codons=0`, `exclude_stop_codons=0` — the codon-edge
+defaults are 0 in the pipeline path to preserve historical pooled
+numbers). To re-score periodicity with different thresholds without
+re-running offset selection, use the standalone subcommand on a saved
+site table:
+
+```bash
+mitoribopy periodicity \
+  --site-table runs/full/rpf/qc/site_table.tsv \
+  --output     runs/full/rpf/qc/standalone_periodicity \
+  --site p \
+  --good-frame-fraction 0.60 \
+  --warn-frame-fraction 0.50 \
+  --min-reads-per-length 1000 \
+  --min-reads-per-gene 50 \
+  --exclude-start-codons 6 \
+  --exclude-stop-codons 3 \
+  --phase-score
+```
+
+The standalone CLI applies `--exclude-start-codons` / `--exclude-stop-codons`
+uniformly to both the per-(sample, length) frame counts and the per-(sample,
+gene) frame counts, so initiation- and termination-proximal codons are
+excluded consistently. `--phase-score` adds a ribotricer-style
+gene-level consistency column to `gene_periodicity.tsv`.
+
+Required columns in the input site table: `sample`, `gene`,
+`transcript_id`, `read_length`, `site_type` (`p` or `a`), `site_pos`
+(transcript-coordinate, 0-based), `cds_start`, `cds_end`. Optional
+`count` column is honoured for weighted counting (defaults to 1 per
+row when absent). Optional `is_overlap` column masks rows when
+present (override with `--include-overlaps`).
+
+Outputs always include the publication-grade bundle described in
+[the v0.6.2 release notes](../release-notes/v0.6.2.md#periodicity-qc-bundle-extension):
+`qc_summary.tsv`, `qc_summary.md`, `frame_counts_by_sample_length.tsv`,
+`gene_periodicity.tsv`, and `periodicity.metadata.json`.
+
+---
+
 ## `rnaseq:` section
 
 Two mutually exclusive flows, selected by `rnaseq_mode`:

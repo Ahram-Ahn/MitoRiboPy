@@ -223,9 +223,22 @@ results/
       p_site_density_raw/
       p_site_density_rpm_codon/
       p_site_density_raw_codon/
-      p_site_density_rpm_frame/ # frame-coloured CDS-only nt plots; frame-0
-      p_site_density_raw_frame/ # dominance is the canonical mt-Ribo-seq QC
-      a_site_density_*/         # A-site mirror folders (analysis_sites in {a,both})
+      p_site_density_rpm_frame/       # frame-coloured CDS-only nt plots (overlay);
+      p_site_density_raw_frame/       # frame-0 dominance is the canonical mt-Ribo-seq QC
+      p_site_density_rpm_frame_split/ # v0.6.2: per-frame split companion (3 sub-rows
+      p_site_density_raw_frame_split/ #         per sample, shared y-axis)
+      a_site_density_*/               # A-site mirror folders (analysis_sites in {a,both})
+    qc/                               # 3-nt periodicity QC bundle (always written)
+      qc_summary.tsv                  # one row per sample: overall_qc_call
+                                      #   (good/warn/poor/low_depth)
+      qc_summary.md                   # human-readable companion
+      frame_counts_by_sample_length.tsv # per-(sample, read_length) frame fractions
+      gene_periodicity.tsv            # per-(sample, gene) frame fractions +
+                                      #   is_overlap_pair flag
+      periodicity_metagene.png/.svg   # start- and stop-aligned 3-nt periodicity
+      by_length/
+        frame_by_length_heatmap.png/.svg # read-length × frame-fraction heatmap
+        periodicity.metadata.json     # frame formula + thresholds applied
     codon_correlation/          # if --cor_plot
       p_site/<base>_vs_<sample>_*.{csv,svg,png}
       a_site/<base>_vs_<sample>_*.{csv,svg,png}
@@ -268,7 +281,26 @@ The shortest path through the outputs:
 5. **Does the CDS show frame-0 dominance?**
    Open `results/rpf/coverage_profile_plots/p_site_density_rpm_frame/<gene>_p-site_density_(rpm,_cds_frame_coloring).svg`. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start). A healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region.
 
-6. **What's the codon-usage profile?**
+   When the overlay's tallest frame is ambiguous (typical for fused overlapping ORFs like `ATP86`, where the ATP6 ORF is +2 nt offset from ATP8), open the per-frame split companion at `results/rpf/coverage_profile_plots/p_site_density_rpm_frame_split/<gene>_*.svg` instead. Three sub-rows per sample (frame 0, +1, +2) sharing the y-axis make low-frame signal visible even when another frame stacks at the same CDS position.
+
+6. **What's the periodicity QC verdict?**
+   Open `results/rpf/qc/qc_summary.md` for a per-sample human-readable verdict (`good` / `warn` / `poor` / `low_depth`) and `qc_summary.tsv` for the machine-readable companion. A `poor` call means the offsets did not produce the expected codon phasing; codon-occupancy interpretation is unsafe in that case. Drill down with:
+
+   - `frame_counts_by_sample_length.tsv` — does one bad read-length class drag the pooled call down?
+   - `gene_periodicity.tsv` — is one gene the culprit (often a fused overlap pair like `ATP86` / `ND4L4`, flagged with `is_overlap_pair=true`)?
+
+   To re-score periodicity with different thresholds (or with the spec defaults `--exclude-start-codons 6 --exclude-stop-codons 3`) without re-running offset selection:
+
+   ```bash
+   $ mitoribopy periodicity \
+       --site-table results/rpf/qc/site_table.tsv \
+       --output     results/rpf/qc/standalone_periodicity \
+       --site p \
+       --exclude-start-codons 6 --exclude-stop-codons 3 \
+       --phase-score
+   ```
+
+7. **What's the codon-usage profile?**
    For each sample, the totals are in the same flat folder:
 
    - `results/rpf/translation_profile/<sample>/codon_usage/p_site_codon_usage_total.csv` — overall P-site codon occupancy.
@@ -276,10 +308,10 @@ The shortest path through the outputs:
 
    Compare the two side by side to inspect both sites independently.
 
-7. **Want a publication-ready codon scatter?**
+8. **Want a publication-ready codon scatter?**
    Set `cor_plot: true` and `base_sample: <reference_sample>` in your YAML (or pass `--cor_plot --base_sample <ref>`). With `analysis_sites: both`, you get parallel outputs at `results/rpf/codon_correlation/p_site/` and `.../a_site/`.
 
-8. **Want to view footprint density in IGV?**
+9. **Want to view footprint density in IGV?**
    Set `igv_export: true` (or pass `--igv_export`). BedGraph tracks land at `results/rpf/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph` — drop them into IGV alongside your reference FASTA.
 
 ---

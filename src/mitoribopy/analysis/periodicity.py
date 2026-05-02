@@ -212,6 +212,8 @@ def compute_frame_summary(
     annotation_df: pd.DataFrame,
     *,
     sample: str,
+    exclude_start_codons: int = 0,
+    exclude_stop_codons: int = 0,
 ) -> FrameSummary:
     """Frame-0/1/2 fractions across every CDS-resident P-site.
 
@@ -219,6 +221,13 @@ def compute_frame_summary(
     reads whose P-site lies inside the annotated CDS (start_codon
     inclusive, stop_codon exclusive). Non-CDS reads are excluded so
     UTR-bound contamination cannot inflate one frame artificially.
+
+    ``exclude_start_codons`` and ``exclude_stop_codons`` mask the
+    initiation- and termination-proximal codons (in nt, 3 * codons)
+    to keep initiation pause and stop-codon stacking out of the frame
+    fraction. Defaults are 0 to preserve historical pooled numbers;
+    callers (``run_periodicity_qc``, the standalone CLI) can pass the
+    spec defaults of 6 / 3.
     """
     if bed_with_psite.empty or "P_site" not in bed_with_psite.columns:
         return FrameSummary(sample=sample, n_reads=0,
@@ -238,7 +247,9 @@ def compute_frame_summary(
 
     starts = df["transcript"].map(ann["start_codon"]).astype(int)
     cds_lens = df["transcript"].map(ann["l_cds"]).astype(int)
-    in_cds = (df["P_site"] >= starts) & (df["P_site"] < starts + cds_lens)
+    edge_lo = starts + 3 * int(exclude_start_codons)
+    edge_hi = starts + cds_lens - 3 * int(exclude_stop_codons)
+    in_cds = (df["P_site"] >= edge_lo) & (df["P_site"] < edge_hi)
     df = df[in_cds]
     n_reads = len(df)
     if n_reads == 0:
@@ -341,6 +352,8 @@ def compute_frame_summary_by_length(
     min_frame0_fraction: float = _DEFAULT_MIN_FRAME0_FRACTION,
     min_frame0_dominance: float = _DEFAULT_MIN_FRAME0_DOMINANCE,
     max_frame_entropy: float = _DEFAULT_MAX_FRAME_ENTROPY,
+    exclude_start_codons: int = 0,
+    exclude_stop_codons: int = 0,
 ) -> pd.DataFrame:
     """Per-read-length frame fractions, dominance, entropy and inclusion call.
 
@@ -391,7 +404,9 @@ def compute_frame_summary_by_length(
 
     starts = df["transcript"].map(ann["start_codon"]).astype(int)
     cds_lens = df["transcript"].map(ann["l_cds"]).astype(int)
-    in_cds_mask = (df["P_site"] >= starts) & (df["P_site"] < starts + cds_lens)
+    edge_lo = starts + 3 * int(exclude_start_codons)
+    edge_hi = starts + cds_lens - 3 * int(exclude_stop_codons)
+    in_cds_mask = (df["P_site"] >= edge_lo) & (df["P_site"] < edge_hi)
     df_cds = df.loc[in_cds_mask].copy()
     df_cds["frame"] = (
         (df_cds["P_site"].astype(int) - starts.loc[df_cds.index]) % 3
@@ -786,6 +801,10 @@ def run_periodicity_qc(
     min_frame0_fraction: float = _DEFAULT_MIN_FRAME0_FRACTION,
     min_frame0_dominance: float = _DEFAULT_MIN_FRAME0_DOMINANCE,
     max_frame_entropy: float = _DEFAULT_MAX_FRAME_ENTROPY,
+    exclude_start_codons: int = 0,
+    exclude_stop_codons: int = 0,
+    compute_phase_score: bool = False,
+    qc_thresholds: dict[str, float] | None = None,
 ) -> dict:
     """Compute frame summary + start/stop metagenes + strand sanity per sample.
 
@@ -813,6 +832,8 @@ def run_periodicity_qc(
         )
         frame_rows.append(compute_frame_summary(
             psite, annotation_df, sample=sample,
+            exclude_start_codons=exclude_start_codons,
+            exclude_stop_codons=exclude_stop_codons,
         ))
         start_profiles.append(compute_metagene(
             psite, annotation_df,
@@ -832,6 +853,8 @@ def run_periodicity_qc(
                 min_frame0_fraction=min_frame0_fraction,
                 min_frame0_dominance=min_frame0_dominance,
                 max_frame_entropy=max_frame_entropy,
+                exclude_start_codons=exclude_start_codons,
+                exclude_stop_codons=exclude_stop_codons,
             )
         )
 
@@ -886,6 +909,10 @@ def run_periodicity_qc(
         samples=samples,
         output_dir=output_dir,
         site_type=str(offset_site).lower() or "p",
+        thresholds=qc_thresholds,
+        compute_phase_score=compute_phase_score,
+        exclude_start_codons=exclude_start_codons,
+        exclude_stop_codons=exclude_stop_codons,
     )
 
     # Persist the thresholds the inclusion calls were made under so a
@@ -900,6 +927,9 @@ def run_periodicity_qc(
                     "min_frame0_dominance": float(min_frame0_dominance),
                     "max_frame_entropy": float(max_frame_entropy),
                 },
+                "exclude_start_codons": int(exclude_start_codons),
+                "exclude_stop_codons": int(exclude_stop_codons),
+                "phase_score_enabled": bool(compute_phase_score),
                 "frame_formula": "(P_site_nt - CDS_start_nt) % 3",
                 "frame_0_definition": (
                     "assigned P-site lies in the annotated coding frame"

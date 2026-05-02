@@ -10,7 +10,7 @@ every `mitoribopy` subcommand. For prose, examples, and decision
 trees see [the README](../../README.md) and the tutorials under
 [`docs/tutorials/`](../tutorials/).
 
-Generated against MitoRiboPy v0.6.0.
+Generated against MitoRiboPy v0.6.2.
 
 ## Subcommand summary
 
@@ -20,6 +20,7 @@ Generated against MitoRiboPy v0.6.0.
 | [`mitoribopy rpf`](#mitoribopy-rpf) | Ribo-seq analysis from BED/BAM inputs. |
 | [`mitoribopy rnaseq`](#mitoribopy-rnaseq) | Translation efficiency (TE / delta-TE) from paired RNA-seq + Ribo-seq. Default flow: pass --rna-fastq + --ribo-fastq + --reference-fasta and the subcommand runs trimming, bowtie2 alignment, per-transcript counting, and pyDESeq2 itself before emitting te.tsv, delta_te.tsv, and plots. Alternative: pass --de-table from a prior external DESeq2 / Xtail / Anota2Seq run together with --ribo-dir; this path is mutually exclusive with --rna-fastq and enforces a SHA256 reference-consistency gate. |
 | [`mitoribopy all`](#mitoribopy-all) | End-to-end orchestrator: align + rpf, plus rnaseq when the config carries an 'rnaseq' section configured for either flow (from-FASTQ via 'rna_fastq' + 'reference_fasta', or external-DE via 'de_table'). Writes a composed run_manifest.json with tool versions, parameters, and input/output hashes across all three stages. |
+| [`mitoribopy periodicity`](#mitoribopy-periodicity) | Quantify and summarise 3-nt periodicity from an already-assigned P-site / A-site coordinate table (no offset recomputation). |
 | [`mitoribopy migrate-config`](#mitoribopy-migrateconfig) | Rewrite legacy MitoRiboPy YAML keys to their canonical names. Input is read from a path; output is written to stdout (the change log goes to stderr). Use to upgrade old pipeline configs without manually hunting down every renamed key. |
 | [`mitoribopy validate-config`](#mitoribopy-validateconfig) | Pre-flight a MitoRiboPy YAML / JSON / TOML config: parse, canonicalise legacy keys, check file paths and mutually-exclusive sections, and resolve rnaseq.mode against supplied inputs. Exit code is 0 on success, 2 when at least one error was found. |
 | [`mitoribopy validate-reference`](#mitoribopy-validatereference) | Pre-flight a custom mitochondrial reference: check that the FASTA and annotation CSV are consistent (matching transcript IDs, matching lengths, CDS divisible by 3, valid start / stop codons under the selected codon table). |
@@ -49,9 +50,10 @@ usage: mitoribopy align [-h] [--config CONFIG] [--dry-run] [--threads N]
                         [--library-strandedness {forward,reverse,unstranded}]
                         [--min-length NT] [--max-length NT] [--quality Q]
                         [--mapq Q] [--seed N]
-                        [--dedup-strategy {auto,umi-tools,skip}]
+                        [--dedup-strategy {auto,umi_coordinate,umi-tools,umi_tools,skip}]
                         [--umi-dedup-method {unique,percentile,cluster,adjacency,directional}]
-                        [--max-parallel-samples N]
+                        [--max-parallel-samples N|auto] [--single-sample-mode]
+                        [--memory-gb GB|auto]
 
 Preprocess FASTQ inputs: cutadapt trim + bowtie2 contaminant subtraction + bowtie2 mt-transcriptome alignment + MAPQ filter + dedup + BAM->BED6. Produces drop-in inputs for 'mitoribopy rpf'.
 
@@ -89,7 +91,7 @@ Library prep:
   --adapter-detect-min-len N          Adapter prefix length used as the search needle (nt). Default 12. Lower (e.g. 8) tolerates noisy adapter regions; raise (e.g. 16) for stricter matches. [default: 12]
   --adapter-detect-pretrimmed-threshold FRAC
                                       When EVERY kit's match rate is at or below this value, the FASTQ is classified as already adapter-trimmed and resolved to the 'pretrimmed' kit (cutadapt skips the -a flag). Default 0.05 (5%). [default: 0.05]
-  --no-pretrimmed-inference           Disable the auto-fallback to 'pretrimmed' when adapter detection finds no known kit. With this flag, detection failure with no --kit-preset fallback raises an error instead (the v0.4.0 behaviour before this change). [default: True]
+  --no-pretrimmed-inference           Disable the auto-fallback to 'pretrimmed' when adapter detection finds no known kit. With this flag, detection failure with no --kit-preset fallback raises an error instead. [default: True]
   --library-strandedness {forward,reverse,unstranded}
                                       Library strandedness. 'forward' (default, NEBNext/TruSeq small-RNA kits) enforces --norc at alignment time; 'reverse' enforces --nofw; 'unstranded' leaves bowtie2 permissive. [default: forward]
   --min-length NT                     Minimum read length kept after trimming (mt-RPF default 15). [default: 15]
@@ -101,13 +103,15 @@ Alignment:
   --seed N                            bowtie2 --seed value (deterministic output). [default: 42]
 
 Deduplication:
-  --dedup-strategy {auto,umi-tools,skip}
-                                      'auto' (default) -> umi-tools when UMIs are present, else skip. The legacy 'mark-duplicates' option was removed in v0.4.5: coordinate-only dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries. [default: auto]
+  --dedup-strategy {auto,umi_coordinate,umi-tools,umi_tools,skip}
+                                      Canonical: auto | umi_coordinate | skip. 'auto' (default) -> umi_coordinate when UMIs are present, else skip. umi_coordinate collapses reads on (coordinate, UMI); the implementation calls into umi_tools but the statistical operation is coordinate+UMI dedup. The legacy aliases 'umi-tools' / 'umi_tools' are accepted and rewritten to 'umi_coordinate' (canonical_config.yaml records the canonical name). Coordinate-only mark-duplicates is not supported: it destroys codon-occupancy signal on low-complexity mt-Ribo-seq libraries. [default: auto]
   --umi-dedup-method {unique,percentile,cluster,adjacency,directional}
                                       umi_tools --method. 'unique' (default) collapses only on exact coord+UMI match; other methods may over-collapse in low-complexity mt regions. [default: unique]
 
 Execution:
-  --max-parallel-samples N            Number of samples to process concurrently. With --threads T, each worker uses max(1, T // N) tool threads so total CPU use stays around T. Default 1 (serial; backward-compatible). Per-sample work (cutadapt + bowtie2 + dedup + BAM->BED) is embarrassingly parallel; the joint 'mitoribopy rpf' stage is unaffected. [default: 1]
+  --max-parallel-samples N|auto       Number of samples to process concurrently. Accepts an integer or 'auto' (default). 'auto' picks min(n_samples, threads/min_per_sample, memory_gb/est_per_sample) so a modern CPU is not left idle on a multi-sample run. With --threads T, each worker uses max(1, T // N) tool threads so total CPU use stays around T. Pass --max-parallel-samples 1 (or --single-sample-mode) for legacy serial behaviour. Per-sample work (cutadapt + bowtie2 + dedup + BAM->BED) is embarrassingly parallel; the joint 'mitoribopy rpf' stage is unaffected.
+  --single-sample-mode                Force serial execution (alias for --max-parallel-samples 1). Use when you want one sample's logs interleaved cleanly or when memory pressure rules out concurrency.
+  --memory-gb GB|auto                 Total memory budget (in GiB) the auto scheduler may use. Accepts a float or 'auto' (no memory cap). Used only when --max-parallel-samples auto.
 ```
 
 ## `mitoribopy rpf`
@@ -149,6 +153,12 @@ usage: mitoribopy rpf [-h] [--config CONFIG] -f REF_FASTA [-s STRAIN]
                       [--cor-mask-method {percentile,fixed,none}]
                       [--cor-mask-percentile COR_MASK_PERCENTILE]
                       [--cor-mask-threshold COR_MASK_THRESHOLD]
+                      [--cor-metric {log2_density_rpm,log2_rpm,linear,raw_count}]
+                      [--cor-regression {theil_sen,ols,none}]
+                      [--cor-support-min-raw COR_SUPPORT_MIN_RAW]
+                      [--cor-label-top-n COR_LABEL_TOP_N]
+                      [--cor-pseudocount COR_PSEUDOCOUNT]
+                      [--cor-raw-panel {qc_only,off}]
                       [--read-coverage-raw | --no-read-coverage-raw | --read_coverage_raw | --no-read_coverage_raw]
                       [--read-coverage-rpm | --no-read-coverage-rpm | --read_coverage_rpm | --no-read_coverage_rpm]
                       [--igv-export | --no-igv-export | --igv_export | --no-igv_export]
@@ -402,6 +412,18 @@ Optional Modules:
                                       Percentile cutoff used when --cor_mask_method percentile. [default: 0.99]
   --cor-mask-threshold COR_MASK_THRESHOLD, --cor_mask_threshold COR_MASK_THRESHOLD
                                       Fixed absolute cutoff used when --cor_mask_method fixed.
+  --cor-metric {log2_density_rpm,log2_rpm,linear,raw_count}, --cor_metric {log2_density_rpm,log2_rpm,linear,raw_count}
+                                      Primary codon-correlation metric. log2_density_rpm (default) log-transforms RPM-normalised codon density; raw_count reproduces the legacy depth-dominated scatter (and emits W_CODON_RAW_COUNT_PRIMARY). [default: log2_density_rpm]
+  --cor-regression {theil_sen,ols,none}, --cor_regression {theil_sen,ols,none}
+                                      Robust regression method drawn through the codon-correlation scatter. theil_sen (default) is median-based and tolerant of outliers; ols reproduces the legacy linear fit. [default: theil_sen]
+  --cor-support-min-raw COR_SUPPORT_MIN_RAW, --cor_support_min_raw COR_SUPPORT_MIN_RAW
+                                      Minimum raw value required in BOTH samples for a codon to be marked include_primary. Low-support codons remain in the metrics TSV but are dimmed in the figure and excluded from the residual ranking. [default: 10]
+  --cor-label-top-n COR_LABEL_TOP_N, --cor_label_top_n COR_LABEL_TOP_N
+                                      Number of codons to label on the scatter (by support-aware label score). [default: 10]
+  --cor-pseudocount COR_PSEUDOCOUNT, --cor_pseudocount COR_PSEUDOCOUNT
+                                      Additive pseudocount before log2. 'auto' or float. [default: auto]
+  --cor-raw-panel {qc_only,off}, --cor_raw_panel {qc_only,off}
+                                      Where to write the raw-count panel when metric=raw_count. 'qc_only' (default) routes it to raw_count_qc/; 'off' skips it. [default: qc_only]
   --read-coverage-raw, --no-read-coverage-raw, --read_coverage_raw, --no-read_coverage_raw
                                       Write read-coverage plots in raw counts under coverage_profile_plots/read_coverage_raw[_codon]/. Use --no-read_coverage_raw to skip. [default: True]
   --read-coverage-rpm, --no-read-coverage-rpm, --read_coverage_rpm, --no-read_coverage_rpm
@@ -437,7 +459,7 @@ usage: mitoribopy rnaseq [-h] [--config CONFIG] [--dry-run] [--threads N]
                          [--ribo-fastq PATH [PATH ...]]
                          [--reference-fasta PATH] [--bowtie2-index PREFIX]
                          [--workdir DIR] [--align-threads N]
-                         [--recount-ribo-fastq]
+                         [--recount-ribo-fastq] [--align-only]
                          [--allow-pseudo-replicates-for-demo-not-publication]
                          [--gene-id-convention {ensembl,refseq,hgnc,mt_prefixed,bare}]
                          [--organism {h.sapiens,s.cerevisiae,h,y,human,yeast}]
@@ -477,6 +499,7 @@ Inputs (from raw FASTQ — default flow):
   --workdir DIR                       Scratch directory for trim / index / BAM artefacts. Defaults to <output>/work.
   --align-threads N                   Threads passed to cutadapt and bowtie2. Separate from --threads (which caps BLAS / pyDESeq2 thread pools). [default: 4]
   --recount-ribo-fastq                When 'mitoribopy all' has just produced rpf_counts.tsv from the rpf stage, the rnaseq from-FASTQ flow defaults to REUSING those counts instead of re-aligning the Ribo FASTQs (rpf already did the work; re-running cutadapt + bowtie2 + counting is duplicate effort and a source of subtle inconsistencies between the two stages' counts). Pass --recount-ribo-fastq to force a second pass over the Ribo FASTQs from inside the rnaseq stage.
+  --align-only                        Run only the FASTQ-trim + bowtie2 + counts phase and exit before DESeq2 / TE / plots. Used by `mitoribopy all` to kick off RNA-seq alignment in parallel with the Ribo-seq align stage so total wall time is dominated by the slower of the two assays instead of the sum. Writes `rna_counts.tsv` (and `rpf_counts.tsv` if Ribo FASTQs are supplied) to the output dir; subsequent rnaseq invocations with --upstream-rna-counts pick up the prebuilt matrix.
   --allow-pseudo-replicates-for-demo-not-publication
                                       Opt INTO the auto-pseudo-replicate fallback for conditions with only 1 sample. Without this flag, an n=1 design is a hard error (exit 2) — the safe default for publication-grade DE. With this flag, each n=1 condition is split into rep1 / rep2 by FASTQ record parity so pyDESeq2 has n>=2 to fit dispersion on, BUT the resulting p-values and padj are NOT biologically defensible (the two halves are mechanical subsamples of one library). Use ONLY for demos / tutorials. The run_settings.json records pseudo_replicate_mode=true and an EXPLORATORY.md sidecar is written to the output dir.
 
@@ -572,6 +595,45 @@ Inspect a stage's full flag list:
   mitoribopy all --show-stage-help align
   mitoribopy all --show-stage-help rpf
   mitoribopy all --show-stage-help rnaseq
+```
+
+## `mitoribopy periodicity`
+
+```text
+usage: mitoribopy periodicity [-h] --site-table PATH --output DIR
+                              [--site {p,a}] [--expected-frame EXPECTED_FRAME]
+                              [--min-reads-per-length MIN_READS_PER_LENGTH]
+                              [--min-reads-per-gene MIN_READS_PER_GENE]
+                              [--good-frame-fraction GOOD_FRAME_FRACTION]
+                              [--warn-frame-fraction WARN_FRAME_FRACTION]
+                              [--exclude-start-codons EXCLUDE_START_CODONS]
+                              [--exclude-stop-codons EXCLUDE_STOP_CODONS]
+                              [--include-overlaps] [--phase-score]
+
+Quantify and summarise 3-nt periodicity from an already-assigned P-site / A-site coordinate table (no offset recomputation).
+
+options:
+  -h, --help                          show this help message and exit
+  --site-table PATH                   Per-read site table; required columns: sample, gene, transcript_id, read_length, site_type, site_pos, cds_start, cds_end. `count` is optional (defaults to 1).
+  --output DIR                        Directory for the periodicity QC bundle.
+  --site {p,a}                        Ribosomal site to score. Default: p. [default: p]
+  --expected-frame EXPECTED_FRAME     Expected CDS frame after site assignment. Default: 0.
+  --min-reads-per-length MIN_READS_PER_LENGTH
+                                      Minimum CDS sites required to score a read length. [default: 1000]
+  --min-reads-per-gene MIN_READS_PER_GENE
+                                      Minimum CDS sites required to score a gene. [default: 50]
+  --good-frame-fraction GOOD_FRAME_FRACTION
+                                      Lower bound on expected_frame_fraction for qc_call=good. [default: 0.6]
+  --warn-frame-fraction WARN_FRAME_FRACTION
+                                      Lower bound on expected_frame_fraction for qc_call=warn. [default: 0.5]
+  --exclude-start-codons EXCLUDE_START_CODONS
+                                      Codons after CDS start to exclude (initiation pause). Default: 6. [default: 6]
+  --exclude-stop-codons EXCLUDE_STOP_CODONS
+                                      Codons before CDS stop to exclude (termination pause). Default: 3. [default: 3]
+  --include-overlaps                  Keep rows with is_overlap=true; default masks them when the column is present.
+  --phase-score                       Add a ribotricer-style gene-level phase_score column.
+
+Frame definition: (site_pos - cds_start) mod 3. Frame 0 is the annotated coding frame. site_pos must be transcript-oriented (forward-strand-relative) and 0-based.
 ```
 
 ## `mitoribopy migrate-config`

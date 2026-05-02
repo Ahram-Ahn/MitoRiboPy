@@ -569,6 +569,12 @@ def run_coverage_profile_plots(
             "raw_codon": output_dir / f"{site_prefix}_density_raw_codon",
             "rpm_frame": output_dir / f"{site_prefix}_density_rpm_frame",
             "raw_frame": output_dir / f"{site_prefix}_density_raw_frame",
+            # Per-frame split: one row per frame, stacked, sharing y-axis.
+            # Avoids the readability problem of the overlay panel where
+            # tall frame-0 bars hide low frame-1/+2 signal at the same
+            # CDS positions.
+            "rpm_frame_split": output_dir / f"{site_prefix}_density_rpm_frame_split",
+            "raw_frame_split": output_dir / f"{site_prefix}_density_raw_frame_split",
         }
         for d in site_density_dirs[site].values():
             d.mkdir(parents=True, exist_ok=True)
@@ -585,6 +591,26 @@ def run_coverage_profile_plots(
         )
         _write_coverage_frame_metadata(
             frame_dir=site_density_dirs[site]["raw_frame"],
+            site=site,
+            normalization="raw_counts",
+            offset_type=str(offset_type),
+            offset_site=placement_site,
+            included_read_lengths=included_lengths_for_metadata,
+        )
+        # The split-by-frame variant uses the same frame coordinate
+        # system as the overlay variant — share the metadata sidecar
+        # contents so a reviewer comparing the two figures sees one
+        # definition of "frame 0" applied to both.
+        _write_coverage_frame_metadata(
+            frame_dir=site_density_dirs[site]["rpm_frame_split"],
+            site=site,
+            normalization="RPM",
+            offset_type=str(offset_type),
+            offset_site=placement_site,
+            included_read_lengths=included_lengths_for_metadata,
+        )
+        _write_coverage_frame_metadata(
+            frame_dir=site_density_dirs[site]["raw_frame_split"],
             site=site,
             normalization="raw_counts",
             offset_type=str(offset_type),
@@ -791,6 +817,84 @@ def run_coverage_profile_plots(
         plt.close(fig)
         return out_path
 
+    def _plot_frame_split(
+        tr: str,
+        slice_map: Dict[str, Dict[str, tuple[np.ndarray, int]]],
+        ymax_map: dict[str, float],
+        out_dir: Path,
+        title_suffix: str,
+    ) -> Path | None:
+        """Per-frame split companion to :func:`_plot_frame_colored`.
+
+        Stacks three sub-rows per sample (frame 0, +1, +2) sharing the
+        y-axis. The overlay version draws all three frames in one panel
+        and tall frame-0 bars can hide low frame-1/+2 signal at the same
+        CDS position; here each frame gets its own row so the absolute
+        intensity in every frame is readable independently while the
+        shared y-axis preserves cross-frame comparison.
+        """
+        any_present = any(tr in slice_map[sample] for sample in slice_map)
+        if not any_present:
+            return None
+
+        ymax = max(ymax_map.get(tr, 1), 1)
+        n_samples = len(sample_list)
+        fig, axes = plt.subplots(
+            nrows=n_samples * 3,
+            ncols=1,
+            figsize=(14, 1.6 * n_samples * 3),
+            sharex=True,
+            sharey=True,
+        )
+        if n_samples * 3 == 1:
+            axes = [axes]
+
+        for s_idx, (sample, _) in enumerate(sample_list):
+            entry = slice_map.get(sample, {}).get(tr)
+            for f in (0, 1, 2):
+                ax = axes[s_idx * 3 + f]
+                if entry is None:
+                    ax.text(
+                        0.5, 0.5, f"No data for {sample}",
+                        ha="center", va="center", transform=ax.transAxes,
+                    )
+                    ax.set_xticks([]); ax.set_yticks([])
+                    continue
+                arr, _cds_start = entry
+                n = len(arr)
+                x = np.arange(1, n + 1)
+                frames = np.arange(n) % 3
+                mask = frames == f
+                ax.bar(
+                    x[mask], arr[mask], width=0.95,
+                    color=_FRAME_COLORS[f], edgecolor="none",
+                )
+                ax.set_ylim(0, ymax * 1.1)
+                ax.set_ylabel(
+                    f"{sample}\n{_FRAME_LABELS[f].split(':')[0]}",
+                    fontsize=9, fontweight="bold",
+                )
+                ax.grid(axis="y", alpha=0.2, linewidth=0.8)
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+                if s_idx == n_samples - 1 and f == 2:
+                    ax.set_xlabel(
+                        "CDS Nucleotide Position",
+                        fontsize=14, fontweight="bold",
+                    )
+
+        fig.suptitle(
+            f"{sequence_display_map.get(tr, tr)} - {title_suffix}\n"
+            "Frame = (assigned-site nt - CDS-start nt) mod 3; "
+            "Frame 0 = annotated CDS frame.",
+            fontsize=13, fontweight="bold",
+        )
+        fig.tight_layout()
+        out_path = out_dir / f"{tr}_{title_suffix.replace(' ', '_').lower()}.{plot_format}"
+        fig.savefig(out_path, bbox_inches="tight")
+        plt.close(fig)
+        return out_path
+
     site_labels = {"p": "P-site", "a": "A-site"}
     site_colors = {"p": "forestgreen", "a": "darkorange"}
 
@@ -858,9 +962,27 @@ def run_coverage_profile_plots(
                 dirs["raw_frame"],
                 f"{label} Density (Raw Counts, CDS Frame Coloring)",
             )
+            out_rpm_frame_split = _plot_frame_split(
+                tr,
+                site_cds_slice_rpm[site],
+                site_frame_max_rpm[site],
+                dirs["rpm_frame_split"],
+                f"{label} Density (RPM, CDS Frame Split)",
+            )
+            out_raw_frame_split = _plot_frame_split(
+                tr,
+                site_cds_slice_raw[site],
+                site_frame_max_raw[site],
+                dirs["raw_frame_split"],
+                f"{label} Density (Raw Counts, CDS Frame Split)",
+            )
             if any(
                 p is not None
-                for p in (out_rpm, out_raw, out_rpm_codon, out_raw_codon, out_rpm_frame, out_raw_frame)
+                for p in (
+                    out_rpm, out_raw, out_rpm_codon, out_raw_codon,
+                    out_rpm_frame, out_raw_frame,
+                    out_rpm_frame_split, out_raw_frame_split,
+                )
             ):
                 n_density[site] += 1
 

@@ -32,6 +32,7 @@ __all__ = [
     "GeneRow",
     "QCSummaryRow",
     "QC_THRESHOLDS_DEFAULT",
+    "HUMAN_MT_OVERLAPPING_GENES",
     "build_frame_counts_by_sample_length",
     "build_gene_periodicity",
     "build_qc_summary",
@@ -39,9 +40,39 @@ __all__ = [
     "calculate_entropy_bias",
     "calculate_phase_score",
     "calculate_fft_period3_ratio",
+    "is_known_overlap_gene",
     "run_periodicity_qc_bundle",
     "write_qc_summary_markdown",
 ]
+
+
+# Human mitochondrial protein-coding genes whose CDSes overlap their
+# neighbours (transcript-relative). Frame assignment in these regions is
+# inherently ambiguous; the spec asks for them to be flagged so reviewers
+# do not over-interpret a single frame fraction. Symbols cover:
+#   - canonical HGNC names ("MT-ATP8", "MT-ATP6", "MT-ND4L", "MT-ND4")
+#   - the common no-hyphen short forms ("MTATP8", ...)
+#   - fused-overlap transcript names that some references emit when the
+#     two overlapping ORFs are flattened into a single sequence
+#     ("ATP86" = ATP8+ATP6, "ND4L4" = ND4L+ND4). The mt-mRNA FASTA in
+#     this repo (input_data/human-mt-mRNA.fasta) uses the fused form,
+#     which is why both spellings need to live in the same set.
+HUMAN_MT_OVERLAPPING_GENES: frozenset[str] = frozenset({
+    "MT-ATP8", "MT-ATP6", "MTATP8", "MTATP6", "ATP86", "MT-ATP86",
+    "MT-ND4L", "MT-ND4", "MTND4L", "MTND4", "ND4L4", "MT-ND4L4",
+})
+
+
+def is_known_overlap_gene(name: str) -> bool:
+    """Return True if ``name`` is in :data:`HUMAN_MT_OVERLAPPING_GENES`.
+
+    Matching is case-insensitive and treats ``_`` as ``-`` so callers
+    can pass HGNC, no-hyphen, or fused-transcript spellings.
+    """
+    if name is None:
+        return False
+    s = str(name).strip().upper().replace("_", "-")
+    return s in HUMAN_MT_OVERLAPPING_GENES
 
 
 # Default thresholds match the values requested in the periodicity
@@ -297,6 +328,9 @@ def build_gene_periodicity(
     expected_frame: int = 0,
     thresholds: dict[str, float] | None = None,
     compute_phase_score: bool = False,
+    exclude_start_codons: int = 0,
+    exclude_stop_codons: int = 0,
+    annotate_overlap: bool = False,
 ) -> pd.DataFrame:
     """Per-(sample, gene) frame fractions + soft QC call.
 
@@ -330,7 +364,9 @@ def build_gene_periodicity(
 
     starts = df["transcript"].map(ann["start_codon"]).astype(int)
     cds_lens = df["transcript"].map(ann["l_cds"]).astype(int)
-    in_cds_mask = (df["P_site"] >= starts) & (df["P_site"] < starts + cds_lens)
+    edge_lo = starts + 3 * int(exclude_start_codons)
+    edge_hi = starts + cds_lens - 3 * int(exclude_stop_codons)
+    in_cds_mask = (df["P_site"] >= edge_lo) & (df["P_site"] < edge_hi)
     df = df.loc[in_cds_mask].copy()
     if df.empty:
         return pd.DataFrame()
@@ -402,7 +438,10 @@ def build_gene_periodicity(
             "phase_score": phase,
             "qc_call": qc_call,
         })
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    if annotate_overlap and not out.empty:
+        out["is_overlap_pair"] = out["gene"].map(is_known_overlap_gene)
+    return out
 
 
 def build_qc_summary(
@@ -430,12 +469,17 @@ def build_qc_summary(
         )
 
     rows: list[dict] = []
+    min_depth = int(th["min_reads_per_length"])
     for sample, group in frame_by_sample_length.groupby("sample_id"):
         n_total_sites = int(group["n_reads_cds"].astype(int).sum())
         if n_total_sites <= 0:
             rows.append(_empty_qc_row(str(sample), site_type))
             continue
-        best_idx = group["expected_frame_fraction"].astype(float).idxmax()
+        # Best length: prefer rows clearing the depth threshold so a
+        # tiny-depth lucky frame-0 spike cannot crown the sample.
+        deep_enough = group[group["n_reads_cds"].astype(int) >= min_depth]
+        candidate_pool = deep_enough if not deep_enough.empty else group
+        best_idx = candidate_pool["expected_frame_fraction"].astype(float).idxmax()
         best_row = group.loc[best_idx]
         # Global frame fractions: depth-weighted across lengths.
         weights = group["n_reads_cds"].astype(float)
@@ -465,6 +509,14 @@ def build_qc_summary(
         else:
             overall = "poor"
             note = "no length cleared the warn threshold"
+        # Dominant-frame fraction = max(f0, f1, f2) of the chosen row,
+        # by definition. (Previously a confusing `A and B or C` ternary
+        # that also tried `Series.get(...)` like a dict.)
+        best_dominant_fraction = float(max(
+            float(best_row["frame0_fraction"]),
+            float(best_row["frame1_fraction"]),
+            float(best_row["frame2_fraction"]),
+        ))
         rows.append({
             "sample_id": str(sample),
             "site_type": site_type,
@@ -474,14 +526,7 @@ def build_qc_summary(
                 best_row["expected_frame_fraction"]
             ),
             "best_read_length_dominant_frame": int(best_row["dominant_frame"]),
-            "best_read_length_dominant_fraction": float(
-                best_row["dominant_frame"] == best_row.get("expected_frame", 0)
-            ) and float(best_row["expected_frame_fraction"])
-                or float(max(
-                    best_row["frame0_fraction"],
-                    best_row["frame1_fraction"],
-                    best_row["frame2_fraction"],
-                )),
+            "best_read_length_dominant_fraction": best_dominant_fraction,
             "global_expected_frame_fraction": float(global_expected),
             "global_entropy_bias": float(global_entropy),
             "n_good_lengths": n_good,
@@ -570,6 +615,9 @@ def run_periodicity_qc_bundle(
     expected_frame: int = 0,
     thresholds: dict[str, float] | None = None,
     compute_phase_score: bool = False,
+    exclude_start_codons: int = 0,
+    exclude_stop_codons: int = 0,
+    annotate_overlap: bool = True,
 ) -> dict:
     """Write the full periodicity QC bundle and return the in-memory tables.
 
@@ -607,6 +655,9 @@ def run_periodicity_qc_bundle(
             expected_frame=expected_frame,
             thresholds=thresholds,
             compute_phase_score=compute_phase_score,
+            exclude_start_codons=exclude_start_codons,
+            exclude_stop_codons=exclude_stop_codons,
+            annotate_overlap=annotate_overlap,
         )
         gene_table.to_csv(gene_path, sep="\t", index=False, na_rep="")
     elif not gene_path.exists():

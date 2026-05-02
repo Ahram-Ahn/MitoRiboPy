@@ -18,6 +18,7 @@ The package is built around four pipeline subcommands plus seven utility subcomm
 | `mitoribopy all` | End-to-end orchestrator that runs align + rpf + (optional) rnaseq from one YAML config and writes a composed `run_manifest.json` |
 | `mitoribopy validate-config` | Pre-flight check: parse + canonicalise legacy keys + check paths + validate `rnaseq.mode` against supplied inputs. Exit 0 / 2. Use before launching long-running cluster jobs. |
 | `mitoribopy validate-reference` | Pre-flight a custom mt-transcriptome FASTA + annotation pair (matching IDs, matching lengths, CDS divisible by 3, valid start / stop codons under the chosen codon table). Exit 0 / 2. |
+| `mitoribopy periodicity` | Standalone 3-nt periodicity QC bundle. Re-scores an already-assigned P-site / A-site coordinate table without re-running offset selection; useful for re-tuning thresholds (`--good-frame-fraction`, `--exclude-start-codons`, `--phase-score`, …) on a finished run. Writes `qc_summary.tsv` + `qc_summary.md` + `frame_counts_by_sample_length.tsv` + `gene_periodicity.tsv` to the output directory. |
 | `mitoribopy validate-figures` | Mechanically validate every plot under a finished run root: check label / legend / stat-box overlap, label clipping, point counts vs source TSV, SVG text editability, PNG dpi, and metadata sidecars. Writes `figure_qc.tsv`. Exit 0 / 1 / 2 (clean / warn-only / fail; `--strict` upgrades warn → fail). |
 | `mitoribopy migrate-config` | Rewrite legacy YAML keys to canonical names (e.g. `merge_density:` → `codon_density_window:`, `strain: h` → `strain: h.sapiens`). Pipe stdout to a new file or pass `--in-place`. |
 | `mitoribopy summarize` | Regenerate `SUMMARY.md` and `summary_qc.tsv` from a finished run by reading `run_manifest.json` and per-stage outputs. Auto-invoked by `mitoribopy all` after every run. |
@@ -36,6 +37,7 @@ The package is built around four pipeline subcommands plus seven utility subcomm
 | I want to check my config without running anything | `mitoribopy validate-config pipeline_config.yaml` |
 | I want to pre-flight a custom mt-transcriptome FASTA + annotation pair | `mitoribopy validate-reference --fasta custom_mt.fa --annotation custom_mt.csv` |
 | I want to mechanically QC every plot in a finished run | `mitoribopy validate-figures runs/full/ --strict` |
+| I want to re-score periodicity with different thresholds on a finished run | `mitoribopy periodicity --site-table runs/full/rpf/qc/site_table.tsv --output runs/full/rpf/qc/standalone_periodicity --site p --phase-score` |
 | I want to inspect what `all` would actually do | `mitoribopy all --print-canonical-config --config ... --output ...` |
 | I want to estimate cluster time / memory / disk | `mitoribopy benchmark --config ... --output bench/ --subsample 200000` |
 | My config uses old key names (e.g. `merge_density:`, `strain: h`) | `mitoribopy migrate-config old.yaml > new.yaml` |
@@ -64,6 +66,7 @@ The `mitoribopy all --resume` skip is **hash-validated** against the prior run's
    - [`mitoribopy rnaseq`](#mitoribopy-rnaseq)
    - [`mitoribopy all`](#mitoribopy-all)
 9. [What the numbers mean — RNA, RPF, TE, ΔTE](#what-the-numbers-mean--rna-rpf-te-%CE%B4te)
+   - [3-nt periodicity QC](#3-nt-periodicity-qc)
 10. [Output overview](#output-overview)
 11. [Custom organisms](#custom-organisms)
 12. [Built-in references](#built-in-references)
@@ -119,7 +122,7 @@ Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no N
 | Verify installed version | `mitoribopy --version` |
 | Git tag | `v0.6.2` |
 
-The README, CLI help, and `examples/templates/` in this repository all describe the **v0.6.2** interface. v0.6.2 is the fourth-edit cleanup release: it adds a top-level `execution:` resource-planning block, run-root `resource_plan.json`, an extended periodicity QC bundle (`qc_summary.tsv` + gene-level / phase-score / FFT metrics), a stable warning-code registry, and canonicalises `dedup_strategy: umi_coordinate` (legacy `umi-tools` still accepted). Older PyPI builds (≤ v0.5.1) shipped a different rpf flag style and a now-removed no-subcommand fallback; do not pin to those for a publication-grade reanalysis.
+The README, CLI help, and `examples/templates/` in this repository all describe the **v0.6.2** interface. v0.6.2 is the fourth-edit cleanup release: it adds a top-level `execution:` resource-planning block, run-root `resource_plan.json`, an extended periodicity QC bundle (`qc_summary.tsv` + gene-level / phase-score / FFT metrics, with depth-aware best-length selection, codon-edge masking, and a per-frame split coverage plot), a stable warning-code registry, and canonicalises `dedup_strategy: umi_coordinate` (legacy `umi-tools` still accepted). The standalone `mitoribopy periodicity` subcommand re-scores an already-assigned site table without re-running the rpf pipeline. Older PyPI builds (≤ v0.5.1) shipped a different rpf flag style and a now-removed no-subcommand fallback; do not pin to those for a publication-grade reanalysis.
 
 ### From source (recommended for the manuscript build)
 
@@ -799,7 +802,8 @@ Plain `mitoribopy <flags>` (no subcommand) routes to `mitoribopy rpf` and prints
 - **`{p_site,a_site}_density_*`** (per-site, single-nucleotide P-site or A-site density, sibling of `read_coverage_*`) — narrow peak at the chosen ribosomal site. The legacy nested `p/` / `a/` subfolders are gone; the site is encoded in the filename prefix. Variants:
   - `{p_site,a_site}_density_rpm` / `_density_raw` — full-transcript density.
   - `{p_site,a_site}_density_rpm_codon` / `_density_raw_codon` — same density but binned per CDS codon.
-  - `{p_site,a_site}_density_rpm_frame` / `_density_raw_frame` — **frame-coloured CDS-only nt plots**. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind-safe palette. Frame-0 dominance (~70–90% of CDS density on frame 0) is the canonical mt-Ribo-seq QC signature; if frames 1 and 2 are visible, the library has spurious offset selection, mis-trimmed reads, or contamination from non-ribosome-protected RNA.
+  - `{p_site,a_site}_density_rpm_frame` / `_density_raw_frame` — **frame-coloured CDS-only nt plots (overlay)**. All three frames in one panel per sample; bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind-safe palette. Frame-0 dominance (~70–90% of CDS density on frame 0) is the canonical mt-Ribo-seq QC signature; if frames 1 and 2 are visible, the library has spurious offset selection, mis-trimmed reads, or contamination from non-ribosome-protected RNA.
+  - `{p_site,a_site}_density_rpm_frame_split` / `_density_raw_frame_split` — **per-frame split companion** (added v0.6.2). Stacks three sub-rows per sample (frame 0, +1, +2) sharing the y-axis, so low-frame signal is no longer hidden under tall same-position bars from another frame. Shares the same `frame = (assigned-site nt − CDS-start nt) mod 3` definition as the overlay, recorded in the `coverage_plot.metadata.json` sidecar each folder ships. Use the split when the overlay's tallest frame is ambiguous (e.g. fused overlapping ORFs like human `ATP86` where the ATP6 ORF is +2 nt offset from ATP8 and the +2 stack would otherwise dominate the visual).
 
 For the translation-efficiency integration, use the dedicated `mitoribopy rnaseq` subcommand.
 
@@ -1000,12 +1004,63 @@ These two files are **gene-level summary tables**. If you want any of the follow
 |---|---|
 | Per-position P-site / A-site density | `<output>/translation_profile/<sample>/footprint_density/<transcript>_footprint_density.csv` |
 | Per-codon usage by sample | `<output>/translation_profile/<sample>/codon_usage/` |
-| Periodicity / 3-nt phasing diagnostic | `<output>/qc/periodicity_metagene.png` (start- and stop-aligned) and `qc/frame_summary.tsv` |
+| Periodicity / 3-nt phasing diagnostic | `<output>/rpf/qc/qc_summary.tsv` + `qc_summary.md` (one row / one block per sample with the overall `good/warn/poor/low_depth` call), `frame_counts_by_sample_length.tsv` (per-(sample, length) frame fractions + `expected_frame_enrichment` + `entropy_bias` + `qc_call`), `gene_periodicity.tsv` (per-(sample, gene) frame fractions + optional `phase_score` + `is_overlap_pair` flag for fused mt-mRNA pairs), and `periodicity_metagene.png` (start- and stop-aligned). Legacy `frame_summary.tsv` is still emitted alongside. |
 | The descriptive coverage-normalised RPF metric (the legacy "rna-seq ratio" the v0.2.x module emitted) | **Removed in this refactor.** Use `te.tsv` for sample-level TE, or compute your own ratio from the per-position density CSVs above. |
 
 ### Pseudo-replicate runs
 
 When a from-FASTQ flow run is launched with `--allow-pseudo-replicates-for-demo-not-publication`, both `te.tsv` and `delta_te.tsv` are still written, but `run_settings.json` carries `pseudo_replicate_mode: true` and an `EXPLORATORY.md` sidecar lists every column you should NOT cite (padj, "significant" markers, dispersion estimates). The TE and ΔTE point estimates remain readable as exploratory; only the inferential statistics are unsafe.
+
+### 3-nt periodicity QC
+
+After per-read-length P-site (or A-site) assignment, MitoRiboPy classifies every site by its codon phase:
+
+```
+frame = (assigned_site_nt − CDS_start_nt) mod 3
+```
+
+`frame == 0` is the annotated coding frame; a healthy mt-Ribo-seq library, after correct offset assignment, drops most P-sites onto frame 0. The bundle under `<output>/rpf/qc/` records this at three resolutions plus a soft per-sample QC verdict:
+
+| Output | What it answers |
+|---|---|
+| `qc_summary.tsv` + `qc_summary.md` | "Is this sample's periodicity good enough to interpret?" One row / one block per sample with `overall_qc_call`, the best read length picked **after** the depth filter, and the depth-weighted global frame fractions. |
+| `frame_counts_by_sample_length.tsv` | "Which read length is well-phased?" Per-(sample, read_length) frame fractions, `expected_frame_enrichment` (frame 0 over the mean of the other two), `entropy_bias` (1 − base-3 entropy across the three fractions), and a soft `qc_call`. |
+| `gene_periodicity.tsv` | "Which gene is well-phased?" Per-(sample, gene) frame fractions, optional ribotricer-style `phase_score` (enable with `mitoribopy periodicity --phase-score`), and an `is_overlap_pair` boolean for the human mt-mRNA overlap pairs. |
+| `periodicity_metagene.png/.svg` | Start- and stop-anchored 3-nt periodicity, bars frame-coloured. The community-standard "show me 3-nt phasing" plot. |
+| `by_length/frame_by_length_heatmap.png/.svg` | Read-length × frame-fraction heatmap with red borders on excluded length classes. |
+| `by_length/periodicity.metadata.json` | Frame formula, threshold values, and `exclude_start_codons` / `exclude_stop_codons` settings actually applied — so a reviewer can re-derive every number from disk. |
+
+#### Default thresholds
+
+| Knob | Default | Where to override |
+|---|---|---|
+| `good_frame_fraction` | 0.60 | `mitoribopy periodicity --good-frame-fraction` |
+| `warn_frame_fraction` | 0.50 | `mitoribopy periodicity --warn-frame-fraction` |
+| `min_reads_per_length` | 1000 | `mitoribopy periodicity --min-reads-per-length` |
+| `min_reads_per_gene` | 50 | `mitoribopy periodicity --min-reads-per-gene` |
+| `exclude_start_codons` | 6 (standalone CLI) / 0 (pipeline path) | `mitoribopy periodicity --exclude-start-codons` |
+| `exclude_stop_codons` | 3 (standalone CLI) / 0 (pipeline path) | `mitoribopy periodicity --exclude-stop-codons` |
+
+`exclude_start_codons` / `exclude_stop_codons` mask the initiation- and termination-proximal codons (initiation pause, stop-codon stacking) from frame statistics. They default to 0 inside the pipeline path so historical pooled numbers stay reproducible; the standalone subcommand applies the spec defaults of 6 / 3 to both the per-length and gene-level tables.
+
+#### QC labels
+
+| Label | Condition |
+|---|---|
+| `good` | At least one read length cleared the `good_frame_fraction` threshold AND total assigned sites ≥ `min_reads_per_length`. |
+| `warn` | No length passed `good`, but at least one is between `warn_frame_fraction` and `good_frame_fraction`. |
+| `poor` | No length cleared `warn_frame_fraction`. |
+| `low_depth` | Every length has fewer than `min_reads_per_length` assigned sites. **Do not** infer "poor periodicity" from this — there is just not enough signal to score. |
+
+Soft labels by design: a `poor` call does **not** automatically discard the sample. Inspect `frame_counts_by_sample_length.tsv` (a single bad read-length class can drag down a pooled call) and `gene_periodicity.tsv` (a fused overlap transcript like `ATP86` is inherently ambiguous-frame) before deciding whether to drop the sample, drop one read length, or report the periodicity as a known limitation.
+
+#### Important caveats
+
+- **Periodicity must be interpreted after offset assignment.** Raw read 5′ ends do not show the expected frame if length-specific offsets are not applied first.
+- **Different read lengths have different optimal offsets.** Inspect read-length-specific periodicity (`frame_counts_by_sample_length.tsv`) before merging lengths for downstream analyses.
+- **Human mt-ND6 is on the opposite strand** of most other human mt protein-coding genes. The transcriptome reference (Path A, the MitoRiboPy default) flips it into transcript orientation before frame assignment, so frame statistics are correct as-printed; raw genome-coordinate work must orient first.
+- **Overlapping ORFs (MT-ATP8/MT-ATP6, MT-ND4L/MT-ND4)** create inherently ambiguous frame assignments in the overlap region. The bundled `input_data/human-mt-mRNA.fasta` collapses each pair into a single fused transcript (`ATP86`, `ND4L4`); both naming schemes are flagged with `is_overlap_pair=true` in `gene_periodicity.tsv`.
+- **Yeast mt-mRNAs have long 5′ UTRs** with transcript-specific translation activators. Do not assume human-like leaderless initiation when scoring yeast data.
 
 ---
 
@@ -1079,9 +1134,13 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
       p_site_density_raw/              # P-site nt-resolution density (raw)
       p_site_density_rpm_codon/        # codon-binned across CDS, RPM
       p_site_density_raw_codon/        # codon-binned across CDS, raw
-      p_site_density_rpm_frame/        # CDS-only nt plot, frame-coloured (0/1/2 vs CDS start);
+      p_site_density_rpm_frame/        # CDS-only nt plot, frame-coloured overlay (0/1/2 vs CDS start);
                                        # frame-0 dominance is the canonical mt-Ribo-seq QC.
       p_site_density_raw_frame/        # same but raw counts
+      p_site_density_rpm_frame_split/  # v0.6.2: per-frame split companion, 3 sub-rows per sample
+      p_site_density_raw_frame_split/  #         (frame 0, +1, +2) sharing y-axis. Use when the
+                                       #         overlay's tallest frame hides low-frame signal
+                                       #         (e.g. fused overlap ORFs like ATP86).
       a_site_density_*/                # A-site mirror folders (only when analysis_sites in {a,both})
     structure_density/                 # if --structure_density (uses P-site by default)
     codon_correlation/                 # if --cor_plot
@@ -1091,6 +1150,32 @@ For a `mitoribopy all` run with the defaults (`--offset_mode per_sample`, `--ana
       <sample>/
         <sample>_p_site.bedgraph       # P-site footprint density (forest green track)
         <sample>_a_site.bedgraph       # A-site footprint density (dark orange track)
+    qc/                                # 3-nt periodicity QC bundle (always written by rpf)
+      qc_summary.tsv                   # one row per sample: best_read_length,
+                                       # best_read_length_expected_frame_fraction,
+                                       # best_read_length_dominant_frame/_fraction,
+                                       # global_expected_frame_fraction, global_entropy_bias,
+                                       # n_good/_warn/_poor/_low_depth_lengths,
+                                       # overall_qc_call (good/warn/poor/low_depth) + notes
+      qc_summary.md                    # human-readable companion of qc_summary.tsv
+      frame_counts_by_sample_length.tsv# per-(sample, read_length) frame fractions,
+                                       # expected_frame_enrichment, entropy_bias, qc_call
+      gene_periodicity.tsv             # per-(sample, gene) frame fractions, optional
+                                       # phase_score, qc_call, is_overlap_pair (true for
+                                       # MT-ATP8/MT-ATP6 + MT-ND4L/MT-ND4 plus the fused
+                                       # ATP86 / ND4L4 transcript spellings)
+      frame_summary.tsv                # legacy pooled per-sample frame fractions
+      periodicity_metagene.png/.svg    # start- and stop-aligned 3-nt periodicity plots,
+                                       # bars frame-coloured (0 / +1 / +2)
+      periodicity_start.tsv            # start-anchored metagene table
+      periodicity_stop.tsv             # stop-anchored metagene table
+      strand_sanity.tsv                # per-sample minus-strand fraction (should be 0
+                                       # on a forward-stranded mt-transcriptome library)
+      by_length/
+        frame_by_length.tsv            # per-length inclusion-policy diagnostics
+        length_inclusion_decisions.tsv # distilled include/exclude verdict per length
+        periodicity.metadata.json      # frame formula + thresholds + exclude_codon settings
+        frame_by_length_heatmap.png/.svg# read-length × frame fraction heatmap
   rnaseq/                              # if rnaseq config supplied
     te.tsv                             # one row per (sample, gene): rpf_count, mrna_abundance, te
     delta_te.tsv                       # one row per gene: mrna_log2fc, rpf_log2fc, delta_te_log2,
@@ -1172,9 +1257,10 @@ to dig into per-stage TSVs.
 5. `align/read_counts.tsv` — per-stage read funnel (trim → contam → mt → MAPQ → dedup).
 6. `rpf/offset_diagnostics/plots/offset_drift_*.svg` — per-sample offset drift in a single glance.
 7. `rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv` — exact offset table actually applied.
-8. `rpf/rpf_counts.tsv` (+ `rpf/rpf_counts.metadata.json` sidecar) — per-(sample, gene) RPF count matrix.
-9. `rnaseq/te.tsv` and `rnaseq/delta_te.tsv` — translation efficiency and ΔTE tables (when the rnaseq stage ran).
-10. `figure_qc.tsv` (after `mitoribopy validate-figures runs/full/`) — mechanical pass/warn/fail per plot (label overlap, point counts, SVG editability).
+8. `rpf/qc/qc_summary.md` — one-block-per-sample human-readable periodicity verdict (`good` / `warn` / `poor` / `low_depth`); `rpf/qc/qc_summary.tsv` is the machine-readable companion. **Read this before trusting any downstream codon-level table** — a `poor` call here means the offsets did not produce the expected codon phasing, and codon-occupancy interpretation is unsafe.
+9. `rpf/rpf_counts.tsv` (+ `rpf/rpf_counts.metadata.json` sidecar) — per-(sample, gene) RPF count matrix.
+10. `rnaseq/te.tsv` and `rnaseq/delta_te.tsv` — translation efficiency and ΔTE tables (when the rnaseq stage ran).
+11. `figure_qc.tsv` (after `mitoribopy validate-figures runs/full/`) — mechanical pass/warn/fail per plot (label overlap, point counts, SVG editability).
 
 ### When NOT to trust the output
 
@@ -1186,7 +1272,8 @@ the codes below; each row's `suggested_action` tells you what to do.
 - **High contaminant fraction** — `read_counts.tsv` shows >50% of post-trim reads filtered out as rRNA / contaminant. The library may not be the libraryyou think it is.
 - **Low mt-mRNA alignment fraction** — `mt_aligned / post_rrna_filter < 0.05`. The reference, the strain preset, or the input may be off.
 - **No clear offset peak** — `rpf/offset_diagnostics/plots/offset_*.svg` shows a flat enrichment landscape. The selected offset was a fallback, not a real peak.
-- **Weak frame-0 dominance** — coverage plots in `rpf/coverage_profile_plots/p_site_density_rpm_frame/` show ≪70% frame-0 density. Either contamination or a wrong offset.
+- **Weak frame-0 dominance** — `rpf/qc/qc_summary.tsv` reports `overall_qc_call=poor` (or `warn`), or coverage plots in `rpf/coverage_profile_plots/p_site_density_rpm_frame/` show ≪70% frame-0 density. Inspect `frame_counts_by_sample_length.tsv` to see whether one bad read length is contaminating an otherwise clean library, then `gene_periodicity.tsv` to see whether one gene (often a fused overlap pair like `ATP86` or `ND4L4`, flagged with `is_overlap_pair=true`) is dragging the pooled call down.
+- **Best read length picked from a low-depth row** — fixed in v0.6.2: `build_qc_summary` now restricts `best_read_length` selection to rows clearing `min_reads_per_length` when at least one such row exists. If every length is below threshold the sample is reported as `low_depth` rather than crowning a 5-read lucky frame-0 spike.
 - **Sample-specific offset fallback** — a sample's `offset_applied.csv` row shows the global fallback offset rather than the per-sample optimum. Either too few reads or a flat landscape.
 - **Pseudo-replicate mode** — `rnaseq/EXPLORATORY.md` exists. The DE statistics are exploratory only — re-run with biological replicates for publication.
 - **Inferred UMI without declaration** — `kit_resolution.tsv` shows `umi_source=inferred`. Confirm with the wet-lab record before trusting dedup.
@@ -1213,7 +1300,11 @@ handle the mt-translation-efficiency layer:
 - **`rpf/offset_diagnostics/plots/offset_<align>.svg`** (heatmap + line plots) — the combined enrichment around the anchor codon. A sharp peak at the canonical P-site offset (~12–15 nt from the 5' end for most mt-Ribo-seq libraries) confirms library quality.
 - **`rpf/offset_diagnostics/csv/per_sample_offset/<sample>/offset_applied.csv`** — exact offsets row applied to `<sample>` downstream. New in v0.4.4 so a reviewer can confirm from disk that per-sample offset selection was honoured by the translation-profile and coverage-profile steps.
 - **`rpf/translation_profile/<sample>/codon_usage/p_site_codon_usage_total.csv`** — overall P-site codon occupancy. Compare against `a_site_codon_usage_total.csv` (same folder) to see the A-site picture.
-- **`rpf/coverage_profile_plots/p_site_density_rpm_frame/<transcript>_*.svg`** — frame-coloured single-nucleotide P-site density across the CDS only. Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind safe palette. **Frame-0 dominance is the canonical mt-Ribo-seq QC signature**: a healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region. The `p_site_density_raw_frame/` companion has the same plots in raw counts (use this when comparing against published per-codon counts; otherwise prefer the RPM version for cross-sample comparison).
+- **`rpf/coverage_profile_plots/p_site_density_rpm_frame/<transcript>_*.svg`** — frame-coloured single-nucleotide P-site density across the CDS only (overlay; one panel per sample, all three frames in the same axes). Bars are coloured by reading frame (0 / 1 / 2 relative to CDS start) using a colour-blind safe palette. **Frame-0 dominance is the canonical mt-Ribo-seq QC signature**: a healthy library shows ~70–90% of the CDS density on frame 0 with much smaller frames 1 and 2; flat or jittery frames suggest contamination, poor offset selection, or a low-complexity region. The `p_site_density_raw_frame/` companion has the same plots in raw counts (use this when comparing against published per-codon counts; otherwise prefer the RPM version for cross-sample comparison).
+- **`rpf/coverage_profile_plots/p_site_density_rpm_frame_split/<transcript>_*.svg`** (v0.6.2) — **per-frame split** companion to the overlay above. Three sub-rows per sample (frame 0, +1, +2), shared y-axis, so a tall same-position bar in one frame can no longer hide low signal in another. Use this when the overlay has an ambiguous tallest frame: typical case is a fused overlapping ORF transcript like human `ATP86`, where the ATP6 ORF is +2 nt offset from ATP8 and a +2 stack near the start codon would otherwise dominate the visual. The `_density_raw_frame_split/` companion holds the same plots in raw counts.
+- **`rpf/qc/qc_summary.tsv` + `qc_summary.md`** — one row / one block per sample with the overall periodicity verdict (`good` ≥ 0.60 expected-frame fraction with ≥ `min_reads_per_length` depth, `warn` ≥ 0.50, `poor` < 0.50, `low_depth` < `min_reads_per_length`). The summary records the best read length **after** depth-aware filtering, the dominant frame at that length, the depth-weighted global frame fractions, and the per-length breakdown of `good/warn/poor/low_depth` counts. **Read this before trusting any downstream codon-level table.**
+- **`rpf/qc/frame_counts_by_sample_length.tsv`** — per-(sample, read_length) frame fractions (`frame0_fraction`, `frame1_fraction`, `frame2_fraction`), `expected_frame_enrichment` (frame 0 fraction divided by the mean of frames 1 + 2), `entropy_bias` (1 minus base-3 entropy across the three fractions), and a soft `qc_call` column. Use to spot a single read-length class that is contaminating the pool.
+- **`rpf/qc/gene_periodicity.tsv`** — per-(sample, gene) frame fractions plus an optional ribotricer-style `phase_score` (enable with `--phase-score` on the standalone subcommand) and an `is_overlap_pair` boolean flag. The flag is `true` for the canonical human mt-mRNA overlap pairs (`MT-ATP8`, `MT-ATP6`, `MT-ND4L`, `MT-ND4`) and the fused-ORF transcript spellings (`ATP86`, `ND4L4`) used by some FASTAs (including the bundled `input_data/human-mt-mRNA.fasta`). Treat `is_overlap_pair=true` rows as inherently ambiguous-frame even when the per-frame fractions look clean.
 - **`rpf/codon_correlation/{p_site,a_site}/<base>_vs_<other>_*.svg|png`** — publication-quality scatter of codon usage between samples, one folder per requested site (only when `--cor_plot` is set with `--base_sample`). Includes identity (y = x) line, OLS regression, an `r / R² / p / slope / intercept / N` stat box, and leader-line labels for the 10 codons farthest from the regression line.
 - **`rpf/igv_tracks/<sample>/<sample>_{p_site,a_site}.bedgraph`** — IGV-loadable footprint density tracks (only when `--igv_export` is set). Open them alongside the FASTA the BEDs were aligned to; P-site is forest green, A-site dark orange.
 

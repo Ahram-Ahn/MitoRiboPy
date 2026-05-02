@@ -48,6 +48,7 @@ from mitoribopy.cli import align as align_cli  # noqa: E402
 from mitoribopy.cli import all_ as all_cli  # noqa: E402
 from mitoribopy.cli import benchmark as benchmark_cli  # noqa: E402
 from mitoribopy.cli import migrate_config as migrate_config_cli  # noqa: E402
+from mitoribopy.cli import periodicity as periodicity_cli  # noqa: E402
 from mitoribopy.cli import rnaseq as rnaseq_cli  # noqa: E402
 from mitoribopy.cli import summarize as summarize_cli  # noqa: E402
 from mitoribopy.cli import validate_config as validate_config_cli  # noqa: E402
@@ -73,6 +74,11 @@ SUBCOMMANDS: list[tuple[str, str, _ParserFactory]] = [
     ("rpf", "Ribo-seq analysis from BED/BAM inputs.", _rpf_parser_factory),
     ("rnaseq", rnaseq_cli.RNASEQ_SUBCOMMAND_HELP, rnaseq_cli.build_parser),
     ("all", all_cli.ALL_SUBCOMMAND_HELP, all_cli.build_parser),
+    (
+        "periodicity",
+        periodicity_cli.PERIODICITY_SUBCOMMAND_HELP,
+        periodicity_cli.build_parser,
+    ),
     (
         "migrate-config",
         migrate_config_cli.MIGRATE_CONFIG_HELP,

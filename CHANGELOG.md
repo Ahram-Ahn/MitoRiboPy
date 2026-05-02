@@ -7,7 +7,65 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-(no changes pending)
+### Added
+- **Per-frame split coverage plot.** New
+  `<output>/rpf/coverage_profile_plots/{p_site,a_site}_density_{rpm,raw}_frame_split/`
+  directories complement the existing `_frame` overlay folders. Each
+  figure stacks three sub-rows per sample (frame 0, +1, +2) sharing the
+  y-axis, so low-frame signal at the same CDS position is no longer
+  hidden under tall same-position bars from another frame. Useful for
+  fused overlapping ORFs (e.g. human `ATP86` where the ATP6 ORF is
+  +2 nt offset from ATP8). Each folder ships a
+  `coverage_plot.metadata.json` sidecar with the same frame formula
+  and palette as the overlay variant. Implemented as
+  `_plot_frame_split` in
+  `src/mitoribopy/plotting/coverage_profile_plots.py`.
+- **Human mt-mRNA overlap-pair annotation.** `gene_periodicity.tsv`
+  gains an `is_overlap_pair` column (default on) flagging known
+  overlap regions: canonical names (`MT-ATP8`, `MT-ATP6`, `MT-ND4L`,
+  `MT-ND4`), no-hyphen short forms (`MTATP8`, …), AND the fused-ORF
+  spellings used by some FASTAs (`ATP86` = ATP8+ATP6,
+  `ND4L4` = ND4L+ND4 — including the bundled
+  `input_data/human-mt-mRNA.fasta`). Treat `is_overlap_pair=true` rows
+  as inherently ambiguous-frame even when their per-frame fractions
+  look clean. Public surface:
+  `mitoribopy.analysis.periodicity_qc.HUMAN_MT_OVERLAPPING_GENES` and
+  `is_known_overlap_gene(name)`.
+- **`exclude_start_codons` / `exclude_stop_codons` plumbed through the
+  pipeline path.** Added as parameters to `compute_frame_summary`,
+  `compute_frame_summary_by_length`, `build_gene_periodicity`,
+  `run_periodicity_qc`, and `run_periodicity_qc_bundle`. Defaults stay
+  at 0 to preserve historical pooled numbers; the standalone
+  `mitoribopy periodicity` CLI applies the spec defaults of 6 / 3
+  uniformly across the per-length and gene-level tables.
+- **`compute_phase_score` plumbing.** `run_periodicity_qc` now accepts
+  `compute_phase_score=True` and forwards it to
+  `run_periodicity_qc_bundle`. Previously the orchestrator hardcoded
+  it off and there was no override path.
+- **`periodicity.metadata.json` records `exclude_start_codons`,
+  `exclude_stop_codons`, and `phase_score_enabled`** alongside the
+  existing thresholds, so a reviewer can re-derive every periodicity
+  number from disk without re-running the CLI.
+
+### Fixed
+- **`build_qc_summary` `best_read_length_dominant_fraction` bug.** The
+  field was computed via a tortured `A and B or C` ternary that also
+  called `Series.get(...)` like a dict; in the case where the dominant
+  frame differed from the expected frame the value collapsed to the
+  expected-frame fraction instead of the actual maximum. Replaced with
+  a direct `max(f0, f1, f2)` from the chosen row.
+- **`build_qc_summary` depth-aware best-length pick.** Previously the
+  best read length was selected purely by `expected_frame_fraction`,
+  so a 5-read length with lucky frame-0 dominance could outrank a
+  5,000-read length at 0.75. Now the candidate pool is restricted to
+  rows clearing `min_reads_per_length` whenever any qualify; falls
+  back to all rows otherwise.
+
+### Tests
+- New `tests/test_periodicity_refinements.py` covers the depth-aware
+  best-length pick, the dominant-fraction bug fix, the codon-edge
+  exclusion plumbing, and the overlap-pair helper (including the
+  fused-ORF spellings).
 
 ## [0.6.2] - 2026-05-01
 

@@ -371,6 +371,9 @@ def run(argv: Iterable[str]) -> int:
             expected_frame=int(args.expected_frame),
             thresholds=thresholds,
             compute_phase_score=bool(args.phase_score),
+            exclude_start_codons=int(args.exclude_start_codons),
+            exclude_stop_codons=int(args.exclude_stop_codons),
+            annotate_overlap=True,
         )
         gene_table.to_csv(gene_path, sep="\t", index=False, na_rep="")
 

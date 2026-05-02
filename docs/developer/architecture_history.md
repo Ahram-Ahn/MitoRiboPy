@@ -80,3 +80,38 @@ Major user-facing changes that landed in v0.6.0:
   `docs/reference/warning_codes.md`.
 * Release checklist under `docs/developer/release_checklist.md` is
   now a hard gate for every PyPI cut.
+
+### Refinements layered on the v0.6.2 periodicity bundle
+
+The bundle introduced in v0.6.2 received four targeted refinements
+during the cycle (no rewrites; no architecture changes):
+
+1. `build_qc_summary` `best_read_length_dominant_fraction` is now
+   a direct `max(f0, f1, f2)` from the chosen row; previously a
+   tortured `A and B or C` ternary collapsed to the wrong value when
+   the dominant frame differed from the expected frame.
+2. `build_qc_summary` best-length pick is depth-aware: the candidate
+   pool is restricted to rows clearing `min_reads_per_length` whenever
+   any qualify, so a 5-read length with lucky frame-0 dominance can no
+   longer crown a 5,000-read length at 0.75.
+3. `exclude_start_codons` / `exclude_stop_codons` are now first-class
+   parameters of `compute_frame_summary`,
+   `compute_frame_summary_by_length`, `build_gene_periodicity`,
+   `run_periodicity_qc`, and `run_periodicity_qc_bundle`. Defaults
+   stay at 0 in the pipeline path to preserve historical numbers; the
+   standalone CLI applies the spec defaults of 6 / 3 uniformly.
+4. `gene_periodicity.tsv` now ships an `is_overlap_pair` column
+   flagging known human mt-mRNA overlap regions. Overlap set covers
+   both the canonical HGNC names (`MT-ATP8`, `MT-ATP6`, `MT-ND4L`,
+   `MT-ND4`) and the fused-ORF spellings used by some FASTAs
+   (`ATP86`, `ND4L4` — including the bundled
+   `input_data/human-mt-mRNA.fasta`).
+
+### Per-frame split coverage plot
+
+The `_plot_frame_colored` overlay was complemented with a
+`_plot_frame_split` companion that stacks 3 sub-rows per sample
+(frame 0, +1, +2) sharing the y-axis. The sibling
+`{p_site,a_site}_density_{rpm,raw}_frame_split/` directories ship the
+same `coverage_plot.metadata.json` sidecar as the overlay, so a
+reviewer reads one definition of "frame 0" applied to both.
