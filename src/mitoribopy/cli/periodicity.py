@@ -31,6 +31,8 @@ import pandas as pd
 
 from ..analysis.periodicity_qc import (
     QC_THRESHOLDS_DEFAULT,
+    build_fft_period3_table,
+    build_frame_counts_by_gene,
     build_frame_counts_by_sample_length,
     build_gene_periodicity,
     build_qc_summary,
@@ -148,6 +150,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Add a ribotricer-style gene-level phase_score column.",
+    )
+    parser.add_argument(
+        "--fft-period3",
+        action="store_true",
+        default=False,
+        help=(
+            "Compute FFT-based period-3 power ratio per (sample, gene). "
+            "Writes fft_period3_power.tsv. Marked supplementary; do not "
+            "over-interpret for short ORFs (CDS < 30 nt returns NaN)."
+        ),
+    )
+    parser.add_argument(
+        "--metagene-nt",
+        type=int,
+        default=90,
+        help=(
+            "Number of nucleotides upstream/downstream of start/stop "
+            "codons for metagene plots. Default: 90 (per spec)."
+        ),
     )
     return parser
 
@@ -361,13 +382,17 @@ def run(argv: Iterable[str]) -> int:
     write_qc_summary_markdown(qc_summary, qc_summary_md, site_type=site_filter)
 
     gene_path = output_dir / "gene_periodicity.tsv"
+    frame_counts_by_gene_path = output_dir / "frame_counts_by_gene.tsv"
+    fft_path = output_dir / "fft_period3_power.tsv"
     bed = _to_bed_with_psite(df, site_filter=site_filter)
     annotation = _annotation_from_site_table(df)
+    written_extras: list[Path] = []
     if not bed.empty:
+        samples = sorted(bed["sample_name"].astype(str).unique())
         gene_table = build_gene_periodicity(
             bed,
             annotation,
-            samples=sorted(bed["sample_name"].astype(str).unique()),
+            samples=samples,
             expected_frame=int(args.expected_frame),
             thresholds=thresholds,
             compute_phase_score=bool(args.phase_score),
@@ -376,6 +401,33 @@ def run(argv: Iterable[str]) -> int:
             annotate_overlap=True,
         )
         gene_table.to_csv(gene_path, sep="\t", index=False, na_rep="")
+        # Spec output: per-(sample, gene, read_length) frame counts.
+        fc_gene = build_frame_counts_by_gene(
+            bed,
+            annotation,
+            samples=samples,
+            expected_frame=int(args.expected_frame),
+            thresholds=thresholds,
+            exclude_start_codons=int(args.exclude_start_codons),
+            exclude_stop_codons=int(args.exclude_stop_codons),
+            annotate_overlap=True,
+            site_type=site_filter,
+        )
+        fc_gene.to_csv(frame_counts_by_gene_path, sep="\t", index=False, na_rep="")
+        written_extras.append(frame_counts_by_gene_path)
+        # Optional FFT period-3 power per (sample, gene). Spec marks
+        # this supplementary; emit only when --fft-period3 is set.
+        if bool(args.fft_period3):
+            fft_table = build_fft_period3_table(
+                bed,
+                annotation,
+                samples=samples,
+                site_type=site_filter,
+                exclude_start_codons=int(args.exclude_start_codons),
+                exclude_stop_codons=int(args.exclude_stop_codons),
+            )
+            fft_table.to_csv(fft_path, sep="\t", index=False, na_rep="")
+            written_extras.append(fft_path)
 
     metadata = {
         "site": site_filter,
@@ -386,6 +438,8 @@ def run(argv: Iterable[str]) -> int:
         "exclude_stop_codons": int(args.exclude_stop_codons),
         "include_overlaps": bool(args.include_overlaps),
         "phase_score": bool(args.phase_score),
+        "fft_period3": bool(args.fft_period3),
+        "metagene_nt": int(args.metagene_nt),
         "input_site_table": str(Path(args.site_table).resolve()),
     }
     (output_dir / "periodicity.metadata.json").write_text(
@@ -393,9 +447,11 @@ def run(argv: Iterable[str]) -> int:
         encoding="utf-8",
     )
 
+    extras_str = (", " + ", ".join(str(p) for p in written_extras)) if written_extras else ""
     print(
         "[mitoribopy periodicity] wrote: "
-        f"{by_length_path}, {qc_summary_path}, {qc_summary_md}, {gene_path}",
+        f"{by_length_path}, {qc_summary_path}, {qc_summary_md}, "
+        f"{gene_path}{extras_str}",
         file=sys.stderr,
     )
     return 0

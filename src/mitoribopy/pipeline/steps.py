@@ -845,16 +845,38 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
 
         sample_names = [Path(s).name for s in context.sample_dirs]
         qc_dir = context.base_output_dir / "qc"
-        run_periodicity_qc(
-            bed_df=context.filtered_bed_df,
-            annotation_df=context.annotation_df,
-            samples=sample_names,
-            selected_offsets_by_sample=context.selected_offsets_by_sample or None,
-            selected_offsets_combined=context.selected_offsets_df,
-            offset_type=str(context.args.offset_type),
-            offset_site=str(context.args.offset_site),
-            output_dir=qc_dir,
-        )
+        # Periodicity-section knobs (when present in the YAML/CLI),
+        # falling back to the spec-aligned defaults baked into
+        # ``run_periodicity_qc``. Allows users to set
+        # ``periodicity.enabled: false`` to skip the step cleanly,
+        # or to tune thresholds / exclude windows / metric toggles
+        # without touching code. Each knob is read with getattr so
+        # existing call sites that don't supply it still work.
+        period_enabled = bool(getattr(context.args, "periodicity_enabled", True))
+        if period_enabled:
+            period_kwargs: dict = {}
+            for cli_attr, kw in (
+                ("periodicity_exclude_start_codons", "exclude_start_codons"),
+                ("periodicity_exclude_stop_codons", "exclude_stop_codons"),
+                ("periodicity_phase_score", "compute_phase_score"),
+                ("periodicity_fft_period3", "compute_fft_period3"),
+                ("periodicity_metagene_nt", "metagene_nt"),
+                ("periodicity_min_reads_per_length", "min_cds_reads_per_length"),
+            ):
+                val = getattr(context.args, cli_attr, None)
+                if val is not None:
+                    period_kwargs[kw] = val
+            run_periodicity_qc(
+                bed_df=context.filtered_bed_df,
+                annotation_df=context.annotation_df,
+                samples=sample_names,
+                selected_offsets_by_sample=context.selected_offsets_by_sample or None,
+                selected_offsets_combined=context.selected_offsets_df,
+                offset_type=str(context.args.offset_type),
+                offset_site=str(context.args.offset_site),
+                output_dir=qc_dir,
+                **period_kwargs,
+            )
 
         run_translation_profile_analysis(
             sample_dirs=context.sample_dirs,

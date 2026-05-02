@@ -253,6 +253,12 @@ def test_run_periodicity_qc_writes_all_artefacts(tmp_path: Path) -> None:
         output_dir=out,
         window_nt=30,
         plot=True,
+        # Fixture places P-sites at 0/3/6/9/12 — the spec defaults
+        # (6 / 3) would mask all of them. Opt back to no codon-edge
+        # exclusion so this test continues to verify the legacy
+        # ``frame_summary.tsv`` numbers it was authored against.
+        exclude_start_codons=0,
+        exclude_stop_codons=0,
     )
 
     for name in (

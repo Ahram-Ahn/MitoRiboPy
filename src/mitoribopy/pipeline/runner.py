@@ -764,6 +764,80 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
             "<output>/igv_tracks/<sample>/, suitable for opening in IGV."
         ),
     )
+    # ----- Periodicity QC knobs (spec-defined, see docs/release-notes/v0.6.2.md)
+    # The pipeline ALWAYS emits the periodicity bundle; these flags let
+    # users tune thresholds / metric toggles without touching code.
+    # `periodicity:` YAML section maps 1:1 to these via the standard
+    # snake_case-to-hyphen rule (`periodicity.exclude_start_codons:` ->
+    # `--periodicity-exclude-start-codons`).
+    optional_group.add_argument(
+        "--periodicity-enabled",
+        "--periodicity_enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip the periodicity QC step entirely when set to false.",
+    )
+    optional_group.add_argument(
+        "--periodicity-exclude-start-codons",
+        "--periodicity_exclude_start_codons",
+        type=int,
+        default=None,
+        help=(
+            "Number of codons after CDS start to mask out of frame "
+            "statistics (initiation pause). Default: 6 (per spec)."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-exclude-stop-codons",
+        "--periodicity_exclude_stop_codons",
+        type=int,
+        default=None,
+        help=(
+            "Number of codons before CDS stop to mask (termination "
+            "pause). Default: 3 (per spec)."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-phase-score",
+        "--periodicity_phase_score",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Compute a ribotricer-style gene-level phase_score column "
+            "in gene_periodicity.tsv. Default: enabled."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-fft-period3",
+        "--periodicity_fft_period3",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Compute supplementary FFT period-3 power per (sample, "
+            "gene). Writes fft_period3_power.tsv. Default: disabled."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-metagene-nt",
+        "--periodicity_metagene_nt",
+        type=int,
+        default=None,
+        help=(
+            "Window (nt) up/downstream of start/stop codons for the "
+            "metagene plots. Default: 300 (legacy MitoRiboPy window). "
+            "Spec recommends 90 for tighter publication-ready plots."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-min-reads-per-length",
+        "--periodicity_min_reads_per_length",
+        type=int,
+        default=None,
+        help=(
+            "Minimum CDS sites required to score a read length. "
+            "Default: 200 (pipeline). Bump to 1000 to match the spec."
+        ),
+    )
     return parser
 
 

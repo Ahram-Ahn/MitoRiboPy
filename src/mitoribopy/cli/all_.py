@@ -638,6 +638,76 @@ def _apply_execution_block(
     return config["execution"]
 
 
+# ---------------------------------------------------------------------------
+# Periodicity config block
+# ---------------------------------------------------------------------------
+
+# Map of `periodicity.<key>` -> `rpf.periodicity_<key>` (the rpf parser
+# flag). Spec defines a periodicity section; this mapping translates it
+# into the rpf-stage CLI surface so the rpf parser stays the single
+# source of truth for the actual flags.
+_PERIODICITY_BLOCK_KEYS: dict[str, str] = {
+    "enabled": "periodicity_enabled",
+    "exclude_start_codons": "periodicity_exclude_start_codons",
+    "exclude_stop_codons": "periodicity_exclude_stop_codons",
+    "phase_score": "periodicity_phase_score",
+    "fft_period3": "periodicity_fft_period3",
+    "metagene_nt": "periodicity_metagene_nt",
+    "min_reads_per_length": "periodicity_min_reads_per_length",
+}
+
+
+def _apply_periodicity_block(config: dict) -> dict:
+    """Cascade the top-level ``periodicity:`` block into ``rpf.periodicity_*``.
+
+    Spec defines a top-level ``periodicity:`` section. The rpf parser
+    owns the actual flags (``--periodicity-*``); this helper translates
+    the section into rpf-stage keys so users can write the spec-shaped
+    YAML and it Just Works through ``mitoribopy all``.
+
+    Explicit ``rpf.periodicity_*`` keys win over the top-level section.
+    Returns the resolved periodicity dict so callers can record it.
+    Mutates ``config`` in place.
+    """
+    raw = config.get("periodicity") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    # Spec also nests metric toggles + thresholds; flatten the ones we
+    # surface as rpf flags. Unknown nested keys are silently ignored
+    # so the YAML can carry future-spec keys without breaking older runs.
+    metrics = raw.get("metrics") or {}
+    if isinstance(metrics, dict):
+        if "phase_score" in metrics and "phase_score" not in raw:
+            raw["phase_score"] = metrics["phase_score"]
+        if "fft_power_3nt" in metrics and "fft_period3" not in raw:
+            raw["fft_period3"] = metrics["fft_power_3nt"]
+    thresholds = raw.get("thresholds") or {}
+    if isinstance(thresholds, dict):
+        if "min_reads_per_length" in thresholds and "min_reads_per_length" not in raw:
+            raw["min_reads_per_length"] = thresholds["min_reads_per_length"]
+
+    rpf_cfg = config.get("rpf")
+    if not isinstance(rpf_cfg, dict):
+        rpf_cfg = {}
+        config["rpf"] = rpf_cfg
+
+    resolved: dict = {}
+    for spec_key, rpf_key in _PERIODICITY_BLOCK_KEYS.items():
+        if spec_key not in raw:
+            continue
+        # Explicit rpf-side override wins.
+        if rpf_key in rpf_cfg:
+            resolved[spec_key] = rpf_cfg[rpf_key]
+            continue
+        rpf_cfg[rpf_key] = raw[spec_key]
+        resolved[spec_key] = raw[spec_key]
+
+    if resolved:
+        config["periodicity"] = resolved
+    return resolved
+
+
 def _resolve_and_write_run_root_resource_plan(
     config: dict,
     *,
@@ -1516,6 +1586,9 @@ def run(argv: Iterable[str]) -> int:
     _apply_execution_block(
         config, cli_threads=getattr(args, "threads", None),
     )
+    # Spec: top-level `periodicity:` block flows into rpf-stage flags
+    # so users can write the spec-shaped YAML and have it Just Work.
+    _apply_periodicity_block(config)
 
     # v0.6.2: write the run-root resource_plan.json EARLY so reviewers
     # have an audit artifact even if a downstream stage crashes. The

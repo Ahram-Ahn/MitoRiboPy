@@ -218,3 +218,175 @@ def test_build_gene_periodicity_marks_overlap_pairs() -> None:
     co1 = table[table["gene"] == "MT-CO1"].iloc[0]
     assert bool(atp8["is_overlap_pair"]) is True
     assert bool(co1["is_overlap_pair"]) is False
+
+
+# ---------- spec outputs added in 2026-05-02 refactor ----------------------
+
+
+def _bed_for(sample: str, transcript: str, p_sites: list[int],
+             read_length: int = 30) -> pd.DataFrame:
+    return pd.DataFrame([
+        {"sample_name": sample, "chrom": transcript, "P_site": int(p),
+         "read_length": int(read_length)}
+        for p in p_sites
+    ])
+
+
+def test_build_frame_counts_by_gene_schema_and_values() -> None:
+    """Spec output frame_counts_by_gene.tsv: per-(sample, gene, read_length)
+    frame counts. Distinct from gene_periodicity.tsv which pools across
+    read lengths."""
+    from mitoribopy.analysis.periodicity_qc import build_frame_counts_by_gene
+
+    ann = _annotation("ND1", l_utr5=0, l_cds=300, l_utr3=10)
+    # Two read lengths on the same gene; length 30 is frame-0 dominant,
+    # length 32 is uniform.
+    bed = pd.concat([
+        _bed_for("S1", "ND1", [21, 24, 27, 30, 33, 36], read_length=30),
+        _bed_for("S1", "ND1", [22, 23, 25, 26, 28, 29], read_length=32),
+    ], ignore_index=True)
+    table = build_frame_counts_by_gene(
+        bed, ann, samples=["S1"], annotate_overlap=True, site_type="p",
+    )
+    # Required spec columns.
+    must_have = {
+        "sample", "gene", "transcript_id", "site_type", "read_length",
+        "n_frame0", "n_frame1", "n_frame2", "n_total",
+        "frame0_fraction", "frame1_fraction", "frame2_fraction",
+        "expected_frame", "expected_frame_fraction",
+        "expected_frame_enrichment", "dominant_frame",
+        "dominant_frame_fraction", "entropy_bias", "qc_call",
+        "is_overlap_pair",
+    }
+    assert must_have.issubset(set(table.columns)), \
+        f"missing: {must_have - set(table.columns)}"
+    # One row per (sample, gene, read_length).
+    assert len(table) == 2
+    rl30 = table[table["read_length"] == 30].iloc[0]
+    rl32 = table[table["read_length"] == 32].iloc[0]
+    assert int(rl30["n_total"]) == 6
+    assert float(rl30["frame0_fraction"]) == pytest.approx(1.0)
+    assert int(rl32["n_total"]) == 6
+    assert float(rl32["frame0_fraction"]) < 0.5  # uniform spread
+    # site_type stamped through.
+    assert all(table["site_type"] == "p")
+
+
+def test_build_fft_period3_table_returns_finite_values_for_strong_periodicity() -> None:
+    """FFT period-3 power should be finite and > 1 (signal > background)
+    for an artificially perfect codon-locked profile, and NaN for too-short
+    CDSes."""
+    from mitoribopy.analysis.periodicity_qc import build_fft_period3_table
+
+    # Long enough CDS: 300 nt with one read at every codon start (frame 0).
+    ann_long = _annotation("LONG", l_utr5=0, l_cds=300, l_utr3=0)
+    bed_long = _bed_for("S1", "LONG", list(range(0, 300, 3)))
+    # Short CDS: only 20 nt — FFT returns NaN per spec (CDS < 30 nt).
+    ann_short = _annotation("SHORT", l_utr5=0, l_cds=20, l_utr3=0)
+    bed_short = _bed_for("S1", "SHORT", [0, 3, 6, 9, 12])
+    ann = pd.concat([ann_long, ann_short], ignore_index=True)
+    bed = pd.concat([bed_long, bed_short], ignore_index=True)
+
+    table = build_fft_period3_table(bed, ann, samples=["S1"], site_type="p")
+    assert {"sample", "gene", "site_type", "n_nt", "n_sites",
+            "fft_period3_power"}.issubset(set(table.columns))
+    long_row = table[table["gene"] == "LONG"].iloc[0]
+    short_row = table[table["gene"] == "SHORT"].iloc[0]
+    assert long_row["fft_period3_power"] > 1.0  # strong periodic signal
+    import math
+    assert math.isnan(short_row["fft_period3_power"])
+
+
+def test_run_periodicity_qc_writes_every_spec_output(tmp_path) -> None:
+    """End-to-end: run_periodicity_qc on a small synthetic fixture must
+    produce every TSV + plot the spec asks for, alongside the legacy
+    artefacts."""
+    from mitoribopy.analysis.periodicity import (
+        compute_p_site_positions, run_periodicity_qc,
+    )
+
+    ann = _annotation("ND1", l_utr5=0, l_cds=300, l_utr3=10)
+    # 60 reads on length 30, P-sites at 30, 33, ... (frame 0) past the
+    # 6-codon mask zone, plus a few in the masked zone that should be
+    # dropped by the spec defaults.
+    starts = list(range(30, 270, 3))
+    bed = pd.DataFrame([
+        {"sample_name": "S1", "chrom": "ND1",
+         "start": p - 12, "end": p - 12 + 30,
+         "read_length": 30, "strand": "+"}
+        for p in starts
+    ])
+    offsets = pd.DataFrame([{
+        "Read Length": 30,
+        "Most Enriched 5' Offset": 12,
+        "Most Enriched 3' Offset": 30 - 12 - 3,
+    }])
+    out = tmp_path / "qc"
+    run_periodicity_qc(
+        bed_df=bed,
+        annotation_df=ann,
+        samples=["S1"],
+        selected_offsets_by_sample={"S1": offsets},
+        selected_offsets_combined=None,
+        offset_type="5",
+        offset_site="p",
+        output_dir=out,
+        plot=True,
+        min_cds_reads_per_length=1,  # tiny fixture
+        compute_fft_period3=True,
+        metagene_nt=60,
+    )
+    spec_outputs = [
+        # TSVs
+        "frame_counts_by_sample_length.tsv",
+        "frame_counts_by_gene.tsv",
+        "gene_periodicity.tsv",
+        "metagene_start.tsv",
+        "metagene_stop.tsv",
+        "fft_period3_power.tsv",
+        # Plots
+        "frame_fraction_heatmap.svg",
+        "read_length_periodicity_barplot.svg",
+        "metagene_start_p_site.svg",
+        "metagene_stop_p_site.svg",
+        "gene_phase_score_dotplot.svg",
+        # QC summaries
+        "qc_summary.tsv",
+        "qc_summary.md",
+    ]
+    missing = [f for f in spec_outputs if not (out / f).is_file()]
+    assert not missing, f"spec outputs missing: {missing}"
+
+
+def test_periodicity_metadata_records_new_fields(tmp_path) -> None:
+    """periodicity.metadata.json must record exclude_start_codons,
+    exclude_stop_codons, phase_score_enabled, fft_period3_enabled,
+    metagene_nt — so a reviewer can re-derive every number from disk."""
+    import json
+    from mitoribopy.analysis.periodicity import run_periodicity_qc
+
+    ann = _annotation("ND1", l_utr5=0, l_cds=300, l_utr3=10)
+    bed = pd.DataFrame([
+        {"sample_name": "S1", "chrom": "ND1", "start": 18, "end": 48,
+         "read_length": 30, "strand": "+"}
+    ])
+    offsets = pd.DataFrame([{
+        "Read Length": 30,
+        "Most Enriched 5' Offset": 12,
+        "Most Enriched 3' Offset": 30 - 12 - 3,
+    }])
+    out = tmp_path / "qc"
+    run_periodicity_qc(
+        bed_df=bed, annotation_df=ann, samples=["S1"],
+        selected_offsets_by_sample={"S1": offsets},
+        selected_offsets_combined=None,
+        offset_type="5", offset_site="p", output_dir=out,
+        plot=False, exclude_start_codons=6, exclude_stop_codons=3,
+        compute_phase_score=True, compute_fft_period3=True, metagene_nt=90,
+    )
+    meta = json.loads((out / "by_length" / "periodicity.metadata.json").read_text())
+    assert meta["exclude_start_codons"] == 6
+    assert meta["exclude_stop_codons"] == 3
+    assert meta["phase_score_enabled"] is True
+    assert meta["fft_period3_enabled"] is True
+    assert meta["metagene_nt"] == 90

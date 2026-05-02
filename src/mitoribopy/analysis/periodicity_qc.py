@@ -34,6 +34,8 @@ __all__ = [
     "QC_THRESHOLDS_DEFAULT",
     "HUMAN_MT_OVERLAPPING_GENES",
     "build_frame_counts_by_sample_length",
+    "build_frame_counts_by_gene",
+    "build_fft_period3_table",
     "build_gene_periodicity",
     "build_qc_summary",
     "calculate_frame_enrichment",
@@ -444,6 +446,179 @@ def build_gene_periodicity(
     return out
 
 
+def build_frame_counts_by_gene(
+    bed_with_psite_and_gene: pd.DataFrame,
+    annotation_df: pd.DataFrame,
+    *,
+    samples: Iterable[str],
+    expected_frame: int = 0,
+    thresholds: dict[str, float] | None = None,
+    exclude_start_codons: int = 0,
+    exclude_stop_codons: int = 0,
+    annotate_overlap: bool = True,
+    site_type: str = "p",
+) -> pd.DataFrame:
+    """Per-(sample, gene, read_length) frame counts.
+
+    Spec output ``frame_counts_by_gene.tsv``: complements
+    :func:`build_gene_periodicity` (which pools across read lengths).
+    Carries the per-length breakdown so a reviewer can see whether one
+    length is responsible for a gene's poor phasing.
+    """
+    th = {**QC_THRESHOLDS_DEFAULT, **(thresholds or {})}
+    cols = [
+        "sample", "gene", "transcript_id", "site_type", "read_length",
+        "n_frame0", "n_frame1", "n_frame2", "n_total",
+        "frame0_fraction", "frame1_fraction", "frame2_fraction",
+        "expected_frame", "expected_frame_fraction",
+        "expected_frame_enrichment", "dominant_frame",
+        "dominant_frame_fraction", "entropy_bias", "qc_call",
+    ]
+    if (
+        bed_with_psite_and_gene is None
+        or bed_with_psite_and_gene.empty
+        or "P_site" not in bed_with_psite_and_gene.columns
+    ):
+        return pd.DataFrame(columns=cols)
+
+    ann = annotation_df.set_index("transcript")[["start_codon", "l_cds"]]
+    chrom_to_tx = annotation_df.set_index("sequence_name")["transcript"].to_dict()
+
+    df = bed_with_psite_and_gene.copy()
+    df["transcript"] = df["chrom"].map(chrom_to_tx).fillna(df["chrom"])
+    df = df[df["transcript"].isin(ann.index)]
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
+    starts = df["transcript"].map(ann["start_codon"]).astype(int)
+    cds_lens = df["transcript"].map(ann["l_cds"]).astype(int)
+    edge_lo = starts + 3 * int(exclude_start_codons)
+    edge_hi = starts + cds_lens - 3 * int(exclude_stop_codons)
+    in_cds_mask = (df["P_site"] >= edge_lo) & (df["P_site"] < edge_hi)
+    df = df.loc[in_cds_mask].copy()
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    df["frame"] = (
+        (df["P_site"].astype(int) - starts.loc[df.index]) % 3
+    ).astype(int)
+
+    samples_set = set(samples)
+    df = df[df["sample_name"].astype(str).isin(samples_set)]
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
+    rows: list[dict] = []
+    group_cols = ["sample_name", "transcript", "read_length"]
+    for (sample, transcript, read_length), group in df.groupby(group_cols):
+        counts = group["frame"].value_counts().reindex([0, 1, 2], fill_value=0)
+        n_total = int(counts.sum())
+        if n_total <= 0:
+            continue
+        f0, f1, f2 = (float(counts[i] / n_total) for i in (0, 1, 2))
+        dominant_frame = int(counts.idxmax())
+        dominant_fraction = float(counts.max() / n_total)
+        expected_fraction = float(counts[expected_frame] / n_total)
+        enrichment = calculate_frame_enrichment(
+            (f0, f1, f2), expected_frame=expected_frame
+        )
+        entropy = calculate_entropy_bias((f0, f1, f2))
+        qc_call = _qc_call_from_fraction(
+            n_total,
+            expected_fraction,
+            min_reads=int(th["min_reads_per_gene"]),
+            good_threshold=float(th["good_frame_fraction"]),
+            warn_threshold=float(th["warn_frame_fraction"]),
+        )
+        rows.append({
+            "sample": str(sample),
+            "gene": str(transcript),
+            "transcript_id": str(transcript),
+            "site_type": str(site_type).lower(),
+            "read_length": int(read_length),
+            "n_frame0": int(counts[0]),
+            "n_frame1": int(counts[1]),
+            "n_frame2": int(counts[2]),
+            "n_total": n_total,
+            "frame0_fraction": f0,
+            "frame1_fraction": f1,
+            "frame2_fraction": f2,
+            "expected_frame": int(expected_frame),
+            "expected_frame_fraction": expected_fraction,
+            "expected_frame_enrichment": enrichment,
+            "dominant_frame": dominant_frame,
+            "dominant_frame_fraction": dominant_fraction,
+            "entropy_bias": entropy,
+            "qc_call": qc_call,
+        })
+    out = pd.DataFrame(rows, columns=cols)
+    if annotate_overlap and not out.empty:
+        out["is_overlap_pair"] = out["gene"].map(is_known_overlap_gene)
+    return out
+
+
+def build_fft_period3_table(
+    bed_with_psite_and_gene: pd.DataFrame,
+    annotation_df: pd.DataFrame,
+    *,
+    samples: Iterable[str],
+    site_type: str = "p",
+    exclude_start_codons: int = 0,
+    exclude_stop_codons: int = 0,
+) -> pd.DataFrame:
+    """Per-(sample, gene) FFT period-3 power ratio.
+
+    Builds nucleotide-resolution coverage of the assigned site over
+    each (sample, gene)'s CDS and runs
+    :func:`calculate_fft_period3_ratio`. Emits NaN for genes with
+    fewer than 30 nt of usable CDS or zero variance.
+    """
+    cols = ["sample", "gene", "transcript_id", "site_type",
+            "n_nt", "n_sites", "fft_period3_power"]
+    if (
+        bed_with_psite_and_gene is None
+        or bed_with_psite_and_gene.empty
+        or "P_site" not in bed_with_psite_and_gene.columns
+    ):
+        return pd.DataFrame(columns=cols)
+
+    ann = annotation_df.set_index("transcript")[["start_codon", "l_cds"]]
+    chrom_to_tx = annotation_df.set_index("sequence_name")["transcript"].to_dict()
+
+    df = bed_with_psite_and_gene.copy()
+    df["transcript"] = df["chrom"].map(chrom_to_tx).fillna(df["chrom"])
+    df = df[df["transcript"].isin(ann.index)]
+    samples_set = set(samples)
+    df = df[df["sample_name"].astype(str).isin(samples_set)]
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
+    rows: list[dict] = []
+    for (sample, transcript), group in df.groupby(["sample_name", "transcript"]):
+        cds_start = int(ann.loc[transcript, "start_codon"])
+        cds_len = int(ann.loc[transcript, "l_cds"])
+        edge_lo = cds_start + 3 * int(exclude_start_codons)
+        edge_hi = cds_start + cds_len - 3 * int(exclude_stop_codons)
+        usable_len = max(0, edge_hi - edge_lo)
+        if usable_len <= 0:
+            continue
+        coverage = np.zeros(usable_len, dtype=float)
+        site_pos = group["P_site"].astype(int).to_numpy()
+        in_window = (site_pos >= edge_lo) & (site_pos < edge_hi)
+        idx = site_pos[in_window] - edge_lo
+        np.add.at(coverage, idx, 1.0)
+        ratio = calculate_fft_period3_ratio(coverage)
+        rows.append({
+            "sample": str(sample),
+            "gene": str(transcript),
+            "transcript_id": str(transcript),
+            "site_type": str(site_type).lower(),
+            "n_nt": int(usable_len),
+            "n_sites": int(coverage.sum()),
+            "fft_period3_power": float(ratio) if ratio == ratio else float("nan"),
+        })
+    return pd.DataFrame(rows, columns=cols)
+
+
 def build_qc_summary(
     frame_by_sample_length: pd.DataFrame,
     *,
@@ -615,6 +790,7 @@ def run_periodicity_qc_bundle(
     expected_frame: int = 0,
     thresholds: dict[str, float] | None = None,
     compute_phase_score: bool = False,
+    compute_fft_period3: bool = False,
     exclude_start_codons: int = 0,
     exclude_stop_codons: int = 0,
     annotate_overlap: bool = True,
@@ -647,6 +823,10 @@ def run_periodicity_qc_bundle(
 
     gene_table = pd.DataFrame()
     gene_path = output_dir / "gene_periodicity.tsv"
+    frame_counts_by_gene_path = output_dir / "frame_counts_by_gene.tsv"
+    fft_path = output_dir / "fft_period3_power.tsv"
+    frame_counts_by_gene = pd.DataFrame()
+    fft_table = pd.DataFrame()
     if bed_with_psite is not None and annotation_df is not None:
         gene_table = build_gene_periodicity(
             bed_with_psite,
@@ -660,6 +840,31 @@ def run_periodicity_qc_bundle(
             annotate_overlap=annotate_overlap,
         )
         gene_table.to_csv(gene_path, sep="\t", index=False, na_rep="")
+        # Spec output: per-(sample, gene, read_length) frame counts.
+        frame_counts_by_gene = build_frame_counts_by_gene(
+            bed_with_psite,
+            annotation_df,
+            samples=samples,
+            expected_frame=expected_frame,
+            thresholds=thresholds,
+            exclude_start_codons=exclude_start_codons,
+            exclude_stop_codons=exclude_stop_codons,
+            annotate_overlap=annotate_overlap,
+            site_type=site_type,
+        )
+        frame_counts_by_gene.to_csv(
+            frame_counts_by_gene_path, sep="\t", index=False, na_rep=""
+        )
+        if compute_fft_period3:
+            fft_table = build_fft_period3_table(
+                bed_with_psite,
+                annotation_df,
+                samples=samples,
+                site_type=site_type,
+                exclude_start_codons=exclude_start_codons,
+                exclude_stop_codons=exclude_stop_codons,
+            )
+            fft_table.to_csv(fft_path, sep="\t", index=False, na_rep="")
     elif not gene_path.exists():
         # Header-only sentinel so outputs_index can advertise the path
         # consistently across runs.
@@ -675,12 +880,16 @@ def run_periodicity_qc_bundle(
 
     return {
         "frame_counts_by_sample_length": by_length,
+        "frame_counts_by_gene": frame_counts_by_gene,
         "qc_summary": qc_summary,
         "gene_periodicity": gene_table,
+        "fft_period3_power": fft_table,
         "paths": {
             "frame_counts_by_sample_length": by_length_path,
+            "frame_counts_by_gene": frame_counts_by_gene_path,
             "qc_summary": qc_summary_path,
             "qc_summary_md": qc_summary_md,
             "gene_periodicity": gene_path,
+            "fft_period3_power": fft_path if compute_fft_period3 else None,
         },
     }

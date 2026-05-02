@@ -785,6 +785,235 @@ def _plot_metagene_panels(
     plt.close(fig)
 
 
+def _plot_metagene_single_anchor(
+    profiles: list[MetageneProfile],
+    *,
+    anchor: str,
+    site_letter: str,
+    out_path: Path,
+) -> None:
+    """Single-anchor metagene plot (one of start / stop only).
+
+    Spec asks for ``metagene_start_p_site.svg`` and
+    ``metagene_stop_p_site.svg`` as SEPARATE files (not the combined
+    panel produced by :func:`_plot_metagene_panels`). One row per
+    sample, bars frame-coloured.
+    """
+    import matplotlib.pyplot as plt
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    samples = sorted({p.sample for p in profiles})
+    if not samples:
+        return
+
+    fig, axes = plt.subplots(
+        len(samples), 1, figsize=(10, 2.6 * len(samples)),
+        sharex=True, sharey=True, squeeze=False,
+    )
+    frame_colors = {0: "#0072B2", 1: "#E69F00", 2: "#009E73"}
+    by_sample = {p.sample: p for p in profiles}
+    legend_handles: list = []
+    site_label = "P-site" if site_letter.lower() == "p" else "A-site"
+
+    for row_i, sample in enumerate(samples):
+        ax = axes[row_i][0]
+        profile = by_sample.get(sample)
+        if profile is None:
+            ax.set_visible(False)
+            continue
+        for f in (0, 1, 2):
+            frame_mask = (profile.positions % 3) == f
+            bars = ax.bar(
+                profile.positions[frame_mask],
+                profile.density[frame_mask],
+                width=1.0,
+                color=frame_colors[f],
+                label=f"frame {f}",
+            )
+            if row_i == 0:
+                legend_handles.append(bars)
+        ax.set_title(
+            f"{sample} — {'start-aligned' if anchor == 'start' else 'stop-aligned'} {site_label}",
+            fontsize=10,
+        )
+        ax.set_xlabel(
+            "nt from start codon" if anchor == "start" else "nt from stop codon"
+        )
+        ax.set_ylabel(f"{site_label} reads")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    if legend_handles:
+        fig.legend(
+            handles=legend_handles,
+            labels=[h.get_label() for h in legend_handles],
+            loc="lower center",
+            bbox_to_anchor=(0.5, -0.02),
+            ncol=3,
+            frameon=False,
+            fontsize=10,
+        )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    if out_path.suffix.lower() == ".png":
+        fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_read_length_periodicity_barplot(
+    frame_tables: list[pd.DataFrame],
+    *,
+    expected_frame: int,
+    out_path: Path,
+) -> None:
+    """Per-sample bar of expected_frame_fraction by read length.
+
+    Spec output ``read_length_periodicity_barplot.svg``: x = read
+    length, y = expected_frame_fraction; dominant_frame_fraction is
+    overlaid as a hollow point so a reviewer can see at a glance when
+    the dominant frame is NOT the expected one.
+    """
+    import matplotlib.pyplot as plt
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not frame_tables:
+        return
+    combined = pd.concat(frame_tables, ignore_index=True)
+    if combined.empty:
+        return
+    samples = sorted(combined["sample_id"].astype(str).unique())
+    n_samples = len(samples)
+
+    fig, axes = plt.subplots(
+        n_samples, 1, figsize=(10, 2.4 * n_samples),
+        sharex=True, sharey=True, squeeze=False,
+    )
+    expected_col = f"frame{expected_frame}_fraction"
+    for i, sample in enumerate(samples):
+        ax = axes[i][0]
+        sub = combined[combined["sample_id"].astype(str) == sample].sort_values(
+            "read_length"
+        )
+        if sub.empty:
+            ax.set_visible(False)
+            continue
+        x = sub["read_length"].astype(int).to_numpy()
+        y_expected = sub[expected_col].astype(float).to_numpy()
+        ax.bar(x, y_expected, color="#0072B2", alpha=0.85,
+               label=f"expected frame {expected_frame} fraction")
+        # Dominant fraction overlay: hollow circle at max(f0,f1,f2).
+        y_dominant = sub[
+            ["frame0_fraction", "frame1_fraction", "frame2_fraction"]
+        ].astype(float).max(axis=1).to_numpy()
+        ax.scatter(
+            x, y_dominant, facecolors="none", edgecolors="black",
+            s=40, linewidth=1.2, label="dominant frame fraction",
+        )
+        ax.axhline(0.5, color="grey", linewidth=0.8, linestyle=":")
+        ax.axhline(0.6, color="grey", linewidth=0.8, linestyle="--")
+        ax.set_ylim(0, 1.05)
+        ax.set_ylabel(sample, fontsize=9, fontweight="bold")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        if i == 0:
+            ax.legend(
+                loc="upper right", fontsize=8, frameon=False,
+            )
+        if i == n_samples - 1:
+            ax.set_xlabel("read length (nt)", fontsize=11, fontweight="bold")
+    fig.suptitle(
+        f"Periodicity by read length (dotted = warn, dashed = good thresholds)",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_gene_phase_score_dotplot(
+    gene_df: pd.DataFrame,
+    *,
+    out_path: Path,
+) -> None:
+    """Per-(sample, gene) dotplot of phase_score (or expected_frame_fraction).
+
+    Spec output ``gene_phase_score_dotplot.svg``. Falls back to
+    ``expected_frame_fraction`` when ``phase_score`` is absent or all
+    NaN. Dots are coloured by ``qc_call``.
+    """
+    import matplotlib.pyplot as plt
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if gene_df is None or gene_df.empty:
+        return
+    df = gene_df.copy()
+    use_phase = (
+        "phase_score" in df.columns
+        and df["phase_score"].astype(float).notna().any()
+    )
+    y_col = "phase_score" if use_phase else "expected_frame_fraction"
+    if y_col not in df.columns:
+        return
+    df = df[df[y_col].astype(float).notna()]
+    if df.empty:
+        return
+
+    samples = sorted(df["sample_id"].astype(str).unique())
+    genes = sorted(df["gene"].astype(str).unique())
+    qc_palette = {
+        "good": "#009E73",
+        "warn": "#E69F00",
+        "poor": "#D55E00",
+        "low_depth": "#999999",
+    }
+    n_samples = len(samples)
+    fig, axes = plt.subplots(
+        n_samples, 1, figsize=(max(8.0, 0.45 * len(genes)), 2.6 * n_samples),
+        sharex=True, sharey=True, squeeze=False,
+    )
+    seen_qc: set[str] = set()
+    for i, sample in enumerate(samples):
+        ax = axes[i][0]
+        sub = df[df["sample_id"].astype(str) == sample]
+        if sub.empty:
+            ax.set_visible(False)
+            continue
+        x_idx = [genes.index(g) for g in sub["gene"].astype(str)]
+        y = sub[y_col].astype(float).to_numpy()
+        colors = [qc_palette.get(str(c), "#777777") for c in sub.get("qc_call", "")]
+        ax.scatter(x_idx, y, c=colors, s=60, edgecolors="black", linewidth=0.4)
+        seen_qc.update(str(c) for c in sub.get("qc_call", "") if pd.notna(c))
+        ax.set_xticks(range(len(genes)))
+        ax.set_xticklabels(genes, rotation=45, ha="right", fontsize=8)
+        ax.set_ylabel(f"{sample}\n{y_col}", fontsize=9, fontweight="bold")
+        ax.set_ylim(-0.02, 1.05)
+        ax.grid(axis="y", alpha=0.25, linewidth=0.6)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    legend_handles = [
+        plt.Line2D([0], [0], marker="o", linestyle="", markerfacecolor=qc_palette[c],
+                   markeredgecolor="black", markersize=8, label=c)
+        for c in ("good", "warn", "poor", "low_depth") if c in seen_qc
+    ]
+    if legend_handles:
+        fig.legend(
+            handles=legend_handles, loc="lower center",
+            bbox_to_anchor=(0.5, -0.04), ncol=len(legend_handles),
+            frameon=False, fontsize=9,
+        )
+    fig.suptitle(
+        f"Gene-level periodicity ({y_col}) coloured by QC call",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=(0, 0.04, 1, 0.96))
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
 def run_periodicity_qc(
     *,
     bed_df: pd.DataFrame,
@@ -801,9 +1030,11 @@ def run_periodicity_qc(
     min_frame0_fraction: float = _DEFAULT_MIN_FRAME0_FRACTION,
     min_frame0_dominance: float = _DEFAULT_MIN_FRAME0_DOMINANCE,
     max_frame_entropy: float = _DEFAULT_MAX_FRAME_ENTROPY,
-    exclude_start_codons: int = 0,
-    exclude_stop_codons: int = 0,
-    compute_phase_score: bool = False,
+    exclude_start_codons: int = 6,
+    exclude_stop_codons: int = 3,
+    compute_phase_score: bool = True,
+    compute_fft_period3: bool = False,
+    metagene_nt: int | None = None,
     qc_thresholds: dict[str, float] | None = None,
 ) -> dict:
     """Compute frame summary + start/stop metagenes + strand sanity per sample.
@@ -815,6 +1046,10 @@ def run_periodicity_qc(
     callers can inline assertions in tests without re-reading from disk.
     """
     output_dir = Path(output_dir)
+    # Spec metagene window default is 90 nt around start/stop;
+    # `metagene_nt` overrides if set, otherwise honour the legacy
+    # `window_nt` (default 300) so existing tests stay green.
+    effective_window_nt = int(metagene_nt) if metagene_nt is not None else int(window_nt)
     frame_rows: list[FrameSummary] = []
     start_profiles: list[MetageneProfile] = []
     stop_profiles: list[MetageneProfile] = []
@@ -837,11 +1072,11 @@ def run_periodicity_qc(
         ))
         start_profiles.append(compute_metagene(
             psite, annotation_df,
-            sample=sample, anchor="start", window_nt=window_nt,
+            sample=sample, anchor="start", window_nt=effective_window_nt,
         ))
         stop_profiles.append(compute_metagene(
             psite, annotation_df,
-            sample=sample, anchor="stop", window_nt=window_nt,
+            sample=sample, anchor="stop", window_nt=effective_window_nt,
         ))
         strand_rows.append(compute_strand_sanity(bed_df, sample=sample))
         frame_by_length_tables.append(
@@ -859,8 +1094,14 @@ def run_periodicity_qc(
         )
 
     _write_frame_summary_tsv(frame_rows, output_dir / "frame_summary.tsv")
+    # Legacy names (kept for back-compat with existing tooling) +
+    # spec-named files (metagene_start.tsv / metagene_stop.tsv) so the
+    # publication-grade output layout matches the implementation
+    # specification verbatim.
     _write_metagene_tsv(start_profiles, output_dir / "periodicity_start.tsv")
     _write_metagene_tsv(stop_profiles, output_dir / "periodicity_stop.tsv")
+    _write_metagene_tsv(start_profiles, output_dir / "metagene_start.tsv")
+    _write_metagene_tsv(stop_profiles, output_dir / "metagene_stop.tsv")
     _write_strand_tsv(strand_rows, output_dir / "strand_sanity.tsv")
 
     by_length_dir = output_dir / "by_length"
@@ -911,6 +1152,7 @@ def run_periodicity_qc(
         site_type=str(offset_site).lower() or "p",
         thresholds=qc_thresholds,
         compute_phase_score=compute_phase_score,
+        compute_fft_period3=compute_fft_period3,
         exclude_start_codons=exclude_start_codons,
         exclude_stop_codons=exclude_stop_codons,
     )
@@ -930,6 +1172,8 @@ def run_periodicity_qc(
                 "exclude_start_codons": int(exclude_start_codons),
                 "exclude_stop_codons": int(exclude_stop_codons),
                 "phase_score_enabled": bool(compute_phase_score),
+                "fft_period3_enabled": bool(compute_fft_period3),
+                "metagene_nt": int(effective_window_nt),
                 "frame_formula": "(P_site_nt - CDS_start_nt) % 3",
                 "frame_0_definition": (
                     "assigned P-site lies in the annotated coding frame"
@@ -950,10 +1194,54 @@ def run_periodicity_qc(
             start_profiles, stop_profiles,
             out_path=output_dir / "periodicity_metagene.png",
         )
+        # Spec-named, single-anchor metagene plots (separate files for
+        # start vs stop). Re-uses the same panel renderer with one
+        # anchor stripped out so the on-disk output exactly matches
+        # the implementation specification's filenames.
+        site_letter = str(offset_site).lower() or "p"
+        _plot_metagene_single_anchor(
+            start_profiles,
+            anchor="start",
+            site_letter=site_letter,
+            out_path=output_dir / f"metagene_start_{site_letter}_site.svg",
+        )
+        _plot_metagene_single_anchor(
+            stop_profiles,
+            anchor="stop",
+            site_letter=site_letter,
+            out_path=output_dir / f"metagene_stop_{site_letter}_site.svg",
+        )
         _plot_frame_by_length_heatmap(
             frame_by_length_tables,
             out_path=by_length_dir / "frame_by_length_heatmap.png",
         )
+        # Spec-named alias of the heatmap, written next to the rest of
+        # the bundle so users can find it by the exact spec filename.
+        _plot_frame_by_length_heatmap(
+            frame_by_length_tables,
+            out_path=output_dir / "frame_fraction_heatmap.svg",
+        )
+        # Spec output: per-(sample, length) expected_frame_fraction
+        # barplot plus dominant_frame_fraction overlay.
+        if frame_by_length_tables:
+            _plot_read_length_periodicity_barplot(
+                frame_by_length_tables,
+                expected_frame=0,
+                out_path=output_dir / "read_length_periodicity_barplot.svg",
+            )
+        # Spec output: per-gene phase_score (or expected_frame_fraction
+        # when phase_score isn't computed) dotplot, coloured by qc_call.
+        gene_path = output_dir / "gene_periodicity.tsv"
+        if gene_path.is_file():
+            try:
+                gene_df = pd.read_csv(gene_path, sep="\t")
+            except (OSError, pd.errors.EmptyDataError):
+                gene_df = pd.DataFrame()
+            if not gene_df.empty:
+                _plot_gene_phase_score_dotplot(
+                    gene_df,
+                    out_path=output_dir / "gene_phase_score_dotplot.svg",
+                )
 
     return {
         "frame_summary": frame_rows,

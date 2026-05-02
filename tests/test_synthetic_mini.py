@@ -200,6 +200,12 @@ def test_synthetic_mini_round_trip(tmp_path: Path) -> None:
         output_dir=qc_dir,
         window_nt=60,
         plot=False,  # the plot is exercised in test_periodicity_qc.
+        # Synthetic fixture starts placing reads from CDS position 0;
+        # the spec defaults (6 / 3) would mask all of them. Opt back
+        # to legacy "no codon-edge masking" so the count invariants
+        # below still hold.
+        exclude_start_codons=0,
+        exclude_stop_codons=0,
     )
     # Periodicity invariant: every read's P-site (start + offset 12)
     # lands either at the stop-codon-2 position (anchor reads) or at a
@@ -307,6 +313,9 @@ def test_synthetic_mini_periodicity_metagene_clean_signal(tmp_path: Path) -> Non
         output_dir=tmp_path / "qc",
         window_nt=60,
         plot=False,
+        # Disable codon-edge masking — see test_synthetic_mini_round_trip.
+        exclude_start_codons=0,
+        exclude_stop_codons=0,
     )
     profile = qc["periodicity_start"][0]
     # Same periodicity invariant as the round-trip test: every read's
