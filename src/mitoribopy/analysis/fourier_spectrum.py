@@ -128,12 +128,14 @@ from typing import Iterable, Literal
 
 import numpy as np
 import pandas as pd
+from scipy import signal as _sp_signal
 
 
 __all__ = [
     "DEFAULT_WINDOW_NT",
     "DEFAULT_DROP_CODONS_AFTER_START",
     "DEFAULT_DROP_CODONS_BEFORE_STOP",
+    "DEFAULT_LOCAL_BACKGROUND_RANGE",
     "DEFAULT_PERIOD_GRID",
     "DEFAULT_MIN_MEAN_COVERAGE",
     "DEFAULT_MIN_TOTAL_COUNTS",
@@ -152,6 +154,7 @@ __all__ = [
     "direct_dft_amplitude",
     "compute_spectrum_grid",
     "compute_spectral_ratio_3nt",
+    "compute_spectral_ratio_3nt_local",
     "snr_call_for_ratio",
     "build_fourier_spectrum_combined_table",
     "build_fourier_period3_score_combined_table",
@@ -179,6 +182,21 @@ DEFAULT_MIN_TOTAL_COUNTS: int = 30
 
 DEFAULT_PERIOD_GRID: np.ndarray = np.round(np.arange(2.0, 10.05, 0.05), 2)
 """Period grid (nt) for the publication-style spectrum plot."""
+
+DEFAULT_LOCAL_BACKGROUND_RANGE: tuple[float, float] = (4.0, 6.0)
+"""Codon-scale period window used for the local-background ratio.
+
+The default global-background ratio (``spectral_ratio_3nt``) divides
+amp(3) by the median of amplitudes over the full 2-10 nt range
+(excluding 2.8-3.2). When the metagene carries strong long-period
+structure (5'->3' density gradients, broad pause clusters), that long-
+period signal inflates the global median and can mask a genuine
+period-3 peak. The local ratio (``spectral_ratio_3nt_local``) divides
+amp(3) by the median over a NARROW codon-scale window (default
+periods 4-6 nt) so the score reflects "peak vs. nearby noise" rather
+than "peak vs. everything else." Report both columns and let the
+reviewer compare.
+"""
 
 # Bicistronic-overlap transcripts (and their fused-FASTA spellings).
 # Membership in this set excludes a transcript from the ``combined``
@@ -388,12 +406,27 @@ def _build_window_coverage(
 def _normalize_and_window(
     coverage: np.ndarray, *, hann: np.ndarray,
 ) -> np.ndarray:
-    """Per-gene preprocessing: unit-mean normalise, mean-centre, Hann window."""
+    """Per-gene preprocessing: unit-mean normalise, linear detrend, Hann window.
+
+    Why linear detrend (instead of plain mean-centre): a 5'->3' density
+    gradient or a single broad pause cluster shows up as a slow linear
+    ramp inside the W-nt window. After Hann tapering, that ramp is
+    concentrated in the long-period FFT bins (the Hann main lobe is
+    ~4/W wide in normalised frequency; for W=99 nt that's a frequency
+    band corresponding to periods >~ 25 nt). The result is the "rising
+    tail" toward periods 7-10 in the raw figure. Subtracting a
+    least-squares-fitted linear trend (which also implicitly removes
+    the DC offset) before windowing kills that contamination at the
+    source.
+    """
     mean_cov = float(np.mean(coverage))
     if mean_cov <= 0:
         return np.zeros_like(coverage)
     x = coverage / mean_cov
-    x = x - float(np.mean(x))
+    if x.size >= 2:
+        x = _sp_signal.detrend(x, type="linear")
+    else:
+        x = x - float(np.mean(x))
     return x * hann
 
 
@@ -642,6 +675,43 @@ def compute_spectral_ratio_3nt(
     return amp3, amp3 / median_bg
 
 
+def compute_spectral_ratio_3nt_local(
+    metagene: np.ndarray,
+    *,
+    periods: np.ndarray = DEFAULT_PERIOD_GRID,
+    target_period: float = 3.0,
+    local_range: tuple[float, float] = DEFAULT_LOCAL_BACKGROUND_RANGE,
+) -> tuple[float, float]:
+    """Return ``(amp_at_3nt, local_spectral_ratio_3nt)``.
+
+    Like :func:`compute_spectral_ratio_3nt` but the background is the
+    median amplitude in a NARROW codon-scale window (default periods
+    4-6 nt) instead of the full 2-10 nt range. This isolates the
+    period-3 peak from competing low-frequency biology (5'->3' density
+    gradients, broad pause clusters) that lives at longer periods and
+    can artificially inflate the global-background ratio.
+
+    Returns ``(nan, nan)`` for empty input or zero background.
+    """
+    if metagene.size == 0:
+        return float("nan"), float("nan")
+    amp3 = direct_dft_amplitude(metagene, period=float(target_period))
+    grid = compute_spectrum_grid(metagene, periods=periods)
+    if grid.empty:
+        return amp3, float("nan")
+    lo, hi = float(local_range[0]), float(local_range[1])
+    local_bg = grid[
+        (grid["period_nt"] >= lo) & (grid["period_nt"] <= hi)
+    ]["amplitude"].to_numpy()
+    local_bg = local_bg[np.isfinite(local_bg)]
+    if local_bg.size == 0:
+        return amp3, float("nan")
+    median_local = float(np.median(local_bg))
+    if median_local <= 0:
+        return amp3, float("nan")
+    return amp3, amp3 / median_local
+
+
 def snr_call_for_ratio(ratio: float) -> str:
     """Map a 3-nt spectral ratio to a publication-grade QC tier.
 
@@ -678,7 +748,8 @@ _SCORE_COMBINED_COLS: tuple[str, ...] = (
     "sample", "read_length", "gene_set", "region",
     "n_genes", "n_sites_total", "n_nt",
     "amp_at_3nt", "background_amp_median", "spectral_ratio_3nt",
-    "snr_call", "transcripts",
+    "local_background_amp_median", "spectral_ratio_3nt_local",
+    "snr_call", "snr_call_local", "transcripts",
 )
 
 
@@ -743,12 +814,23 @@ def build_fourier_period3_score_combined_table(
     periods: np.ndarray = DEFAULT_PERIOD_GRID,
     target_period: float = 3.0,
     exclude_window: tuple[float, float] = (2.8, 3.2),
+    local_range: tuple[float, float] = DEFAULT_LOCAL_BACKGROUND_RANGE,
 ) -> pd.DataFrame:
-    """Per-(sample, length, gene_set, region) period-3 amplitude + ratio.
+    """Per-(sample, length, gene_set, region) period-3 amplitude + ratios.
 
-    Headline scalar: ``spectral_ratio_3nt``. Includes ``snr_call``
-    tier ({"excellent", "healthy", "modest", "broken", "no_signal"})
-    per the thresholds in :func:`snr_call_for_ratio`.
+    Two complementary scalars are reported per row:
+
+    * ``spectral_ratio_3nt`` (global) — ``amp(3) / median(amp at 2..10
+      excluding 2.8..3.2)``. The classical metric. Sensitive to long-
+      period structure that inflates the background median.
+    * ``spectral_ratio_3nt_local`` (codon-scale neighbourhood) —
+      ``amp(3) / median(amp at 4..6)``. Robust to long-period biology
+      (5'->3' density gradients, broad pause clusters); reflects "peak
+      vs. nearby noise" rather than "peak vs. everything else."
+
+    Each ratio gets its own ``snr_call`` / ``snr_call_local`` tier
+    ({"excellent", "healthy", "modest", "broken", "no_signal"}) per
+    the thresholds in :func:`snr_call_for_ratio`.
 
     The ``transcripts`` column is a semicolon-joined list of the
     transcripts that contributed to the metagene — auditability.
@@ -768,11 +850,25 @@ def build_fourier_period3_score_combined_table(
             target_period=target_period,
             exclude_window=exclude_window,
         )
-        # Compute background median exposed in output for audit.
+        _, ratio_local = compute_spectral_ratio_3nt_local(
+            metagene,
+            periods=periods,
+            target_period=target_period,
+            local_range=local_range,
+        )
+        # Compute background medians exposed in output for audit.
         grid = compute_spectrum_grid(metagene, periods=periods)
         lo, hi = float(exclude_window[0]), float(exclude_window[1])
         bg = grid[(grid["period_nt"] < lo) | (grid["period_nt"] > hi)]["amplitude"]
         bg_med = float(np.median(bg.dropna())) if not bg.dropna().empty else float("nan")
+        local_lo, local_hi = float(local_range[0]), float(local_range[1])
+        local_bg = grid[
+            (grid["period_nt"] >= local_lo) & (grid["period_nt"] <= local_hi)
+        ]["amplitude"]
+        local_bg_med = (
+            float(np.median(local_bg.dropna()))
+            if not local_bg.dropna().empty else float("nan")
+        )
         rows.append({
             "sample": sample,
             "read_length": int(read_length),
@@ -784,11 +880,13 @@ def build_fourier_period3_score_combined_table(
             "amp_at_3nt": float(amp3),
             "background_amp_median": bg_med,
             "spectral_ratio_3nt": float(ratio),
+            "local_background_amp_median": local_bg_med,
+            "spectral_ratio_3nt_local": float(ratio_local),
             "snr_call": snr_call_for_ratio(ratio),
+            "snr_call_local": snr_call_for_ratio(ratio_local),
             "transcripts": ";".join(sorted(t.transcript for t in group)),
         })
     # TODO(stats): bootstrap CI over genes (resample with replacement,
     # recompute ratio, percentile) and circular-shift permutation null
     # (shift each track by random offset, recompute ratio, empirical p).
-    # See run_taco1_periodicity_validation.sh notes on what these add.
     return pd.DataFrame(rows, columns=list(_SCORE_COMBINED_COLS))

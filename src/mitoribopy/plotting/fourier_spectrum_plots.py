@@ -135,16 +135,19 @@ def _plot_one_panel(
     if score_row is not None:
         ratio = float(score_row.get("spectral_ratio_3nt", float("nan")))
         snr_tier = str(score_row.get("snr_call", "no_signal"))
+        ratio_local = float(score_row.get("spectral_ratio_3nt_local", float("nan")))
+        snr_tier_local = str(score_row.get("snr_call_local", "no_signal"))
         n_genes = int(score_row.get("n_genes", 0))
         n_sites = int(score_row.get("n_sites_total", 0))
         text = (
-            f"3-nt spectral ratio: {ratio:.2f}x  ({snr_tier})\n"
+            f"3-nt ratio (global, p=2-10): {ratio:.2f}x  ({snr_tier})\n"
+            f"3-nt ratio (local, p=4-6):   {ratio_local:.2f}x  ({snr_tier_local})\n"
             f"n genes = {n_genes}  |  n sites = {n_sites:,}"
         )
         ax.text(
             0.97, 0.93, text,
             transform=ax.transAxes,
-            ha="right", va="top", fontsize=8,
+            ha="right", va="top", fontsize=8, family="monospace",
             bbox=dict(facecolor="white", edgecolor="0.7", alpha=0.85, pad=4),
         )
     return int(periods.size)
@@ -200,6 +203,11 @@ def _render_two_panel_figure(
             "spectral_ratio_3nt": (
                 float(score_row["spectral_ratio_3nt"])
                 if score_row is not None and pd.notna(score_row.get("spectral_ratio_3nt"))
+                else None
+            ),
+            "spectral_ratio_3nt_local": (
+                float(score_row["spectral_ratio_3nt_local"])
+                if score_row is not None and pd.notna(score_row.get("spectral_ratio_3nt_local"))
                 else None
             ),
         })
