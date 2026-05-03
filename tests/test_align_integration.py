@@ -151,8 +151,11 @@ def test_mitoribopy_align_end_to_end_on_tiny_synthetic_library(tmp_path):
     exit_code = cli.main(
         [
             "align",
-            "--kit-preset",
-            "truseq_smallrna",
+            # v0.7.1 removed --kit-preset; pass the small-RNA adapter
+            # explicitly (this is the same sequence the synthetic reads
+            # were constructed with above).
+            "--adapter",
+            TRUSEQ_ADAPTER,
             "--library-strandedness",
             "unstranded",  # the synthetic reads are not strand-constrained
             "--fastq",
@@ -187,7 +190,13 @@ def test_mitoribopy_align_end_to_end_on_tiny_synthetic_library(tmp_path):
     assert (out_dir / "run_settings.json").is_file()
 
     # 6) read_counts.tsv has a row for sample_A with the stage invariants.
-    lines = (out_dir / "read_counts.tsv").read_text().splitlines()
+    # The first line is a `# schema_version: ...` comment (introduced in
+    # the v0.6+ schema-version banner); skip lines starting with '#' to
+    # land on the column header.
+    lines = [
+        ln for ln in (out_dir / "read_counts.tsv").read_text().splitlines()
+        if ln and not ln.startswith("#")
+    ]
     header = lines[0].split("\t")
     data = dict(zip(header, lines[1].split("\t")))
     assert data["sample"] == "sample_A"

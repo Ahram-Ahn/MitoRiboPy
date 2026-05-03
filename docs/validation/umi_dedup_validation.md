@@ -33,10 +33,15 @@ For publication-grade runs, declare every sample's UMI explicitly in
 the sample sheet:
 
 ```
-sample_id    assay    condition    fastq_1            kit_preset             umi_length    umi_position    dedup_strategy
-WT_Ribo_1    ribo     WT           ribo/WT.fq.gz      illumina_truseq_umi    8             5p              umi-tools
-KO_Ribo_1    ribo     KO           ribo/KO.fq.gz      illumina_truseq_umi    8             5p              umi-tools
+sample_id    assay    condition    fastq_1            adapter                                    umi_length    umi_position    dedup_strategy
+WT_Ribo_1    ribo     WT           ribo/WT.fq.gz      AGATCGGAAGAGCACACGTCTGAACTCCAGTCA          8             5p              umi-tools
+KO_Ribo_1    ribo     KO           ribo/KO.fq.gz      AGATCGGAAGAGCACACGTCTGAACTCCAGTCA          8             5p              umi-tools
 ```
+
+> The `kit_preset` column was removed in v0.7.1; declare the 3'
+> adapter sequence explicitly via `adapter` (or set `pretrimmed: true`).
+> The detector still names the matched adapter family in
+> `kit_resolution.tsv` (`detected_kit` / `applied_kit`) for provenance.
 
 When a row lacks `umi_length` and the rnaseq detector subsequently
 infers one, the run still completes (the inferred value is applied)

@@ -59,13 +59,15 @@ Config files can be YAML, JSON, or TOML. The following YAML is the most common s
 
 ```yaml
 align:
-  # `auto` (default) detects the kit per sample by scanning each FASTQ.
-  # An explicit preset becomes a per-sample fallback used only when
-  # detection fails. Pre-trimmed FASTQs are auto-detected and routed
-  # through cutadapt with no -a flag.
-  kit_preset: auto                # auto | illumina_smallrna | illumina_truseq |
-                                  # illumina_truseq_umi | qiaseq_mirna |
-                                  # pretrimmed | custom
+  # Adapter auto-detection (since v0.7.1) is the default and the only
+  # kit-name input vector — the user-facing `kit_preset:` knob was
+  # removed in v0.7.1. Pin the 3' sequence with `adapter:` when
+  # detection cannot identify the library; declare already-trimmed
+  # FASTQs with `pretrimmed: true`. The two are mutually exclusive.
+  # Detection still names the matched adapter family in
+  # kit_resolution.tsv (`detected_kit` / `applied_kit`) for provenance.
+  # adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+  # pretrimmed: true
   adapter_detection: auto         # auto | off | strict
   library_strandedness: forward
   fastq: fastqs/                  # directory string (auto-globs *.fq, *.fq.gz, ...)
@@ -102,7 +104,7 @@ rpf:
 #   reference_gtf: references/human_mt_transcriptome.fa
 ```
 
-> Every key under a section maps to the corresponding subcommand's CLI flag with hyphens turned to underscores (so `kit_preset` → `--kit-preset`, `library_strandedness` → `--library-strandedness`). Booleans emit the bare flag (`true`) or are omitted entirely (`false`); `null` values are dropped.
+> Every key under a section maps to the corresponding subcommand's CLI flag with hyphens turned to underscores (so `library_strandedness` → `--library-strandedness`, `adapter_detection` → `--adapter-detection`). Booleans emit the bare flag (`true`) or are omitted entirely (`false`); `null` values are dropped.
 
 You can also start from the exhaustive copy-and-edit template under `examples/templates/`:
 
@@ -123,7 +125,7 @@ $ mitoribopy all --print-config-template > pipeline_config.yaml
 ```bash
 $ mitoribopy all --config pipeline_config.yaml --output results/ --dry-run
 [all] dry-run: planned actions
-  1. align: --kit-preset auto --library-strandedness forward --fastq-dir fastqs/ ...
+  1. align: --adapter-detection auto --library-strandedness forward --fastq-dir fastqs/ ...
   2. rpf:   --strain h.sapiens --fasta references/human_mt_transcriptome.fa -rpf 29 34 ...
   3. write manifest to results/run_manifest.json
 ```
@@ -258,7 +260,7 @@ The shortest path through the outputs:
    kd_1      fastqs/kd_1.fq.gz    pretrimmed          (none)                                 0           skip            (none)             0.0001      inferred_pretrimmed
    ```
 
-   `source=detected` means the scanner identified the kit. `source=inferred_pretrimmed` means no adapter signal was found at all — typical for SRA-deposited inputs. `source=user_fallback` means detection failed and the user-supplied `--kit-preset` was used. `source=per_sample_override:*` means an `align.samples:` YAML override pinned the kit explicitly for this sample.
+   `source=detected` means the scanner identified the kit. `source=inferred_pretrimmed` means no adapter signal was found at all — typical for SRA-deposited inputs. `source=user_fallback` means detection failed and a user-supplied `--adapter <SEQ>` (or `--pretrimmed`) was used. `source=per_sample_override:*` means an `align.samples:` YAML override pinned the adapter / pretrimmed flag explicitly for this sample.
 
 2. **Did each pipeline stage make biological sense?**
    Open `results/align/read_counts.tsv`. The invariants must hold:

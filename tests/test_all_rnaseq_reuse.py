@@ -271,14 +271,21 @@ def test_run_from_fastq_reuse_path_skips_alignment(
     pytest.importorskip("pydeseq2")
 
     # Tiny synthetic counts so build_sample_sheet + run_deseq2 have data.
+    # Two replicates per condition on each assay so pyDESeq2 can fit the
+    # dispersion (n=1 per condition trips the singleton gate before the
+    # reuse path is exercised).
     upstream = tmp_path / "rpf" / "rpf_counts.tsv"
     upstream.parent.mkdir(parents=True, exist_ok=True)
     upstream.write_text(
         "sample\tgene\tcount\n"
         "WT_Ribo_1\tMT-ND1\t100\n"
         "WT_Ribo_1\tMT-CO1\t250\n"
+        "WT_Ribo_2\tMT-ND1\t105\n"
+        "WT_Ribo_2\tMT-CO1\t245\n"
         "KO_Ribo_1\tMT-ND1\t110\n"
         "KO_Ribo_1\tMT-CO1\t300\n"
+        "KO_Ribo_2\tMT-ND1\t108\n"
+        "KO_Ribo_2\tMT-CO1\t295\n"
     )
 
     # Stub out align/index/heavy I/O. The reuse path should skip Ribo
@@ -316,15 +323,22 @@ def test_run_from_fastq_reuse_path_skips_alignment(
     # Prepare RNA FASTQs (mutually-distinct conditions; need at least 2 to
     # satisfy DESeq2's minimum two-condition requirement). The files
     # don't actually have to contain data because align_sample is faked.
+    # Filenames must avoid the bcl2fastq/_R1/_1 mate suffixes that
+    # detect_samples canonicalises away — otherwise the sample names
+    # the orchestrator sees will not match the condition_map keys.
     rna_dir = tmp_path / "rna"
     rna_dir.mkdir()
-    (rna_dir / "WT_RNA_1.fq.gz").write_bytes(b"")
-    (rna_dir / "KO_RNA_1.fq.gz").write_bytes(b"")
+    (rna_dir / "WT_RNA_a.fq.gz").write_bytes(b"")
+    (rna_dir / "WT_RNA_b.fq.gz").write_bytes(b"")
+    (rna_dir / "KO_RNA_a.fq.gz").write_bytes(b"")
+    (rna_dir / "KO_RNA_b.fq.gz").write_bytes(b"")
     cmap = tmp_path / "cmap.tsv"
     cmap.write_text(
         "sample\tcondition\n"
-        "WT_RNA_1\tWT\nKO_RNA_1\tKO\n"
-        "WT_Ribo_1\tWT\nKO_Ribo_1\tKO\n"
+        "WT_RNA_a\tWT\nWT_RNA_b\tWT\n"
+        "KO_RNA_a\tKO\nKO_RNA_b\tKO\n"
+        "WT_Ribo_1\tWT\nWT_Ribo_2\tWT\n"
+        "KO_Ribo_1\tKO\nKO_Ribo_2\tKO\n"
     )
 
     args = argparse.Namespace(

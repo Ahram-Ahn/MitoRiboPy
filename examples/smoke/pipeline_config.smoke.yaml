@@ -15,26 +15,32 @@ execution:
   single_sample_mode: true                 # serial align is plenty for 6k reads.
 
 samples: samples.tsv
-condition_map: samples.condition_map.tsv
 
 align:
-  fastq: fastqs/
+  # FASTQ paths come from the unified samples.tsv; setting align.fastq
+  # here as well would be a shadowed-input conflict.
   mt_index: bowtie2_index/human_mt_tiny
-  # No contaminant subtraction in the smoke fixture — the synthetic
-  # FASTQs have no rRNA / NUMT contamination by construction.
-  contam_index: null
+  # `mitoribopy align --contam-index` is required by the CLI. The smoke
+  # FASTQs are pure synthetic mt reads with no real contamination, so
+  # generate_smoke_fastqs.py builds a dummy contam reference whose
+  # sequence shares nothing with the mt reference — every read passes
+  # through the contam-subtract step unchanged.
+  contam_index: bowtie2_index/contam_dummy
   # adapter auto-detection is the default — no need to declare it
-  umi_position: none
+  # No UMIs => omit umi_position entirely (the CLI accepts 5p / 3p /
+  # both; "no UMI" is the absence of the flag, not a 'none' value).
   dedup_strategy: skip                     # no UMIs => no umi_tools needed
 
 rpf:
   strain: custom
   fasta: human_mt_tiny.fa
+  annotation_file: annotation.csv          # synthetic 3-gene annotation for the smoke FASTA
+  codon_table_name: vertebrate_mitochondrial
   rpf: [30, 34]                            # smoke synthetic reads are 32 nt
   rpf_min_count_frac: 0.0                  # accept every length under the smoke fixture
   offset_mode: combined                    # only 6k reads — per-sample is too noisy
-  offset_min: 10
-  offset_max: 14
+  min_offset: 10
+  max_offset: 14
   analysis_sites: both                     # exercise both P-site and A-site outputs
 
 # No rnaseq stage — the smoke fixture is align + rpf only.

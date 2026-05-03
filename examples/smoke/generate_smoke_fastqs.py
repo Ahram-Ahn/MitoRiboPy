@@ -29,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 READS_PER_SAMPLE = 3000
 READ_LENGTH = 32
 P_SITE_OFFSET = 12       # 5' end → P-site, canonical mt offset
-ADAPTER_SEQ = "CTGTAGGCACCATCAAT"  # Illumina sRNA-like; cutadapt --trim removes it.
+ADAPTER_SEQ = "TGGAATTCTCGGGTGCCAAGG"  # Illumina TruSeq small-RNA 3' adapter — recognised by mitoribopy align's auto-detector as `illumina_smallrna`.
 SEED = 42
 
 
@@ -166,6 +166,18 @@ def main() -> int:
     index_prefix = index_dir / "human_mt_tiny"
     _build_bowtie2_index(reference, index_prefix)
     print(f"  wrote bowtie2 index under {index_dir.relative_to(HERE)}")
+
+    # `mitoribopy align --contam-index` is required even when there is
+    # no real contamination to subtract. Build a tiny dummy contam
+    # reference here so the pipeline can run end-to-end; none of the
+    # synthetic reads should align to it (it shares no subsequence with
+    # the mt reference), so every read passes through the contam step.
+    contam_fa = HERE / "contam_dummy.fa"
+    contam_seq = "".join(random.Random(SEED + 1).choices("ACGT", k=400))
+    contam_fa.write_text(f">contam_dummy\n{contam_seq}\n", encoding="utf-8")
+    contam_prefix = index_dir / "contam_dummy"
+    _build_bowtie2_index(contam_fa, contam_prefix)
+    print(f"  wrote dummy contam reference {contam_fa.relative_to(HERE)} + index")
 
     print("\nNext step:")
     print("  mitoribopy all --config pipeline_config.smoke.yaml --output results/")

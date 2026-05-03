@@ -13,6 +13,17 @@ is the biology gate. The smoke fixture exists so a user installing
 MitoRiboPy can confirm in one command that the package is wired up
 end-to-end on their machine.
 
+> **Status (v0.7.1):** the smoke fixture is still listed under
+> "Planned" in `CHANGELOG.md`. It is **opt-in**: the pytest harness
+> deselects it from the default suite and only runs it when you
+> explicitly request it with `pytest -m smoke`. The synthetic FASTA
+> contigs do not yet carry a 5' UTR, so the offset-selection step has
+> nothing upstream of the start codon to fit against; the periodicity
+> QC bundle therefore is not produced under this fixture. Treat the
+> fixture as a wiring smoke test, not a numerical-output test, until
+> the FASTA + read simulator are extended (see CHANGELOG planned
+> entries).
+
 ---
 
 ## Prerequisites
@@ -39,6 +50,15 @@ mitoribopy all --config pipeline_config.smoke.yaml --output results/
 
 Expected wall-clock: ~10-30 seconds on a 2024 laptop.
 
+To exercise the same flow under pytest you must opt in explicitly:
+
+```bash
+PYTHONPATH=src pytest -m smoke
+```
+
+The default `pytest` invocation skips this test (see `tests/conftest.py`
+and the `smoke` marker docstring in `pyproject.toml`).
+
 ---
 
 ## What's checked
@@ -56,12 +76,13 @@ are available.
 
 | File | Purpose |
 |---|---|
-| [`generate_smoke_fastqs.py`](generate_smoke_fastqs.py) | Synthesises FASTQs + reference + bowtie2 index. Deterministic (seed 42). |
-| [`human_mt_tiny.fa`](human_mt_tiny.fa) | Three synthetic mt-mRNA-like contigs (`MT-CO1`, `MT-ND1`, `MT-ATP6`), each ~600 nt. |
-| [`samples.tsv`](samples.tsv) | Two-row sample sheet (`WT_smoke_1`, `KO_smoke_1`), both `assay=ribo`. |
-| [`samples.condition_map.tsv`](samples.condition_map.tsv) | Maps both samples to their condition labels. |
+| [`generate_smoke_fastqs.py`](generate_smoke_fastqs.py) | Synthesises FASTQs + reference + bowtie2 index. Deterministic (seed 42). Also writes a dummy contam FASTA + index so `--contam-index` is satisfied. |
+| [`human_mt_tiny.fa`](human_mt_tiny.fa) | Three synthetic mt-mRNA-like contigs (`MT-CO1`, `MT-ND1`, `MT-ATP6`), each ~500-600 nt. |
+| [`annotation.csv`](annotation.csv) | Custom transcript annotation paired with the synthetic FASTA. Required by `--strain custom`. |
+| [`samples.tsv`](samples.tsv) | Two-row unified sample sheet (`WT_smoke_1`, `KO_smoke_1`), both `assay=ribo`, with `condition` carried inline (per the v0.7 sample-sheet schema). |
+| [`samples.condition_map.tsv`](samples.condition_map.tsv) | Legacy auxiliary file kept for reference; the unified sample sheet now carries `condition` inline, so this file is not consumed by the smoke run. |
 | [`pipeline_config.smoke.yaml`](pipeline_config.smoke.yaml) | Config drives `mitoribopy all`. No rnaseq section. |
-| [`expected_outputs.txt`](expected_outputs.txt) | List of files that must exist after a successful run. |
+| [`expected_outputs.txt`](expected_outputs.txt) | List of files that must exist after a successful run (current expected list assumes a future fixture extension that produces the periodicity QC bundle). |
 | `results/` | Run output (gitignored). |
 
 ---
