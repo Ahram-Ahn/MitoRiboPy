@@ -38,8 +38,6 @@ from ..align import (
     trim as trim_step,
 )
 from ..align._types import (
-    KIT_PRESET_ALIASES,
-    KIT_PRESETS,
     ResolvedKit,
     SampleCounts,
     SampleOverride,
@@ -144,28 +142,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     library = parser.add_argument_group("Library prep")
     library.add_argument(
-        "--kit-preset",
-        choices=sorted(KIT_PRESETS) + sorted(KIT_PRESET_ALIASES),
-        default="auto",
-        metavar="PRESET",
-        help=(
-            "Library-prep adapter / UMI preset. Default 'auto' detects "
-            "per sample (mixed-kit batches OK). Use 'custom' with "
-            "--adapter <SEQ>. Canonical choices: "
-            "illumina_smallrna | illumina_truseq | illumina_truseq_umi | "
-            "qiaseq_mirna | pretrimmed | custom. Legacy vendor aliases "
-            "(truseq_smallrna, nebnext_smallrna, nebnext_ultra_umi, …) "
-            "are accepted but not shown in --help; the full vendor "
-            "mapping lives in README → Adapter / UMI presets."
-        ),
-    )
-    library.add_argument(
         "--adapter",
         default=None,
         metavar="SEQ",
         help=(
-            "3' adapter sequence. Overrides the kit preset's adapter. "
-            "Required when --kit-preset custom."
+            "3' adapter sequence. By default the pipeline auto-detects "
+            "the adapter from the head of each FASTQ; pass --adapter "
+            "<SEQ> when detection cannot identify your library or when "
+            "you want to pin a specific sequence. Mutually exclusive "
+            "with --pretrimmed."
+        ),
+    )
+    library.add_argument(
+        "--pretrimmed",
+        action="store_true",
+        default=False,
+        help=(
+            "Declare that the input FASTQ has already been adapter-"
+            "trimmed (e.g. SRA-deposited data). cutadapt skips the -a "
+            "flag and only enforces length and quality filtering. "
+            "Auto-detection also infers this when no known adapter "
+            "signature is present; pass this flag to assert it "
+            "explicitly. Mutually exclusive with --adapter."
         ),
     )
     library.add_argument(
@@ -217,15 +215,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TSV",
         help=(
             "Path to a TSV with per-sample overrides for "
-            "kit_preset / adapter / umi_length / umi_position / "
+            "adapter / pretrimmed / umi_length / umi_position / "
             "dedup_strategy. Required header columns: 'sample' plus at "
             "least one of the override columns. The 'sample' value must "
             "match the FASTQ basename with the .fq[.gz] / .fastq[.gz] "
             "suffix removed. Empty cells (or NA / None / null) fall "
             "through to the global CLI default for that field, so a "
             "single sample can override only its UMI without restating "
-            "the rest of the kit. Useful for mixed-UMI batches where "
-            "each sample's UMI length / position differs."
+            "the rest. Useful for mixed-UMI / mixed-adapter batches."
         ),
     )
     library.add_argument(
@@ -271,10 +268,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help=(
             "Reject runs that rely on inferred-rather-than-declared "
-            "metadata: inferred-pretrimmed kits, ambiguous adapter "
-            "detection (confidence margin < 0.10), and legacy kit "
-            "preset names. Use when preparing a publication run from a "
-            "cleaned sample sheet so the strict checks fail loud rather "
+            "metadata: inferred-pretrimmed kits and ambiguous adapter "
+            "detection (confidence margin < 0.10). Use when preparing "
+            "a publication run so the strict checks fail loud rather "
             "than a single sample silently picking the wrong defaults."
         ),
     )
@@ -301,14 +297,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="MODE",
         help=(
             "Per-sample adapter detection policy. 'auto' (default) scans "
-            "every input FASTQ and picks the matching preset per sample; "
-            "samples whose scan fails fall back to the user's --kit-preset / "
-            "--adapter when supplied, or to the 'pretrimmed' kit when no "
-            "fallback is set and the data looks already-trimmed. 'strict' "
-            "scans and HARD-FAILS on any sample whose scan disagrees with "
-            "an explicit --kit-preset or where no preset can be identified. "
-            "'off' skips the scan and trusts --kit-preset / --adapter for "
-            "every sample (requires an explicit preset)."
+            "every input FASTQ and picks the matching adapter family per "
+            "sample; samples whose scan fails fall back to --adapter "
+            "when supplied, or to 'pretrimmed' when no fallback is set "
+            "and the data looks already-trimmed. 'strict' scans and "
+            "HARD-FAILS on any sample whose detected adapter conflicts "
+            "with an explicit --adapter or where no adapter can be "
+            "identified. 'off' skips the scan and trusts --adapter / "
+            "--pretrimmed for every sample (one of those is required)."
         ),
     )
     library.add_argument(
@@ -366,8 +362,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Disable the auto-fallback to 'pretrimmed' when adapter "
             "detection finds no known kit. With this flag, detection "
-            "failure with no --kit-preset fallback raises an error "
-            "instead."
+            "failure with no --adapter / --pretrimmed fallback raises "
+            "an error instead."
         ),
     )
     library.add_argument(
@@ -672,26 +668,20 @@ def _strict_publication_mode_errors(
     Rules:
 
     * No sample picked an inferred ``pretrimmed`` kit. The user must
-      either declare ``kit_preset: pretrimmed`` explicitly or supply a
-      proper kit + adapter.
+      either pass ``--pretrimmed`` explicitly or supply ``--adapter``.
     * No sample has ``detection_ambiguous`` true OR a confidence
       margin below 0.10 — both signal a coin-flip between kits.
     * No sample landed on a UMI-bearing kit by inference; the
       ``umi_source`` must be ``declared`` or ``none`` (i.e. the user
       either declared the UMI or there isn't one).
-    * No sample's resolved kit is a legacy alias (canonicalisation
-      runs earlier; this is a belt-and-braces check).
     """
-    from ..align._types import KIT_PRESET_ALIASES
-
     errors: list[str] = []
     for r in resolutions:
         if r.source.startswith("inferred_pretrimmed"):
             errors.append(
                 f"--strict-publication-mode: sample {r.sample!r} picked "
                 "kit=pretrimmed by inference (no known adapter signature). "
-                "Declare kit_preset: pretrimmed explicitly or supply a "
-                "proper kit + adapter."
+                "Declare --pretrimmed explicitly or supply --adapter."
             )
         if r.detection_ambiguous or (
             r.detection_match_rate > 0.0
@@ -702,8 +692,7 @@ def _strict_publication_mode_errors(
                 f"detection is ambiguous "
                 f"(margin={getattr(r, 'confidence_margin', 0.0):.2f}, "
                 f"second_best={getattr(r, 'second_best_kit', None)!r}). "
-                "Pin --kit-preset / --adapter explicitly to remove the "
-                "ambiguity."
+                "Pin --adapter explicitly to remove the ambiguity."
             )
         umi_src = getattr(r, "umi_source", "preset_default")
         if r.kit.umi_length > 0 and umi_src not in ("declared", "none"):
@@ -712,12 +701,6 @@ def _strict_publication_mode_errors(
                 f"to a UMI-bearing kit (umi_length={r.kit.umi_length}) "
                 f"with umi_source={umi_src!r}. Declare umi_length and "
                 "umi_position in the sample sheet."
-            )
-        if r.kit.kit in KIT_PRESET_ALIASES:
-            errors.append(
-                f"--strict-publication-mode: sample {r.sample!r} uses "
-                f"legacy kit alias {r.kit.kit!r}. Use the canonical "
-                f"name {KIT_PRESET_ALIASES[r.kit.kit]!r}."
             )
     return errors
 
@@ -749,8 +732,8 @@ def _write_run_settings(
     settings = {
         "subcommand": "align",
         "mitoribopy_version": __version__,
-        "kit_preset_default": args.kit_preset,
         "adapter_default": args.adapter,
+        "pretrimmed_default": bool(getattr(args, "pretrimmed", False)),
         "adapter_detection_mode": args.adapter_detection,
         "library_strandedness": args.library_strandedness,
         "min_length": args.min_length,
@@ -1104,8 +1087,8 @@ def _resolve_per_sample(
 
     return resolve_sample_resolutions(
         samples,
-        kit_preset=args.kit_preset,
         adapter=args.adapter,
+        pretrimmed=bool(getattr(args, "pretrimmed", False)),
         umi_length=args.umi_length,
         umi_position=args.umi_position,
         umi_length_5p=getattr(args, "umi_length_5p", None),
@@ -1192,48 +1175,60 @@ def run(argv: Iterable[str]) -> int:
 
     if args.dry_run:
         # Build a synthetic resolution per planned input so the dry-run
-        # plan reflects what the per-sample resolver WOULD do. We trust
-        # the user-supplied kit_preset; when 'auto' we cannot scan, so
-        # report 'pending: auto-detect at run time'.
+        # plan reflects what the per-sample resolver WOULD do. We do
+        # not actually scan FASTQs in dry-run; the per-sample plan
+        # surfaces the resolver intent without touching disk.
+        pretrimmed_flag = bool(getattr(args, "pretrimmed", False))
+        if pretrimmed_flag:
+            placeholder_kit_global = trim_step.resolve_kit_settings(
+                "pretrimmed",
+                adapter=None,
+                umi_length=args.umi_length,
+                umi_position=args.umi_position,
+                umi_length_5p=getattr(args, "umi_length_5p", None),
+                umi_length_3p=getattr(args, "umi_length_3p", None),
+            )
+            global_source = "dry_run_pretrimmed"
+        elif args.adapter is not None:
+            placeholder_kit_global = ResolvedKit(
+                kit="custom",
+                adapter=args.adapter,
+                umi_length=int(args.umi_length or 0),
+                umi_position=args.umi_position or "5p",  # type: ignore[arg-type]
+                umi_length_5p=int(getattr(args, "umi_length_5p", 0) or 0),
+                umi_length_3p=int(getattr(args, "umi_length_3p", 0) or 0),
+            )
+            global_source = "dry_run_user_adapter"
+        else:
+            placeholder_kit_global = ResolvedKit(
+                kit="auto-detect-at-runtime",
+                adapter="(detect at runtime)",
+                umi_length=0,
+                umi_position="5p",
+            )
+            global_source = "dry_run_auto"
+
         if inputs:
             planned: list[SampleResolution] = []
             for fastq in inputs:
                 sample = _sample_name(fastq)
-                if args.kit_preset == "auto":
-                    # Use a synthetic placeholder so the plan still
-                    # surfaces the per-sample loop intent.
-                    placeholder_kit = ResolvedKit(
-                        kit="auto-detect-at-runtime",
-                        adapter="(detect at runtime)",
-                        umi_length=0,
-                        umi_position="5p",
-                    )
-                    dedup_label = "auto"
-                    source_label = "dry_run_auto"
-                else:
-                    placeholder_kit = trim_step.resolve_kit_settings(
-                        args.kit_preset,
-                        adapter=args.adapter,
-                        umi_length=args.umi_length,
-                        umi_position=args.umi_position,
-                        umi_length_5p=getattr(args, "umi_length_5p", None),
-                        umi_length_3p=getattr(args, "umi_length_3p", None),
-                    )
+                if pretrimmed_flag or args.adapter is not None:
                     dedup_label = dedup_step.resolve_dedup_strategy(
                         args.dedup_strategy,
-                        umi_length=placeholder_kit.umi_length,
+                        umi_length=placeholder_kit_global.umi_length,
                     )
-                    source_label = "dry_run_explicit"
+                else:
+                    dedup_label = "auto"
                 planned.append(
                     SampleResolution(
                         sample=sample,
                         fastq=fastq,
-                        kit=placeholder_kit,
+                        kit=placeholder_kit_global,
                         dedup_strategy=dedup_label,  # type: ignore[arg-type]
                         detected_kit=None,
                         detection_match_rate=0.0,
                         detection_ambiguous=False,
-                        source=source_label,
+                        source=global_source,
                     )
                 )
             try:
@@ -1248,28 +1243,12 @@ def run(argv: Iterable[str]) -> int:
                 print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
                 return 2
         else:
-            # No inputs supplied; still validate the kit/dedup combo so
+            # No inputs supplied; still validate the dedup combo so
             # the user gets fast feedback on bad flag combinations.
             try:
-                if args.kit_preset == "auto":
-                    placeholder_kit = ResolvedKit(
-                        kit="auto",
-                        adapter="(per-sample auto-detect)",
-                        umi_length=0,
-                        umi_position="5p",
-                    )
-                else:
-                    placeholder_kit = trim_step.resolve_kit_settings(
-                        args.kit_preset,
-                        adapter=args.adapter,
-                        umi_length=args.umi_length,
-                        umi_position=args.umi_position,
-                        umi_length_5p=getattr(args, "umi_length_5p", None),
-                        umi_length_3p=getattr(args, "umi_length_3p", None),
-                    )
                 dedup_label = dedup_step.resolve_dedup_strategy(
                     args.dedup_strategy,
-                    umi_length=placeholder_kit.umi_length,
+                    umi_length=placeholder_kit_global.umi_length,
                 )
             except (KeyError, ValueError) as exc:
                 print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
@@ -1277,7 +1256,7 @@ def run(argv: Iterable[str]) -> int:
             placeholder = SampleResolution(
                 sample="(no inputs)",
                 fastq=Path(""),
-                kit=placeholder_kit,
+                kit=placeholder_kit_global,
                 dedup_strategy=dedup_label,  # type: ignore[arg-type]
                 detected_kit=None,
                 detection_match_rate=0.0,
@@ -1292,8 +1271,8 @@ def run(argv: Iterable[str]) -> int:
                 max_length=args.max_length,
             )
             actions.append(
-                f"no input FASTQs supplied; per-sample resolution would run "
-                f"with kit_preset={args.kit_preset}, "
+                "no input FASTQs supplied; per-sample resolution would run "
+                f"with adapter={args.adapter!r}, pretrimmed={pretrimmed_flag}, "
                 f"adapter_detection={args.adapter_detection}."
             )
         return common.emit_dry_run("align", actions)

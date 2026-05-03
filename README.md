@@ -51,7 +51,9 @@ The package is built around four pipeline subcommands plus six utilities. Pass `
 14. [Tools](#tools)
 15. [Logs and provenance](#logs-and-provenance)
 16. [Development](#development)
-17. [License](#license)
+17. [Citation](#citation)
+18. [Known limitations](#known-limitations)
+19. [License](#license)
 
 ---
 
@@ -90,16 +92,16 @@ Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no N
 
 ## Installation
 
-The README and `examples/templates/` describe the current **v0.8.0** interface. Verify with `mitoribopy --version`. See [CHANGELOG.md](CHANGELOG.md) for breaking-change notes between releases — most notably the v0.8.0 retirement of the frame-fraction QC bundle in favour of a metagene Fourier analysis.
+The README and `examples/templates/` describe the current **v0.7.0** interface. Verify with `mitoribopy --version`. See [CHANGELOG.md](CHANGELOG.md) for the consolidated v0.7.0 release notes — this is the publication-readiness release: aggregate-then-DFT metagene Fourier QC with bootstrap CI + circular-shift permutation null, per-gene unit-mean metagene aggregation by default (legacy depth-weighted sum still available behind `normalize="none"`), nulled Wald p-values in the from-FASTQ rnaseq mode, JSON Schema for `run_manifest.json`, per-(sample, transcript) strand-sanity audit, and a "Periodicity statistical confidence" table in `SUMMARY.md`.
 
 ### From source (recommended)
 
 ```bash
 git clone https://github.com/Ahram-Ahn/MitoRiboPy.git
 cd MitoRiboPy
-git checkout v0.6.2          # exact manuscript version; omit for HEAD
+git checkout v0.7.0          # current published version; omit for HEAD
 python -m pip install -e .
-mitoribopy --version          # MUST print 0.6.2 or later
+mitoribopy --version          # MUST print 0.7.0 or later
 ```
 
 This pulls every Python dependency (`numpy`, `pandas`, `matplotlib`, `seaborn`, `biopython`, `scipy`, `PyYAML`, `pysam`) automatically. The external bioinformatics tools (`cutadapt`, `bowtie2`, `umi_tools`, …) still need to be on `$PATH` separately — see [External tool dependencies](#external-tool-dependencies) below.
@@ -113,10 +115,10 @@ python -m pip install -e ".[dev]"
 ### From PyPI
 
 ```bash
-python -m pip install 'mitoribopy>=0.6.2'
+python -m pip install 'mitoribopy>=0.7.0'
 ```
 
-The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). Pin the lower bound (`>=0.6.2`) so a stale PyPI cache cannot install a pre-publication-freeze build.
+The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). Pin the lower bound (`>=0.7.0`) so a stale PyPI cache cannot install a pre-publication-freeze build.
 
 ### Verify the install
 
@@ -130,6 +132,18 @@ If you prefer not to install at all:
 ```bash
 PYTHONPATH=src python -m mitoribopy --help
 ```
+
+### 30-second smoke test
+
+The repo ships a tiny end-to-end fixture under [`examples/smoke/`](examples/smoke/) so a fresh install can be verified in one command. Three synthetic mt-mRNAs, two samples, no UMIs, no contaminants — designed to exercise every stage (cutadapt → bowtie2 → BED → offsets → translation profile → coverage → metagene Fourier QC) without external data:
+
+```bash
+cd examples/smoke
+python generate_smoke_fastqs.py    # writes *.fastq.gz + bowtie2 index
+mitoribopy all --config pipeline_config.smoke.yaml --output results/
+```
+
+Expected wall-clock: 10–30 s on a 2024 laptop. Every file in [`examples/smoke/expected_outputs.txt`](examples/smoke/expected_outputs.txt) must exist + be non-empty after the run; the same assertion runs in CI under `pytest -m smoke` when the external tools are present.
 
 ### External tool dependencies
 
@@ -182,7 +196,7 @@ Use this recipe for any run that backs a manuscript, preprint, or shared dataset
 
 ```bash
 # 0. Pin the manuscript version
-python -m pip install 'mitoribopy>=0.6.2'
+python -m pip install 'mitoribopy>=0.7.0'
 mitoribopy --version
 
 # 1. Optional pre-flights (also run automatically by --strict below)
@@ -254,8 +268,12 @@ rpf:
   strain: h.sapiens               # human mt-mRNA reference + codon table
   fasta: input_data/human-mt-mRNA.fasta
   footprint_class: monosome       # short | monosome | disome | custom
-  rpf: [29, 34]                   # filtered RPF length range (overrides
-                                  # footprint_class only when needed)
+                                  # monosome's biological default window:
+                                  #   h.sapiens 28-34 nt; s.cerevisiae 37-41 nt
+  # rpf: [29, 34]                 # USER OVERRIDE — only if read-length QC
+                                  # confirms a tighter window carries the
+                                  # periodic signal. Omit to use the
+                                  # footprint_class default.
   align: stop                     # anchor offsets at the stop codon
   offset_type: "5"                # offsets reported from the read 5' end
   offset_site: p                  # coordinate space of the SELECTED OFFSETS
@@ -692,7 +710,7 @@ When a from-FASTQ flow run is launched with `--allow-pseudo-replicates-for-demo-
 
 ### 3-nt periodicity QC
 
-The bundle under `<output>/rpf/qc/` runs an aggregate-then-DFT metagene Fourier analysis: per-gene tracks are unit-mean-normalised, mean-centred, and Hann-windowed, then averaged into a single metagene before a direct DFT is evaluated at exactly period 3.0. The frame-fraction QC bundle (`qc_summary.tsv`, `frame_counts_*.tsv`, `gene_periodicity.tsv`, frame heatmaps, phase score) was retired in v0.8.0 — the `spectral_ratio_3nt` + `snr_call` columns now carry the headline QC verdict.
+The bundle under `<output>/rpf/qc/` runs an aggregate-then-DFT metagene Fourier analysis: per-gene tracks are unit-mean-normalised, mean-centred, and Hann-windowed, then averaged into a single metagene before a direct DFT is evaluated at exactly period 3.0. The legacy frame-fraction QC bundle (`qc_summary.tsv`, `frame_counts_*.tsv`, `gene_periodicity.tsv`, frame heatmaps, phase score) was retired ahead of v0.7.0 — the `spectral_ratio_3nt` + `snr_call` columns now carry the headline QC verdict, supplemented in v0.7.0 by `spectral_ratio_3nt_ci_{low,high}` (bootstrap CI over genes) and `permutation_p` (circular-shift null).
 
 | Output | What it answers |
 |---|---|
@@ -1054,6 +1072,41 @@ Documentation lives under [docs/](docs/):
 - [docs/validation/](docs/validation/) — biological validation plans
 - [docs/environment/](docs/environment/) — bioconda env file + Dockerfile
 - [docs/diagrams/](docs/diagrams/) — Mermaid pipeline diagrams
+
+---
+
+## Citation
+
+For exact reproducibility, cite the GitHub release tag and the Zenodo DOI together — not just the package name. PyPI's `mitoribopy` slot can move forward; a tagged release does not.
+
+Suggested manuscript block:
+
+```
+Software: MitoRiboPy v0.7.0
+DOI: <Zenodo DOI for the v0.7.0 release>
+Repository: https://github.com/Ahram-Ahn/MitoRiboPy/releases/tag/v0.7.0
+Python: <Python version recorded in run_manifest.json>
+External tools (cutadapt, bowtie2, umi_tools, pysam, pydeseq2):
+  versions recorded in <run_root>/run_manifest.json under tool_versions.
+```
+
+A machine-readable [`CITATION.cff`](CITATION.cff) sits at the repository root for tools that consume the [Citation File Format](https://citation-file-format.github.io/) (GitHub's citation widget, Zenodo, Zotero, etc.).
+
+---
+
+## Known limitations
+
+Reviewers tend to trust tools more when their boundaries are stated up front. MitoRiboPy is intentionally narrow:
+
+- **Mitochondrial Ribo-seq, not nuclear.** The default references and the periodicity / coverage outputs assume mt-transcriptome-style alignment (one chromosome ≈ one transcript). Running it against a nuclear genome with cytoplasmic Ribo-seq is out of scope; `mt_index` and `mt_mrna_substring_patterns` are not generic Ribo-seq plumbing.
+- **`rnaseq_mode: from_fastq` is exploratory.** The in-tree pyDESeq2 path runs on the **mt-mRNA subset only** (typically 13 transcripts) — not a full-transcriptome DE result. `mitoribopy all --strict` refuses this mode by default; the publication-safe route is `rnaseq_mode: de_table` with an external full-transcriptome DESeq2 / Xtail / Anota2Seq table.
+- **Pseudo-replicates are not biological replicates.** `allow_pseudo_replicates_for_demo_not_publication: true` exists for demo / smoke runs only. Strict mode rejects it; do not report p-values from a pseudo-replicate run as biological evidence.
+- **Offset selection reliability scales with depth and periodicity.** Per-sample offsets need both healthy 3-nt periodicity and enough reads per (sample, length). Below ~1 000 reads per length the per-sample pick is noisy — use the combined-sample offsets or pool replicates first.
+- **Bicistronic mt-mRNAs need careful interpretation.** ATP8/ATP6 and ND4L/ND4 share nucleotides in different reading frames. The Fourier bundle ships dedicated `*_ATP86.png` / `*_ND4L4.png` panels for this, and `gene_periodicity.tsv` carries an `is_overlap_pair` flag — but reviewers should still inspect those panels rather than collapsing them into the combined metagene.
+- **NUMT suppression depends on reference design and MAPQ.** Nuclear-mitochondrial transfers can recruit reads from real mt-RNA away from the mt reference. The default `mapq: 10` filter helps, but custom references should be built to suppress NUMTs explicitly (mask known NUMT regions, or use an mt-only transcriptome + contam index).
+- **Statistical hardening of the metagene Fourier QC is shipped in v0.7.0.** The score table now carries `spectral_ratio_3nt(_local)_ci_{low,high}` (200-iteration bootstrap CI over genes, 90 % percentile by default) and `permutation_p` / `permutation_p_local` (200-iteration circular-shift null, Laplace-smoothed). The CI is skipped (NaN columns + `ci_method == "skipped_too_few_genes"`) when fewer than 3 qualifying per-gene tracks are available — a CI from < 3 genes would be misleadingly tight. The `snr_call` four-tier verdict is preserved as the human-readable headline; cite the CI bounds + permutation p in any publication-facing context.
+
+For pipeline-level provenance and what survives a refactor, see [`docs/validation/`](docs/validation/) — in particular the TACO1-KO regression dataset, which is the biological signal that any periodicity refactor has to preserve.
 
 ---
 

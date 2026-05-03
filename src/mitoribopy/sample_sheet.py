@@ -25,8 +25,9 @@ Optional columns (any subset; missing columns default to ``None``)::
                            replicates that share a biological replicate)
     library_type           'single_end' | 'paired_end' | 'auto'
     fastq_2                path to R2 FASTQ for paired-end reads
-    kit_preset             per-sample kit override (overrides --kit-preset)
-    adapter                per-sample adapter override
+    adapter                per-sample 3' adapter sequence override
+    pretrimmed             'true' / 'false'; mark a sample's FASTQ as
+                           already adapter-trimmed (cutadapt skips -a)
     umi_length             integer; per-sample UMI length override
     umi_position           '5p', '3p', or 'both' (dual-end UMI)
     umi_length_5p          integer; per-end 5' UMI length when
@@ -137,8 +138,8 @@ _OPTIONAL_COLUMNS: tuple[str, ...] = (
     "biological_sample_id",
     "library_type",
     "fastq_2",
-    "kit_preset",
     "adapter",
+    "pretrimmed",
     "umi_length",
     "umi_position",
     "umi_length_5p",
@@ -190,8 +191,8 @@ class SampleRow:
     biological_sample_id: str | None = None
     library_type: str | None = None
     fastq_2: Path | None = None
-    kit_preset: str | None = None
     adapter: str | None = None
+    pretrimmed: bool | None = None
     umi_length: int | None = None
     umi_position: str | None = None
     umi_length_5p: int | None = None
@@ -280,6 +281,11 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
         errors.append(
             f"missing required column(s): {', '.join(missing)}; "
             f"required columns are {list(_REQUIRED_COLUMNS)}"
+        )
+    if "kit_preset" in header:
+        errors.append(
+            "the 'kit_preset' column was removed in v0.7.1; use 'adapter' "
+            "(3' sequence) or 'pretrimmed' (true/false) instead"
         )
     unknown = [c for c in header if c not in _KNOWN_COLUMNS]
     if unknown:
@@ -488,6 +494,20 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
         ):
             continue
 
+        pretrimmed_raw = get("pretrimmed")
+        pretrimmed_value: bool | None = None
+        if pretrimmed_raw is not None:
+            lowered = pretrimmed_raw.strip().lower()
+            if lowered in _BOOL_TRUE:
+                pretrimmed_value = True
+            elif lowered in _BOOL_FALSE:
+                pretrimmed_value = False
+            else:
+                errors.append(
+                    f"line {line_no}: pretrimmed {pretrimmed_raw!r} is not "
+                    "a boolean (use 'true' / 'false' / blank)"
+                )
+
         rows.append(
             SampleRow(
                 sample_id=sample_id,
@@ -498,8 +518,8 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
                 biological_sample_id=get("biological_sample_id"),
                 library_type=library_type,
                 fastq_2=Path(get("fastq_2")) if get("fastq_2") else None,
-                kit_preset=get("kit_preset"),
                 adapter=get("adapter"),
+                pretrimmed=pretrimmed_value,
                 umi_length=umi_length,
                 umi_position=umi_pos,
                 umi_length_5p=umi_length_5p,

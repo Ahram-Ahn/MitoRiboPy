@@ -1,5 +1,5 @@
 # MitoRiboPy -- exhaustive pipeline_config example (end-to-end `mitoribopy all`).
-# Compatible with: MitoRiboPy 0.6.2+
+# Compatible with: MitoRiboPy 0.7.0+
 #
 # Every flag from `mitoribopy align --help`, `mitoribopy rpf --help`,
 # and `mitoribopy rnaseq --help` is listed here with its default value
@@ -63,34 +63,33 @@ align:
   mt_index: input_data/indexes/mt_tx       # bowtie2 prefix; REQUIRED
   # output is set automatically by `mitoribopy all` to <run_root>/align/
 
-  # --- Library prep / kit ---------------------------------------------------
-  kit_preset: auto                         # auto | illumina_smallrna | illumina_truseq |
-                                           #   illumina_truseq_umi | qiaseq_mirna |
-                                           #   pretrimmed | custom
-                                           # Vendor synonyms (truseq_smallrna,
-                                           # nebnext_smallrna, nebnext_ultra_umi,
-                                           # truseq_stranded_total, smarter_pico_v3,
-                                           # sequoia_express) are also accepted.
-  adapter: null                            # explicit 3' adapter (REQUIRED when kit_preset=custom)
-  umi_length: null                         # global UMI override; null -> use kit-preset default
-  umi_position: null                       # 5p | 3p; null -> use kit-preset default
+  # --- Library prep / adapter ----------------------------------------------
+  # Auto-detection of the 3' adapter is the default; `adapter:` and
+  # `pretrimmed:` are escape hatches for libraries detection cannot
+  # identify. The two are mutually exclusive: a sample either has an
+  # adapter to trim or has already been trimmed.
+  adapter: null                            # explicit 3' adapter sequence
+  pretrimmed: false                        # true when FASTQs are already
+                                           #   adapter-clipped (skip cutadapt -a)
+  umi_length: null                         # global UMI override
+  umi_position: null                       # 5p | 3p | both
 
-  # --- Per-sample overrides (mixed-UMI batches) -----------------------------
-  # Use this when each sample's UMI / kit is different. The orchestrator
+  # --- Per-sample overrides (mixed-UMI / mixed-adapter batches) ------------
+  # Use this when each sample's adapter / UMI differs. The orchestrator
   # materialises this block as <output>/align/sample_overrides.tsv and
   # feeds it to `mitoribopy align --sample-overrides`. Any field left
   # unset on a sample falls through to the global default above.
   # samples:
   #   - name: sampleA                      # FASTQ basename without .fq[.gz]
-  #     kit_preset: illumina_truseq_umi
+  #     adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
   #     umi_length: 8
   #     umi_position: 5p
   #   - name: sampleB
-  #     kit_preset: qiaseq_mirna
+  #     adapter: AACTGTAGGCACCATCAAT
   #     umi_length: 12
   #     umi_position: 3p
   #   - name: sampleC                      # SRA-deposited, already adapter-clipped
-  #     kit_preset: pretrimmed
+  #     pretrimmed: true
   #     umi_length: 0
 
   # --- Adapter detection ----------------------------------------------------
@@ -189,11 +188,22 @@ rpf:
   nd4l_nd4_baseline: ND4                   # ND4  | ND4L
 
   # --- RPF length window ----------------------------------------------------
-  footprint_class: monosome                # short | monosome | disome | custom
-                                           # short:    h.sapiens / s.cerevisiae 16-24 nt
-                                           # monosome: h.sapiens 28-34, s.cerevisiae 37-41
-                                           # disome:   h.sapiens 50-70, s.cerevisiae 60-90
-  rpf: [29, 34]                            # explicit [min, max] (overrides footprint_class)
+  # Three layers, in order of precedence:
+  #   1. footprint_class — biological default search window for the
+  #      species. This is the package's own default; leave it alone unless
+  #      your library's read-length QC says otherwise.
+  #        short:    h.sapiens / s.cerevisiae 16-24 nt
+  #        monosome: h.sapiens 28-34 nt, s.cerevisiae 37-41 nt   (default)
+  #        disome:   h.sapiens 50-70 nt, s.cerevisiae 60-90 nt
+  #   2. rpf: [min, max] — USER OVERRIDE. Use this only after the
+  #      unfiltered read-length QC heatmap shows a tighter sub-window
+  #      carries the periodic signal (e.g. 29-34 nt instead of the full
+  #      28-34 nt window). Comment it out to fall back to layer 1.
+  #   3. --rpf MIN MAX on the CLI — beats both layers above.
+  footprint_class: monosome
+  # rpf: [29, 34]                          # explicit [min, max] override
+                                           # (publication runs: pin this AFTER
+                                           # confirming the window from QC).
   unfiltered_read_length_range: [15, 50]   # range used in the unfiltered-length QC heatmap;
                                            # auto-widened by --footprint_class when not set
 

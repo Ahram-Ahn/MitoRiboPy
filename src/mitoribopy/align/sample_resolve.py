@@ -1,8 +1,8 @@
-"""Per-sample kit + dedup resolution for ``mitoribopy align``.
+"""Per-sample adapter + dedup resolution for ``mitoribopy align``.
 
 Real datasets often contain samples from different libraries (mixed UMI
-/ no-UMI, mixed kits) and need independent kit resolution per FASTQ.
-This module owns that work:
+/ no-UMI, mixed adapter families) and need independent resolution per
+FASTQ. This module owns that work:
 
 * one :class:`SampleResolution` per input FASTQ,
 * a single pre-flight pass that fails fast before any cutadapt or
@@ -11,21 +11,34 @@ This module owns that work:
   resolution table into the per-run provenance file users see in the
   output directory.
 
+The user-facing inputs since v0.7.1 are:
+
+* ``--adapter <SEQ>``  — supply a 3' adapter sequence directly.
+* ``--pretrimmed``     — declare that the FASTQ has already been
+                          adapter-trimmed (cutadapt skips ``-a``).
+* ``--adapter-detection {auto,off,strict}`` — detection policy.
+
 Resolution rules per sample:
 
-1. Detection mode ``off`` → trust the user's ``--kit-preset`` /
-   ``--adapter`` verbatim (raises if ``custom`` without ``--adapter``).
-2. Detection mode ``auto`` (default) →
-   - scan the head of the FASTQ;
-   - on success: use the detected preset (warn if user explicitly chose
-     a different preset);
-   - on failure: fall back to the user's preset / adapter when one is
-     supplied; otherwise raise :class:`SampleResolutionError`.
-3. Detection mode ``strict`` →
-   - scan;
-   - on success: use detected; HARD-FAIL if user supplied a conflicting
-     preset;
-   - on failure: HARD-FAIL.
+1. ``pretrimmed=True``                     → use the ``pretrimmed`` kit
+   sentinel (cutadapt skips ``-a``).
+2. ``adapter`` set + detection=``off``     → trust the user's adapter
+   verbatim (kit name reported as the matching family if the sequence
+   happens to match a known preset, else ``custom``).
+3. ``adapter`` set + detection=``auto``    → scan; on success use the
+   detected preset's adapter unless the user-supplied sequence
+   disagrees, in which case the user wins (kit reported as detection
+   result for provenance, adapter swapped to user's sequence).
+4. ``adapter`` not set + detection=``auto`` (default flow) → scan;
+   detected → use detected adapter; otherwise fall back to inferred
+   ``pretrimmed`` (when allowed) or fail with a message asking the
+   user to supply ``--adapter <SEQ>`` or ``--pretrimmed``.
+5. ``--adapter-detection strict``          → scan; require an
+   unambiguous detection. A user-supplied ``--adapter`` that conflicts
+   with the detected adapter is a hard failure.
+
+Kit names are an INTERNAL label used for provenance reporting in
+``kit_resolution.tsv`` — there is no user-facing kit-preset input.
 
 The resolved dedup strategy follows the resolved kit's ``umi_length``
 via :func:`mitoribopy.align.dedup.resolve_dedup_strategy`, so a UMI
@@ -35,7 +48,7 @@ picks ``skip`` even when both are processed in the same run.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -45,14 +58,13 @@ from ._types import (
     DedupStrategy,
     ResolvedKit,
     SampleOverride,
-    resolve_kit_alias,
 )
 from .dedup import resolve_dedup_strategy
 from .trim import resolve_kit_settings
 
 
 class SampleResolutionError(ValueError):
-    """A sample could not be resolved to a usable kit / dedup combination."""
+    """A sample could not be resolved to a usable adapter / dedup combination."""
 
 
 @dataclass(frozen=True)
@@ -66,7 +78,7 @@ class SampleResolution:
     detected_kit: str | None
     detection_match_rate: float
     detection_ambiguous: bool
-    source: str  # "detected", "user_fallback", "explicit_off", "explicit_strict"
+    source: str  # "detected", "user_adapter", "explicit_pretrimmed", ...
     # P1.11: provenance tag for the resolved UMI length. One of:
     # "declared"       – sample-sheet row supplied umi_length explicitly
     # "preset_default" – kit preset's umi_length was used
@@ -164,32 +176,39 @@ def _label_source(base_source: str, override_applied: bool) -> str:
     """Compose the ``source`` column value for ``kit_resolution.tsv``.
 
     Keeps the original detection-path label (``detected``,
-    ``user_fallback``, ``inferred_pretrimmed``, ``explicit_off``) so the
-    user can still see *how* the resolver landed on the resolved kit, but
-    prefixes ``per_sample_override:`` when an ``align.samples:`` /
-    ``--sample-overrides`` entry was applied so the provenance file
-    tells the truth about the user-supplied per-sample input.
+    ``user_adapter``, ``inferred_pretrimmed``, ``explicit_pretrimmed``,
+    ``explicit_off``) so the user can still see *how* the resolver
+    landed on the resolved kit, but prefixes ``per_sample_override:``
+    when an ``align.samples:`` / ``--sample-overrides`` entry was
+    applied so the provenance file tells the truth about per-sample
+    user input.
     """
     if override_applied:
         return f"per_sample_override:{base_source}"
     return base_source
 
 
-def _user_supplied_explicit_preset(kit_preset: str, adapter: str | None) -> bool:
-    """True when the user did NOT leave the kit at the auto sentinel.
+def _kit_for_known_adapter(adapter: str) -> str:
+    """Return the kit-preset name whose adapter matches *adapter* exactly,
+    or ``"custom"`` when the sequence does not match any known family.
 
-    Aliases for canonical presets count as explicit choices once
-    resolved; ``resolve_kit_alias`` is run before this helper.
+    The detector uses prefix matching with a 12-nt window; here we look
+    for an exact full-sequence match because the user supplied a literal
+    sequence. A non-match is reported as ``custom`` so the provenance
+    file truthfully records that the user bypassed detection.
     """
-    return kit_preset != "auto" or adapter is not None
+    for name, preset in KIT_PRESETS.items():
+        if preset.adapter is not None and preset.adapter == adapter:
+            return name
+    return "custom"
 
 
 def _resolve_one(
     *,
     sample: str,
     fastq: Path,
-    kit_preset: str,
     adapter: str | None,
+    pretrimmed: bool,
     umi_length: int | None,
     umi_position: str | None,
     dedup_strategy: DedupStrategy,
@@ -202,13 +221,12 @@ def _resolve_one(
 ) -> SampleResolution:
     """Resolve one sample. May raise :class:`SampleResolutionError`.
 
-    When *override* is supplied, its non-``None`` fields swap in for the
-    matching incoming kwargs BEFORE the existing ``auto`` / ``off`` /
-    ``strict`` precedence runs. This makes a per-sample override look
-    identical to a user-supplied explicit preset on the CLI, so all the
-    existing detection / fallback / validation rules apply unchanged —
-    the only visible difference is the ``source`` label on the resulting
-    :class:`SampleResolution` (set to ``per_sample_override``).
+    When *override* is supplied, its non-``None`` fields swap in for
+    the matching incoming kwargs BEFORE detection runs. This makes a
+    per-sample override behave like a sample-specific CLI invocation.
+    The only visible difference is the ``source`` label on the
+    resulting :class:`SampleResolution` (prefixed with
+    ``per_sample_override:``).
     """
     override_applied = False
     # Capture the user-supplied umi_length BEFORE the override merge so
@@ -217,11 +235,11 @@ def _resolve_one(
     user_umi_length_before_override = umi_length
     override_umi_length: int | None = None
     if override is not None:
-        if override.kit_preset is not None:
-            kit_preset = resolve_kit_alias(override.kit_preset)
-            override_applied = True
         if override.adapter is not None:
             adapter = override.adapter
+            override_applied = True
+        if override.pretrimmed is not None:
+            pretrimmed = bool(override.pretrimmed)
             override_applied = True
         if override.umi_length is not None:
             umi_length = override.umi_length
@@ -240,16 +258,52 @@ def _resolve_one(
             dedup_strategy = override.dedup_strategy
             override_applied = True
 
-    user_explicit = _user_supplied_explicit_preset(kit_preset, adapter)
+    if pretrimmed and adapter is not None:
+        raise SampleResolutionError(
+            f"{sample}: --pretrimmed is mutually exclusive with --adapter "
+            f"(got adapter={adapter!r}). Drop one."
+        )
 
-    if adapter_detection_mode == "off":
-        if kit_preset == "auto":
-            raise SampleResolutionError(
-                f"{sample}: --adapter-detection off requires an explicit "
-                "--kit-preset (or --adapter) because no auto-scan will run."
-            )
+    # 1. Explicit pretrimmed declaration short-circuits detection.
+    if pretrimmed:
         kit = resolve_kit_settings(
-            kit_preset,
+            "pretrimmed",
+            adapter=None,
+            umi_length=umi_length,
+            umi_position=umi_position,
+            umi_length_5p=umi_length_5p,
+            umi_length_3p=umi_length_3p,
+        )
+        dedup = resolve_dedup_strategy(
+            dedup_strategy,
+            umi_length=kit.umi_length,
+        )
+        return SampleResolution(
+            sample=sample,
+            fastq=fastq,
+            kit=kit,
+            dedup_strategy=dedup,
+            detected_kit=None,
+            detection_match_rate=0.0,
+            detection_ambiguous=False,
+            source=_label_source("explicit_pretrimmed", override_applied),
+            umi_source=_classify_umi_source(
+                user_supplied_umi_length=user_umi_length_before_override,
+                override_supplied_umi_length=override_umi_length,
+                resolved_umi_length=kit.umi_length,
+            ),
+        )
+
+    # 2. detection mode == "off": trust the user's --adapter verbatim.
+    if adapter_detection_mode == "off":
+        if adapter is None:
+            raise SampleResolutionError(
+                f"{sample}: --adapter-detection off requires --adapter <SEQ> "
+                "(or --pretrimmed) because no auto-scan will run."
+            )
+        applied_preset = _kit_for_known_adapter(adapter)
+        kit = resolve_kit_settings(
+            applied_preset,
             adapter=adapter,
             umi_length=umi_length,
             umi_position=umi_position,
@@ -276,7 +330,7 @@ def _resolve_one(
             ),
         )
 
-    # auto / strict modes: scan the FASTQ.
+    # 3. auto / strict modes: scan the FASTQ.
     try:
         detection = detector(fastq)
     except OSError as exc:
@@ -285,15 +339,16 @@ def _resolve_one(
                 f"{sample}: cannot scan {fastq} for adapter detection "
                 f"(strict mode): {exc}"
             ) from exc
-        # Auto mode: treat the failed scan as "no detection" so the user
-        # fallback path below can still produce a valid resolution.
-        if not user_explicit:
+        # Auto mode: treat the failed scan as "no detection". If the
+        # user supplied --adapter, fall back to it; otherwise fail.
+        if adapter is None:
             raise SampleResolutionError(
-                f"{sample}: cannot scan {fastq} and no --kit-preset / "
-                f"--adapter fallback was supplied: {exc}"
+                f"{sample}: cannot scan {fastq} and no --adapter fallback "
+                f"was supplied: {exc}"
             ) from exc
+        applied_preset = _kit_for_known_adapter(adapter)
         kit = resolve_kit_settings(
-            kit_preset,
+            applied_preset,
             adapter=adapter,
             umi_length=umi_length,
             umi_position=umi_position,
@@ -312,7 +367,7 @@ def _resolve_one(
             detected_kit=None,
             detection_match_rate=0.0,
             detection_ambiguous=False,
-            source=_label_source("user_fallback", override_applied),
+            source=_label_source("user_adapter", override_applied),
             umi_source=_classify_umi_source(
                 user_supplied_umi_length=user_umi_length_before_override,
                 override_supplied_umi_length=override_umi_length,
@@ -322,6 +377,7 @@ def _resolve_one(
 
     detected = detection.preset_name
     rates_str = adapter_detect.format_per_kit_rates(detection.per_kit_rates)
+    user_adapter_supplied = adapter is not None
 
     if adapter_detection_mode == "strict":
         if detected is None:
@@ -330,47 +386,55 @@ def _resolve_one(
                 f"known adapter ({detection.n_reads_scanned} reads scanned). "
                 f"Per-kit match rates: {rates_str}."
             )
-        if user_explicit and kit_preset != "auto" and detected != kit_preset:
-            raise SampleResolutionError(
-                f"{sample}: --adapter-detection strict: data looks like "
-                f"'{detected}' ({detection.match_rate * 100:.1f}% match) but "
-                f"--kit-preset is {kit_preset}. Per-kit match rates: {rates_str}."
-            )
+        if user_adapter_supplied:
+            detected_seq = KIT_PRESETS[detected].adapter
+            if detected_seq is not None and detected_seq != adapter:
+                raise SampleResolutionError(
+                    f"{sample}: --adapter-detection strict: data looks like "
+                    f"{detected!r} (adapter {detected_seq!r}, "
+                    f"{detection.match_rate * 100:.1f}% match) but --adapter "
+                    f"is {adapter!r}. Drop --adapter or use detection=auto."
+                )
         applied_preset = detected
+        applied_adapter = adapter if user_adapter_supplied else None
         source = "detected"
 
     else:
         # auto mode (default).
         if detected is not None:
-            if user_explicit and kit_preset != "auto" and detected != kit_preset:
-                # Honour the explicit user choice but record what we saw.
-                applied_preset = kit_preset
-                source = "user_fallback"
+            applied_preset = detected
+            if user_adapter_supplied:
+                # User's literal sequence wins; preserve detected kit name
+                # for provenance so the report still names the family.
+                applied_adapter = adapter
+                source = "user_adapter"
             else:
-                applied_preset = detected
+                applied_adapter = None
                 source = "detected"
-        elif user_explicit:
-            applied_preset = kit_preset
-            source = "user_fallback"
+        elif user_adapter_supplied:
+            applied_preset = _kit_for_known_adapter(adapter)
+            applied_adapter = adapter
+            source = "user_adapter"
         elif detection.pretrimmed and allow_pretrimmed_inference:
             # Universal absence of every known adapter — best inference
             # is that the FASTQ is already trimmed (e.g. SRA-deposited).
             # cutadapt will skip the -a flag and only do length/quality.
             applied_preset = "pretrimmed"
+            applied_adapter = None
             source = "inferred_pretrimmed"
         else:
             raise SampleResolutionError(
                 f"{sample}: adapter auto-detection found no known kit "
                 f"({detection.n_reads_scanned} reads scanned, "
-                f"per-kit rates: {rates_str}) and no --kit-preset / "
-                "--adapter fallback was supplied. Either pass --kit-preset "
-                "explicitly, use --kit-preset pretrimmed for already-trimmed "
-                "data, or use --adapter-detection off."
+                f"per-kit rates: {rates_str}) and no --adapter fallback "
+                "was supplied. Either pass --adapter <SEQ> for the 3' "
+                "adapter sequence, --pretrimmed for already-trimmed data, "
+                "or --adapter-detection off to skip the scan."
             )
 
     kit = resolve_kit_settings(
         applied_preset,
-        adapter=adapter,
+        adapter=applied_adapter,
         umi_length=umi_length,
         umi_position=umi_position,
         umi_length_5p=umi_length_5p,
@@ -408,8 +472,8 @@ def _resolve_one(
 def resolve_sample_resolutions(
     samples: Iterable[tuple[str, Path]],
     *,
-    kit_preset: str,
     adapter: str | None,
+    pretrimmed: bool,
     umi_length: int | None,
     umi_position: str | None,
     dedup_strategy: DedupStrategy,
@@ -434,15 +498,6 @@ def resolve_sample_resolutions(
     typo'd sample name in the YAML / TSV is caught up front instead of
     silently producing the wrong resolution for every sample.
     """
-    # Translate any legacy alias up front so the rest of the resolver
-    # only deals with canonical preset names.
-    kit_preset = resolve_kit_alias(kit_preset)
-    if kit_preset not in KIT_PRESETS:
-        known = ", ".join(sorted(KIT_PRESETS))
-        raise SampleResolutionError(
-            f"Unknown --kit-preset {kit_preset!r}. Known: {known}."
-        )
-
     samples_list = list(samples)
     sample_overrides = dict(sample_overrides or {})
     sample_names_seen = {name for name, _ in samples_list}
@@ -466,8 +521,8 @@ def resolve_sample_resolutions(
                 _resolve_one(
                     sample=sample,
                     fastq=fastq,
-                    kit_preset=kit_preset,
                     adapter=adapter,
+                    pretrimmed=pretrimmed,
                     umi_length=umi_length,
                     umi_position=umi_position,
                     dedup_strategy=dedup_strategy,
@@ -498,8 +553,8 @@ def resolve_sample_resolutions(
 
 _SAMPLE_OVERRIDE_COLUMNS: tuple[str, ...] = (
     "sample",
-    "kit_preset",
     "adapter",
+    "pretrimmed",
     "umi_length",
     "umi_position",
     "umi_length_5p",
@@ -545,6 +600,12 @@ def read_sample_overrides_tsv(path: Path) -> dict[str, SampleOverride]:
         raise SampleResolutionError(
             f"--sample-overrides {path}: TSV must contain at least one of "
             f"{sorted(overridable)} alongside 'sample'."
+        )
+    if "kit_preset" in header:
+        raise SampleResolutionError(
+            f"--sample-overrides {path}: 'kit_preset' column was removed "
+            "in v0.7.1. Use 'adapter' (sequence) or 'pretrimmed' "
+            "(true/false) instead."
         )
 
     overrides: dict[str, SampleOverride] = {}
@@ -601,14 +662,28 @@ def read_sample_overrides_tsv(path: Path) -> dict[str, SampleOverride]:
         umi_length_5p = _parse_optional_int("umi_length_5p")
         umi_length_3p = _parse_optional_int("umi_length_3p")
 
-        kit_preset_raw = row.get("kit_preset", "")
         adapter_raw = row.get("adapter", "")
+        pretrimmed_raw = row.get("pretrimmed", "")
         dedup_raw = row.get("dedup_strategy", "")
+
+        pretrimmed_value: bool | None = None
+        if not _is_blank(pretrimmed_raw):
+            lowered = pretrimmed_raw.strip().lower()
+            if lowered in {"true", "yes", "1", "y", "t"}:
+                pretrimmed_value = True
+            elif lowered in {"false", "no", "0", "n", "f"}:
+                pretrimmed_value = False
+            else:
+                raise SampleResolutionError(
+                    f"--sample-overrides {path}: row {line_no} has an "
+                    f"invalid pretrimmed {pretrimmed_raw!r} (use "
+                    "'true' / 'false' / blank)."
+                )
 
         overrides[sample] = SampleOverride(
             sample=sample,
-            kit_preset=None if _is_blank(kit_preset_raw) else kit_preset_raw,
             adapter=None if _is_blank(adapter_raw) else adapter_raw,
+            pretrimmed=pretrimmed_value,
             umi_length=umi_length,
             umi_position=umi_position,  # type: ignore[arg-type]
             umi_length_5p=umi_length_5p,
@@ -636,8 +711,12 @@ def write_sample_overrides_tsv(
         for override in overrides:
             row = {
                 "sample": override.sample,
-                "kit_preset": override.kit_preset or "",
                 "adapter": override.adapter or "",
+                "pretrimmed": (
+                    ""
+                    if override.pretrimmed is None
+                    else ("true" if override.pretrimmed else "false")
+                ),
                 "umi_length": (
                     "" if override.umi_length is None else str(override.umi_length)
                 ),

@@ -160,7 +160,7 @@ def test_all_passes_upstream_rpf_counts_argv_to_rnaseq(
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n"
         "  rna_fastq:\n    - rna1.fq.gz\n"
@@ -216,7 +216,7 @@ def test_all_recount_opt_out_drops_upstream_argv(
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n"
         "  rna_fastq:\n    - rna1.fq.gz\n"

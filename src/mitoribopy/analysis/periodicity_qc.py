@@ -32,11 +32,15 @@ import numpy as np
 import pandas as pd
 
 from .fourier_spectrum import (
+    DEFAULT_BOOTSTRAP_N,
+    DEFAULT_CI_ALPHA,
     DEFAULT_DROP_CODONS_AFTER_START,
     DEFAULT_DROP_CODONS_BEFORE_STOP,
     DEFAULT_MIN_MEAN_COVERAGE,
     DEFAULT_MIN_TOTAL_COUNTS,
     DEFAULT_PERIOD_GRID,
+    DEFAULT_PERMUTATIONS_N,
+    DEFAULT_RANDOM_SEED,
     DEFAULT_WINDOW_NT,
     GENE_SETS,
     REGIONS,
@@ -65,6 +69,11 @@ def run_periodicity_qc_bundle(
     min_mean_coverage: float = DEFAULT_MIN_MEAN_COVERAGE,
     min_total_counts: int = DEFAULT_MIN_TOTAL_COUNTS,
     render_plots: bool = True,
+    n_bootstrap: int = DEFAULT_BOOTSTRAP_N,
+    n_permutations: int = DEFAULT_PERMUTATIONS_N,
+    ci_alpha: float = DEFAULT_CI_ALPHA,
+    random_seed: int = DEFAULT_RANDOM_SEED,
+    compute_stats: bool = True,
 ) -> dict:
     """Write the metagene Fourier bundle and return in-memory tables.
 
@@ -72,6 +81,12 @@ def run_periodicity_qc_bundle(
     ``annotation_df`` is ``None`` the function writes empty (header-
     only) TSVs so downstream outputs_index can advertise the paths
     consistently.
+
+    The statistical hardening knobs (``n_bootstrap``, ``n_permutations``,
+    ``ci_alpha``, ``random_seed``, ``compute_stats``) are forwarded to
+    :func:`build_fourier_period3_score_combined_table`. Set
+    ``compute_stats=False`` for a fast smoke run that produces only the
+    point-estimate columns.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -99,7 +114,13 @@ def run_periodicity_qc_bundle(
             tracks, periods=DEFAULT_PERIOD_GRID,
         )
         score_table = build_fourier_period3_score_combined_table(
-            tracks, periods=DEFAULT_PERIOD_GRID,
+            tracks,
+            periods=DEFAULT_PERIOD_GRID,
+            n_bootstrap=int(n_bootstrap),
+            n_permutations=int(n_permutations),
+            ci_alpha=float(ci_alpha),
+            random_seed=int(random_seed),
+            compute_stats=bool(compute_stats),
         )
 
     spectrum_table.to_csv(spectrum_path, sep="\t", index=False, na_rep="")
@@ -129,6 +150,16 @@ def run_periodicity_qc_bundle(
         "period_grid_first": float(DEFAULT_PERIOD_GRID[0]),
         "period_grid_last": float(DEFAULT_PERIOD_GRID[-1]),
         "method": "metagene_dft",
+        # Statistical hardening (v0.9.0+): record exactly what produced
+        # the CI / p columns so a downstream reviewer can reproduce
+        # them by name.
+        "compute_stats": bool(compute_stats),
+        "n_bootstrap": int(n_bootstrap),
+        "n_permutations": int(n_permutations),
+        "ci_alpha": float(ci_alpha),
+        "ci_method": "percentile_over_genes" if compute_stats else "disabled",
+        "null_method": "circular_shift_per_gene" if compute_stats else "disabled",
+        "random_seed": int(random_seed),
     }
     (output_dir / "periodicity.metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",

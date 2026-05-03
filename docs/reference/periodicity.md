@@ -179,7 +179,7 @@ One row per `(sample, read_length, gene_set, region, period_nt)`.
 | `period_nt` | float | Period evaluated by direct DFT (grid: 2.0..10.0 step 0.05) |
 | `amplitude` | float | Normalised amplitude in [0, 1] (see Direct DFT) |
 
-### `fourier_period3_score_combined.tsv`
+### `fourier_period3_score_combined.tsv` (schema 1.1)
 
 One row per `(sample, read_length, gene_set, region)`.
 
@@ -189,8 +189,26 @@ One row per `(sample, read_length, gene_set, region)`.
 | `amp_at_3nt` | float | Direct DFT amplitude at exactly period 3.0 |
 | `background_amp_median` | float | Median amplitude in [2..10] nt excluding (2.8, 3.2) |
 | `spectral_ratio_3nt` | float | `amp_at_3nt / background_amp_median` |
-| `snr_call` | string | Tier (see table above) |
+| `local_background_amp_median` | float | Median amplitude in the codon-scale neighbourhood [4..6] nt |
+| `spectral_ratio_3nt_local` | float | `amp_at_3nt / local_background_amp_median` — robust to long-period structure |
+| `snr_call` | string | Tier (see table above) for the global ratio |
+| `snr_call_local` | string | Tier for the local-background ratio |
+| `amp_3nt_ci_low`, `amp_3nt_ci_high` | float | Bootstrap-over-genes percentile CI on `amp_at_3nt` (v0.9.0+) |
+| `spectral_ratio_3nt_ci_low`, `spectral_ratio_3nt_ci_high` | float | Bootstrap CI on `spectral_ratio_3nt` (v0.9.0+) |
+| `spectral_ratio_3nt_local_ci_low`, `spectral_ratio_3nt_local_ci_high` | float | Bootstrap CI on the local ratio (v0.9.0+) |
+| `permutation_p` | float | Laplace-smoothed empirical p-value from a per-gene circular-shift null on the global ratio (v0.9.0+) |
+| `permutation_p_local` | float | Same for the local ratio (v0.9.0+) |
+| `n_bootstrap`, `n_permutations`, `ci_alpha` | int / float | Audit fields recording the exact procedure (defaults: 200 / 200 / 0.10) |
+| `ci_method` | string | `percentile_over_genes` (live), `skipped_too_few_genes` (< 3 qualifying tracks), `disabled` (stats turned off via `--no-stats`) |
+| `null_method` | string | `circular_shift_per_gene` (live) or `disabled` |
 | `transcripts` | string | Semicolon-joined list of transcripts that contributed |
+
+When fewer than `MIN_GENES_FOR_BOOTSTRAP_CI = 3` qualifying per-gene
+tracks are available, the bootstrap is skipped (NaN CI columns +
+`ci_method == "skipped_too_few_genes"`) rather than emitted at
+misleadingly tight precision. The point estimate `spectral_ratio_3nt`
+is still emitted; the user retains the ability to look at the
+metagene figure and judge it visually.
 
 ## Plot bundle
 
@@ -213,25 +231,47 @@ In-figure annotations on each panel show the `spectral_ratio_3nt`
 value and the `snr_call` tier so a reviewer can read the headline
 number off the plot.
 
-## Statistical hardening (TODO)
+## Statistical hardening (shipped in v0.9.0)
 
-Two follow-ups marked TODO in
-`src/mitoribopy/analysis/fourier_spectrum.py`:
+Two companion estimates are computed alongside `spectral_ratio_3nt`
+and live in the score table (see the column list above):
 
 * **Bootstrap CI over genes** — resample the per-gene normalised
-  tracks with replacement (~1000 times), recompute the metagene and
-  `amp_at_3nt` per resample, take the 2.5%-97.5% percentile. Adds
-  `amp_3nt_ci_low`, `amp_3nt_ci_high` columns + a shaded ribbon on
-  the plot. Tells you "how sensitive is this peak to which genes
-  carry it."
-* **Circular-shift permutation null** — shift each per-gene track by
-  a random offset, re-aggregate, recompute the spectral ratio. Take
-  the empirical p-value. Adds a `permutation_p` column. Tells you "is
-  this peak unlikely under a randomly-phased signal of the same
-  magnitude."
+  tracks with replacement (default 200 iterations), recompute the
+  metagene + `amp_at_3nt` per resample, report the two-sided
+  percentile interval (default 90 % CI). Surfaced as
+  `amp_3nt_ci_{low,high}`, `spectral_ratio_3nt_ci_{low,high}`, and
+  `spectral_ratio_3nt_local_ci_{low,high}`. Tells you "how sensitive
+  is this peak to which genes happen to carry it."
+* **Circular-shift permutation null** — independently shift each
+  per-gene RAW coverage track by a random offset in `[0, W-1]`,
+  re-apply the unit-mean → linear-detrend → Hann-window pipeline,
+  re-aggregate, recompute the spectral ratio (default 200 iterations).
+  Report the Laplace-smoothed empirical p-value
+  `(k+1)/(n_perm+1)` as `permutation_p` and `permutation_p_local`.
+  Tells you "is this peak unlikely under a same-magnitude signal
+  with randomised codon-phase coherence across genes."
 
-Neither changes the value of `spectral_ratio_3nt`; they tell you how
-much to trust it. Implement when reviewers ask.
+Both are deterministic given the seed (default 42, recorded in
+`periodicity.metadata.json`). Neither changes the value of
+`spectral_ratio_3nt`; they tell you how much to trust it.
+
+Tune them per run via:
+
+```
+mitoribopy periodicity --bootstrap-n 1000 --permutations-n 1000 \
+                       --ci-alpha 0.05 --random-seed 7
+mitoribopy rpf --periodicity-fourier-bootstrap-n 1000 \
+               --periodicity-fourier-permutations-n 1000 \
+               --periodicity-fourier-ci-alpha 0.05 \
+               --periodicity-fourier-random-seed 7
+```
+
+In `mitoribopy all`, the same knobs live under the YAML
+`periodicity:` section as `fourier_bootstrap_n`,
+`fourier_permutations_n`, `fourier_ci_alpha`, `fourier_random_seed`,
+and `no_fourier_stats` (set the last to `true` to skip both for a
+fast smoke run).
 
 ## Reading the figure
 

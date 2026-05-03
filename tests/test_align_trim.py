@@ -38,20 +38,20 @@ def test_resolve_kit_custom_with_explicit_adapter_has_no_umi_by_default() -> Non
     )
 
 
-def test_resolve_kit_truseq_smallrna_defaults() -> None:
-    resolved = resolve_kit_settings("truseq_smallrna")
+def test_resolve_kit_illumina_smallrna_defaults() -> None:
+    resolved = resolve_kit_settings("illumina_smallrna")
     assert resolved.adapter == "TGGAATTCTCGGGTGCCAAGG"
     assert resolved.umi_length == 0
 
 
-def test_resolve_kit_nebnext_smallrna_defaults() -> None:
-    resolved = resolve_kit_settings("nebnext_smallrna")
+def test_resolve_kit_illumina_truseq_defaults() -> None:
+    resolved = resolve_kit_settings("illumina_truseq")
     assert resolved.adapter == "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA"
     assert resolved.umi_length == 0
 
 
-def test_resolve_kit_nebnext_ultra_umi_has_eight_nt_five_prime_umi() -> None:
-    resolved = resolve_kit_settings("nebnext_ultra_umi")
+def test_resolve_kit_illumina_truseq_umi_has_eight_nt_five_prime_umi() -> None:
+    resolved = resolve_kit_settings("illumina_truseq_umi")
     assert resolved.umi_length == 8
     assert resolved.umi_position == "5p"
 
@@ -64,12 +64,12 @@ def test_resolve_kit_qiaseq_has_twelve_nt_three_prime_umi() -> None:
 
 
 def test_resolve_kit_explicit_adapter_overrides_preset() -> None:
-    resolved = resolve_kit_settings("truseq_smallrna", adapter="CUSTOM_SEQ")
+    resolved = resolve_kit_settings("illumina_smallrna", adapter="CUSTOM_SEQ")
     assert resolved.adapter == "CUSTOM_SEQ"
 
 
 def test_resolve_kit_explicit_umi_length_overrides_preset() -> None:
-    resolved = resolve_kit_settings("truseq_smallrna", umi_length=6)
+    resolved = resolve_kit_settings("illumina_smallrna", umi_length=6)
     assert resolved.umi_length == 6
 
 
@@ -80,7 +80,7 @@ def test_resolve_kit_rejects_unknown_preset_name() -> None:
 
 def test_resolve_kit_rejects_negative_umi_length() -> None:
     with pytest.raises(ValueError):
-        resolve_kit_settings("truseq_smallrna", umi_length=-1)
+        resolve_kit_settings("illumina_smallrna", umi_length=-1)
 
 
 def test_resolve_kit_rejects_invalid_umi_position() -> None:
@@ -161,7 +161,7 @@ def test_run_cutadapt_single_pass_truseq_builds_expected_command(tmp_path) -> No
     # Prepare the log before the (mocked) run so parse sees realistic data.
     _write_log(log_json, input_reads=1000, adapter=900, output=870)
 
-    resolved = resolve_kit_settings("truseq_smallrna")
+    resolved = resolve_kit_settings("illumina_smallrna")
     result = run_cutadapt(
         fastq_in=tmp_path / "in.fq.gz",
         fastq_out=tmp_path / "out.fq.gz",
@@ -192,7 +192,7 @@ def test_run_cutadapt_single_pass_5p_umi_uses_cut_prefix_rename(tmp_path) -> Non
     log_json = tmp_path / "sample.cutadapt.json"
     _write_log(log_json, 10, 9, 8)
 
-    resolved = resolve_kit_settings("nebnext_ultra_umi")  # 8 nt 5' UMI
+    resolved = resolve_kit_settings("illumina_truseq_umi")  # 8 nt 5' UMI
     run_cutadapt(
         fastq_in=tmp_path / "in.fq.gz",
         fastq_out=tmp_path / "out.fq.gz",
@@ -258,7 +258,7 @@ def test_run_cutadapt_raises_when_subprocess_exits_nonzero(tmp_path) -> None:
         return SimpleNamespace(returncode=1, stdout="", stderr="adapter file bad")
 
     log_json = tmp_path / "sample.cutadapt.json"
-    resolved = resolve_kit_settings("truseq_smallrna")
+    resolved = resolve_kit_settings("illumina_smallrna")
     with pytest.raises(RuntimeError) as exc:
         run_cutadapt(
             fastq_in=tmp_path / "in.fq.gz",

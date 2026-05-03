@@ -34,8 +34,11 @@ from mitoribopy.cli.align import _enumerate_fastqs, _sample_name, build_parser
 def test_build_parser_help_mentions_new_flags() -> None:
     parser = build_parser()
     help_text = parser.format_help()
-    assert "--kit-preset" in help_text
+    # v0.7.1: --kit-preset removed; auto-detection is the default and
+    # --adapter / --pretrimmed are the explicit overrides.
+    assert "--kit-preset" not in help_text
     assert "--adapter" in help_text
+    assert "--pretrimmed" in help_text
     assert "--umi-length" in help_text
     assert "--library-strandedness" in help_text
     assert "--contam-index" in help_text
@@ -56,7 +59,8 @@ def test_align_subcommand_help_via_cli(capsys) -> None:
     assert exc.value.code == 0
     captured = capsys.readouterr()
     assert "mitoribopy align" in captured.out
-    assert "--kit-preset" in captured.out
+    assert "--adapter" in captured.out
+    assert "--pretrimmed" in captured.out
 
 
 # ---------- _enumerate_fastqs + _sample_name --------------------------------
@@ -112,8 +116,8 @@ def test_dry_run_exits_zero_and_prints_plan_with_resolved_settings(
         [
             "align",
             "--dry-run",
-            "--kit-preset",
-            "illumina_smallrna",
+            "--adapter",
+            "TGGAATTCTCGGGTGCCAAGG",
             "--fastq-dir",
             str(tmp_path),
         ]
@@ -122,24 +126,28 @@ def test_dry_run_exits_zero_and_prints_plan_with_resolved_settings(
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "dry-run" in out
-    assert "illumina_smallrna" in out
-    assert "TGGAATTCTCGGGTGCCAAGG" in out  # resolved adapter
+    # The dry-run plan reports the resolved adapter sequence; the kit
+    # name is reported as 'custom' since detection does not run in
+    # dry-run.
+    assert "TGGAATTCTCGGGTGCCAAGG" in out
     assert "strand=forward" in out
 
 
-def test_dry_run_fails_fast_on_custom_kit_without_adapter(capsys, tmp_path) -> None:
+def test_dry_run_default_is_auto_detection(capsys, tmp_path) -> None:
+    """With no --adapter and no --pretrimmed, dry-run advertises that
+    detection will run at execution time."""
     exit_code = cli.main(
         [
             "align",
             "--dry-run",
-            "--kit-preset",
-            "custom",  # no --adapter
             "--fastq-dir",
             str(tmp_path),
         ]
     )
-    assert exit_code == 2
-    assert "--adapter" in capsys.readouterr().err
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    assert "auto-detect-at-runtime" in out or "detect at runtime" in out
 
 
 def test_mark_duplicates_strategy_is_rejected_by_argparse(capsys, tmp_path) -> None:
@@ -150,8 +158,8 @@ def test_mark_duplicates_strategy_is_rejected_by_argparse(capsys, tmp_path) -> N
             [
                 "align",
                 "--dry-run",
-                "--kit-preset",
-                "illumina_smallrna",
+                "--adapter",
+                "TGGAATTCTCGGGTGCCAAGG",
                 "--dedup-strategy",
                 "mark-duplicates",
                 "--fastq-dir",
@@ -170,7 +178,7 @@ def test_mark_duplicates_strategy_is_rejected_by_argparse(capsys, tmp_path) -> N
 def test_non_dry_run_requires_output_contam_index_mt_index_inputs(
     capsys,
 ) -> None:
-    exit_code = cli.main(["align", "--kit-preset", "illumina_smallrna"])
+    exit_code = cli.main(["align", "--adapter", "TGGAATTCTCGGGTGCCAAGG"])
     err = capsys.readouterr().err
     assert exit_code == 2
     assert "--output" in err
@@ -189,7 +197,9 @@ def test_align_config_flag_loads_yaml_values_into_args(tmp_path, capsys) -> None
     fastq_dir.mkdir()
     cfg = tmp_path / "align.yaml"
     cfg.write_text(
-        "kit_preset: illumina_truseq_umi\n"
+        "adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA\n"
+        "umi_length: 8\n"
+        "umi_position: 5p\n"
         "min_length: 99\n"
         "max_length: 50\n"
         "quality: 42\n"
@@ -207,10 +217,10 @@ def test_align_config_flag_loads_yaml_values_into_args(tmp_path, capsys) -> None
     ])
     out = capsys.readouterr().out
     assert exit_code == 0
-    # The dry-run plan prints the resolved kit + cutadapt window;
+    # The dry-run plan prints the resolved adapter + cutadapt window;
     # both must reflect the YAML values, not the argparse defaults.
-    assert "kit=illumina_truseq_umi" in out
-    assert "umi_length=8" in out                 # comes from the kit preset
+    assert "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA" in out
+    assert "umi_length=8" in out
     assert "cutadapt trim per sample (min=99 max=50 nt)" in out
     assert "MAPQ filter at q >= 31" in out
 
@@ -244,7 +254,7 @@ def test_align_config_warns_on_unknown_key(tmp_path, caplog) -> None:
     fastq_dir = tmp_path / "fq"
     fastq_dir.mkdir()
     cfg = tmp_path / "align.yaml"
-    cfg.write_text("kit_preset: illumina_smallrna\nzz_typo_key: 1\n")
+    cfg.write_text("adapter: TGGAATTCTCGGGTGCCAAGG\nzz_typo_key: 1\n")
 
     # The package logger sets propagate=False so caplog (which hooks the
     # root logger) would not see the record. Re-enable propagation for
@@ -406,8 +416,10 @@ def test_end_to_end_orchestration_produces_expected_outputs(
     exit_code = cli.main(
         [
             "align",
-            "--kit-preset",
-            "illumina_smallrna",
+            "--adapter",
+            "TGGAATTCTCGGGTGCCAAGG",
+            "--adapter-detection",
+            "off",
             "--fastq-dir",
             str(fq_dir),
             "--contam-index",
@@ -457,7 +469,8 @@ def test_end_to_end_orchestration_produces_expected_outputs(
     assert settings_path.exists()
     settings = json.loads(settings_path.read_text())
     assert settings["subcommand"] == "align"
-    assert settings["kit_preset_default"] == "illumina_smallrna"
+    assert settings["adapter_default"] == "TGGAATTCTCGGGTGCCAAGG"
+    assert settings["pretrimmed_default"] is False
     assert settings["library_strandedness"] == "forward"
     assert settings["dedup_strategy"] == "skip"  # auto -> skip because umi_length==0
     assert settings["mapq_threshold"] == 10
@@ -496,8 +509,10 @@ def test_end_to_end_uses_explicit_fastq_list(
     exit_code = cli.main(
         [
             "align",
-            "--kit-preset",
-            "illumina_smallrna",
+            "--adapter",
+            "TGGAATTCTCGGGTGCCAAGG",
+            "--adapter-detection",
+            "off",
             "--fastq",
             str(f1),
             "--contam-index",
@@ -523,8 +538,14 @@ def test_end_to_end_picks_up_umi_dedup_when_umi_present(
     exit_code = cli.main(
         [
             "align",
-            "--kit-preset",
-            "illumina_truseq_umi",  # 8 nt 5' UMI
+            "--adapter",
+            "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA",
+            "--umi-length",
+            "8",
+            "--umi-position",
+            "5p",
+            "--adapter-detection",
+            "off",
             "--fastq",
             str(fq),
             "--contam-index",
@@ -540,7 +561,9 @@ def test_end_to_end_picks_up_umi_dedup_when_umi_present(
     settings = json.loads((out_dir / "run_settings.json").read_text())
     assert settings["dedup_strategy"] == "umi-tools"
     assert settings["per_sample"][0]["umi_length"] == 8
-    assert settings["per_sample"][0]["applied_kit"] == "illumina_truseq_umi"
+    # The Illumina TruSeq adapter family is recognised even when supplied
+    # via --adapter; the kit-resolution layer reports the family name.
+    assert settings["per_sample"][0]["applied_kit"] == "illumina_truseq"
 
 
 # ---------- --max-parallel-samples concurrency ----------------------------
@@ -625,8 +648,10 @@ def test_align_parallel_completes_all_samples(
     exit_code = cli.main(
         [
             "align",
-            "--kit-preset",
-            "illumina_smallrna",
+            "--adapter",
+            "TGGAATTCTCGGGTGCCAAGG",
+            "--adapter-detection",
+            "off",
             "--fastq-dir",
             str(fq_dir),
             "--contam-index",
@@ -680,8 +705,10 @@ def test_align_parallel_passes_divided_threads_to_tools(
     exit_code = cli.main(
         [
             "align",
-            "--kit-preset",
-            "illumina_smallrna",
+            "--adapter",
+            "TGGAATTCTCGGGTGCCAAGG",
+            "--adapter-detection",
+            "off",
             "--fastq-dir",
             str(fq_dir),
             "--contam-index",
@@ -727,8 +754,10 @@ def test_align_parallel_failure_propagates(
         cli.main(
             [
                 "align",
-                "--kit-preset",
-                "illumina_smallrna",
+                "--adapter",
+                "TGGAATTCTCGGGTGCCAAGG",
+                "--adapter-detection",
+                "off",
                 "--fastq-dir",
                 str(fq_dir),
                 "--contam-index",
@@ -763,8 +792,10 @@ def test_align_logs_per_stage_timing_and_emits_summary(
     exit_code = cli.main(
         [
             "align",
-            "--kit-preset",
-            "illumina_smallrna",
+            "--adapter",
+            "TGGAATTCTCGGGTGCCAAGG",
+            "--adapter-detection",
+            "off",
             "--fastq-dir",
             str(fq_dir),
             "--contam-index",
@@ -826,8 +857,10 @@ def test_align_summary_skipped_when_all_samples_resumed(
     exit_code = cli.main(
         [
             "align",
-            "--kit-preset",
-            "illumina_smallrna",
+            "--adapter",
+            "TGGAATTCTCGGGTGCCAAGG",
+            "--adapter-detection",
+            "off",
             "--fastq-dir",
             str(fq_dir),
             "--contam-index",

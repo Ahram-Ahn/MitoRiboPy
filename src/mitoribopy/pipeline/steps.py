@@ -858,10 +858,20 @@ def run_downstream_modules(context: PipelineContext, emit_status: StatusWriter) 
             for cli_attr, kw in (
                 ("periodicity_fourier_window_nt", "fourier_window_nt"),
                 ("periodicity_metagene_nt", "metagene_nt"),
+                ("periodicity_metagene_normalize", "metagene_normalize"),
+                ("periodicity_fourier_bootstrap_n", "fourier_n_bootstrap"),
+                ("periodicity_fourier_permutations_n", "fourier_n_permutations"),
+                ("periodicity_fourier_ci_alpha", "fourier_ci_alpha"),
+                ("periodicity_fourier_random_seed", "fourier_random_seed"),
             ):
                 val = getattr(context.args, cli_attr, None)
                 if val is not None:
                     period_kwargs[kw] = val
+            # The --periodicity-no-fourier-stats flag is the inverse of
+            # `fourier_compute_stats`; map it explicitly.
+            no_stats = bool(getattr(context.args, "periodicity_no_fourier_stats", False))
+            if no_stats:
+                period_kwargs["fourier_compute_stats"] = False
             run_periodicity_qc(
                 bed_df=context.filtered_bed_df,
                 annotation_df=context.annotation_df,

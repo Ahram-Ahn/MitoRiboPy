@@ -29,10 +29,14 @@ from typing import Iterable
 import pandas as pd
 
 from ..analysis.fourier_spectrum import (
+    DEFAULT_BOOTSTRAP_N,
+    DEFAULT_CI_ALPHA,
     DEFAULT_DROP_CODONS_AFTER_START,
     DEFAULT_DROP_CODONS_BEFORE_STOP,
     DEFAULT_MIN_MEAN_COVERAGE,
     DEFAULT_MIN_TOTAL_COUNTS,
+    DEFAULT_PERMUTATIONS_N,
+    DEFAULT_RANDOM_SEED,
     DEFAULT_WINDOW_NT,
 )
 from ..analysis.periodicity_qc import run_periodicity_qc_bundle
@@ -147,6 +151,66 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         default=True,
         help="Skip the per-(sample, read_length) figures; TSVs still written.",
+    )
+
+    # Statistical hardening (v0.9.0+).
+    stats = parser.add_argument_group(
+        "statistical hardening (bootstrap CI + permutation null)",
+    )
+    stats.add_argument(
+        "--no-stats",
+        dest="compute_stats",
+        action="store_false",
+        default=True,
+        help=(
+            "Skip the bootstrap CI + circular-shift permutation null. "
+            "Faster, but the score table loses amp_3nt_ci_*, "
+            "spectral_ratio_3nt(_local)_ci_*, and permutation_p columns. "
+            "Use only for smoke runs — the publication-facing path keeps "
+            "stats on."
+        ),
+    )
+    stats.add_argument(
+        "--bootstrap-n",
+        type=int,
+        default=DEFAULT_BOOTSTRAP_N,
+        metavar="B",
+        help=(
+            f"Bootstrap iterations for the percentile CI over genes. "
+            f"Default: {DEFAULT_BOOTSTRAP_N}."
+        ),
+    )
+    stats.add_argument(
+        "--permutations-n",
+        type=int,
+        default=DEFAULT_PERMUTATIONS_N,
+        metavar="P",
+        help=(
+            "Circular-shift permutations for the empirical null on the "
+            f"spectral ratios. Default: {DEFAULT_PERMUTATIONS_N}."
+        ),
+    )
+    stats.add_argument(
+        "--ci-alpha",
+        type=float,
+        default=DEFAULT_CI_ALPHA,
+        metavar="A",
+        help=(
+            f"Two-sided alpha for the percentile bootstrap CI. "
+            f"Default: {DEFAULT_CI_ALPHA} (90%% CI)."
+        ),
+    )
+    stats.add_argument(
+        "--random-seed",
+        type=int,
+        default=DEFAULT_RANDOM_SEED,
+        metavar="S",
+        help=(
+            "RNG seed for the bootstrap and permutation draws. "
+            f"Default: {DEFAULT_RANDOM_SEED}. The seed is recorded in "
+            "periodicity.metadata.json so a reviewer can reproduce the "
+            "exact CI / p-value bounds."
+        ),
     )
     return parser
 
@@ -266,6 +330,11 @@ def run(argv: Iterable[str]) -> int:
         min_mean_coverage=float(args.min_mean_coverage),
         min_total_counts=int(args.min_total_counts),
         render_plots=bool(args.render_plots),
+        compute_stats=bool(args.compute_stats),
+        n_bootstrap=int(args.bootstrap_n),
+        n_permutations=int(args.permutations_n),
+        ci_alpha=float(args.ci_alpha),
+        random_seed=int(args.random_seed),
     )
 
     print(

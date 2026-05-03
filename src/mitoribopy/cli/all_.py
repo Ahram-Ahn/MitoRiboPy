@@ -12,7 +12,7 @@ Invocation pattern::
 
 The YAML (or JSON / TOML) config has three optional sections::
 
-    align:   { kit_preset: truseq_smallrna, fastq_dir: fastqs/, ... }
+    align:   { adapter: AGATCGGAAGAGC..., fastq_dir: fastqs/, ... }
     rpf:     { strain: h.sapiens, rpf: [29, 34], ... }
     rnaseq:  # one of:
              { rna_fastq: rna/, reference_fasta: tx.fa, condition_map: ..., ... }
@@ -47,11 +47,20 @@ from ._resume_guard import (
 )
 
 
-# Bumped whenever the run_manifest.json layout changes in a way that
-# breaks downstream consumers (added fields are minor; renamed or
-# removed fields are major). Read it from your own scripts to gate on a
-# compatible manifest shape.
-MANIFEST_SCHEMA_VERSION = "1.3.0"  # 1.3: + resource_plan (top-level execution audit, v0.6.2)
+# Manifest layout, schema version, and the run_manifest writer live in
+# pipeline/manifest.py (extracted from cli/all_.py in v0.7.0). Re-export
+# MANIFEST_SCHEMA_VERSION here so downstream code that imports it from
+# this module (the original location) keeps working.
+from ..pipeline.manifest import MANIFEST_SCHEMA_VERSION  # noqa: F401, E402
+from ..pipeline.manifest import (  # noqa: E402
+    build_stages_block as _build_stages_block,
+    git_commit as _git_commit,
+    lift_tool_versions as _lift_tool_versions,
+    read_stage_settings as _read_stage_settings,
+    sha256_of as _sha256_of,
+    write_manifest as _write_manifest,
+    yaml_dump as _yaml_dump,
+)
 
 
 ALL_SUBCOMMAND_HELP = (
@@ -70,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "This subcommand owns only the orchestrator flags. Stage-specific options live\n"
             "inside the config file sections whose keys match the subcommand flags\n"
-            "(with dashes replaced by underscores, e.g. '--kit-preset' -> 'kit_preset').\n"
+            "(with dashes replaced by underscores, e.g. '--adapter' -> 'adapter').\n"
             "  align:  keys for 'mitoribopy align --help'\n"
             "  rpf:    keys for 'mitoribopy rpf --help'\n"
             "  rnaseq: keys for 'mitoribopy rnaseq --help'\n"
@@ -168,7 +177,23 @@ def build_parser() -> argparse.ArgumentParser:
             "Print a commented YAML config template covering every stage "
             "(align / rpf / rnaseq) with sensible defaults, then exit. "
             "Pipe this into a file to start a new project: "
-            "'mitoribopy all --print-config-template > pipeline_config.yaml'."
+            "'mitoribopy all --print-config-template > pipeline_config.yaml'. "
+            "Pair with --profile to pick which template to emit (default: minimal)."
+        ),
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("minimal", "publication", "exhaustive"),
+        default="minimal",
+        help=(
+            "Template profile for --print-config-template. "
+            "'minimal' (default): the curated 80-line template with the "
+            "most-edited keys. 'publication': adds publication-readiness "
+            "defaults (--strict, rnaseq_mode=de_table, "
+            "fourier_bootstrap_n=200) so a methods-paper run uses the "
+            "right gates. 'exhaustive': prints the full annotated example "
+            "from examples/templates/pipeline_config.example.yaml — every "
+            "single flag with its default and a one-line comment."
         ),
     )
     parser.add_argument(
@@ -197,7 +222,12 @@ def build_parser() -> argparse.ArgumentParser:
             "  * align: --strict-publication-mode (fail on non-default "
             "policies that would invalidate a publication run);\n"
             "  * config: --strict on the up-front validate-config pass "
-            "(treat any deprecated-key rewrite as a hard error);\n"
+            "(treat any deprecated-key rewrite or unknown stage key as "
+            "a hard error);\n"
+            "  * rnaseq: refuse 'allow_pseudo_replicates_for_demo_not_"
+            "publication: true' and refuse 'rnaseq_mode: from_fastq' "
+            "(the mt-mRNA-only DE path) unless the user explicitly opts "
+            "back in via 'allow_exploratory_from_fastq_in_strict: true';\n"
             "  * figures: --strict on the post-run validate-figures pass "
             "(promote warn-only QC findings to fail);\n"
             "  * summary: warning rows in warnings.tsv are mirrored as "
@@ -329,6 +359,13 @@ def _normalize_align_inputs(
     if not align_cfg:
         return align_cfg
     cfg = dict(align_cfg)
+    if "kit_preset" in cfg:
+        raise ValueError(
+            "align.kit_preset: removed in v0.7.1. The user-facing kit-preset "
+            "input was retired in favour of adapter auto-detection. Use "
+            "'adapter: <SEQ>' to pin a 3' adapter, or 'pretrimmed: true' "
+            "for already-trimmed data."
+        )
     fastq_value = cfg.get("fastq")
     if isinstance(fastq_value, str):
         # String → directory shortcut. Promote to fastq_dir without
@@ -358,8 +395,9 @@ def _write_samples_block_as_tsv(
     Accepted item shape::
 
         - name: sampleA            # required
-          kit_preset: …            # all five fields are optional
-          adapter: …
+          adapter: …               # 3' adapter sequence (mutually
+                                    # exclusive with `pretrimmed`)
+          pretrimmed: true         # already-trimmed FASTQ
           umi_length: 8
           umi_position: 5p
           dedup_strategy: skip
@@ -372,8 +410,8 @@ def _write_samples_block_as_tsv(
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
     columns = (
         "sample",
-        "kit_preset",
         "adapter",
+        "pretrimmed",
         "umi_length",
         "umi_position",
         "umi_length_5p",
@@ -393,11 +431,16 @@ def _write_samples_block_as_tsv(
                 f"align.samples[{index}] is missing the required "
                 "'name' field (the FASTQ basename without extension)."
             )
+        if "kit_preset" in entry:
+            raise ValueError(
+                f"align.samples[{index}].kit_preset: removed in v0.7.1. "
+                "Use 'adapter' (3' sequence) or 'pretrimmed: true' instead."
+            )
         rows.append(
             {
                 "sample": str(sample),
-                "kit_preset": _stringify(entry.get("kit_preset")),
                 "adapter": _stringify(entry.get("adapter")),
+                "pretrimmed": _stringify_bool(entry.get("pretrimmed")),
                 "umi_length": _stringify(entry.get("umi_length")),
                 "umi_position": _stringify(entry.get("umi_position")),
                 "umi_length_5p": _stringify(entry.get("umi_length_5p")),
@@ -410,6 +453,24 @@ def _write_samples_block_as_tsv(
         for row in rows:
             handle.write("\t".join(row[col] for col in columns) + "\n")
     return tsv_path
+
+
+def _stringify_bool(value) -> str:
+    """Emit '', 'true', or 'false' for nullable boolean override cells."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    s = str(value).strip().lower()
+    if s in {"true", "yes", "1", "y", "t"}:
+        return "true"
+    if s in {"false", "no", "0", "n", "f"}:
+        return "false"
+    if s in {"", "na", "none", "null"}:
+        return ""
+    raise ValueError(
+        f"pretrimmed: expected boolean / blank, got {value!r}"
+    )
 
 
 def _stringify(value) -> str:
@@ -514,10 +575,11 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
             return 2
         align_cfg["fastq"] = [str(r.fastq_1) for r in ribo_rows]
         # Materialise per-sample overrides only when at least one Ribo
-        # row carries per-sample kit / UMI fields — otherwise leave the
-        # global align defaults in charge.
+        # row carries per-sample adapter / UMI fields — otherwise leave
+        # the global align defaults in charge.
         if any(
-            r.kit_preset or r.adapter or r.umi_length is not None
+            r.adapter or getattr(r, "pretrimmed", None) is not None
+            or r.umi_length is not None
             or r.umi_position or r.dedup_strategy
             or getattr(r, "umi_length_5p", None) is not None
             or getattr(r, "umi_length_3p", None) is not None
@@ -526,7 +588,7 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
             tsv_path = Path(run_root) / "align" / "sample_overrides.tsv"
             tsv_path.parent.mkdir(parents=True, exist_ok=True)
             cols = (
-                "sample", "kit_preset", "adapter",
+                "sample", "adapter", "pretrimmed",
                 "umi_length", "umi_position",
                 "umi_length_5p", "umi_length_3p",
                 "dedup_strategy",
@@ -536,8 +598,10 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
                 for r in ribo_rows:
                     row = {
                         "sample": r.sample_id,
-                        "kit_preset": _stringify(r.kit_preset),
                         "adapter": _stringify(r.adapter),
+                        "pretrimmed": _stringify_bool(
+                            getattr(r, "pretrimmed", None)
+                        ),
                         "umi_length": _stringify(r.umi_length),
                         "umi_position": _stringify(r.umi_position),
                         "umi_length_5p": _stringify(
@@ -664,6 +728,13 @@ _PERIODICITY_BLOCK_KEYS: dict[str, str] = {
     "enabled": "periodicity_enabled",
     "fourier_window_nt": "periodicity_fourier_window_nt",
     "metagene_nt": "periodicity_metagene_nt",
+    # v0.9.0 — metagene aggregation policy + Fourier statistical knobs.
+    "metagene_normalize": "periodicity_metagene_normalize",
+    "fourier_bootstrap_n": "periodicity_fourier_bootstrap_n",
+    "fourier_permutations_n": "periodicity_fourier_permutations_n",
+    "fourier_ci_alpha": "periodicity_fourier_ci_alpha",
+    "fourier_random_seed": "periodicity_fourier_random_seed",
+    "no_fourier_stats": "periodicity_no_fourier_stats",
 }
 
 
@@ -795,7 +866,7 @@ _CONFIG_TEMPLATE = """\
 # those per-stage inputs and a conflict is a hard error.
 #
 # Required columns: sample_id, assay (ribo|rna), condition, fastq_1
-# Optional columns: replicate, fastq_2, kit_preset, adapter, umi_length,
+# Optional columns: replicate, fastq_2, adapter, pretrimmed, umi_length,
 #                   umi_position, strandedness, dedup_strategy, exclude, notes
 #
 # samples:
@@ -803,22 +874,17 @@ _CONFIG_TEMPLATE = """\
 
 # ---- align -----------------------------------------------------------------
 align:
-  # Library chemistry. `auto` (default) detects the adapter family per
-  # sample by scanning the head of each FASTQ; mixed-kit and mixed-UMI
-  # batches are first-class. Set an explicit preset only when you need
-  # a per-sample fallback for samples whose adapter cannot be
-  # auto-identified.
-  kit_preset: auto                # auto | illumina_smallrna | illumina_truseq |
-                                  # illumina_truseq_umi | qiaseq_mirna |
-                                  # pretrimmed | custom
-                                  # (legacy aliases truseq_smallrna,
-                                  #  nebnext_smallrna, nebnext_ultra_umi
-                                  #  still accepted for back-compat)
-  adapter: null                   # explicit fallback adapter; required when
-                                  # kit_preset=custom and detection fails
+  # Adapter trimming. By default the pipeline auto-detects the 3'
+  # adapter by scanning the head of each FASTQ, so most projects only
+  # need to point at FASTQs and indexes. Override only when detection
+  # cannot identify your library.
+  adapter: null                   # 3' adapter sequence; pin when detection
+                                  # fails or you want to bypass the scan
+  pretrimmed: false               # set true when FASTQs are already
+                                  # adapter-trimmed (e.g. SRA-deposited)
   adapter_detection: auto         # auto | off | strict
-  umi_length: null                # overrides kit preset's UMI length
-  umi_position: null              # 5p | 3p
+  umi_length: null                # explicit UMI length when known
+  umi_position: null              # 5p | 3p | both
 
   # Adapter-detection tuning. Defaults are calibrated for typical
   # 36-150 nt sequencing libraries; touch only when detection is
@@ -860,24 +926,25 @@ align:
   # all samples and remain serial there.
   # max_parallel_samples: 1
 
-  # Per-sample overrides (mixed-UMI batches). Use this ONLY when not
-  # using the top-level `samples:` block; the unified sheet's
-  # umi_length / umi_position / kit_preset / dedup_strategy columns
-  # are the recommended way to declare per-sample overrides.
+  # Per-sample overrides (mixed-UMI / mixed-adapter batches). Use this
+  # ONLY when not using the top-level `samples:` block; the unified
+  # sheet's umi_length / umi_position / adapter / pretrimmed /
+  # dedup_strategy columns are the recommended way to declare per-sample
+  # overrides.
   # The 'name' field must match the FASTQ basename with .fq[.gz] /
   # .fastq[.gz] stripped. Any unset override field falls through to
   # the globals above.
   # samples:
   #   - name: sampleA
-  #     kit_preset: illumina_truseq_umi
+  #     adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
   #     umi_length: 8
   #     umi_position: 5p
   #   - name: sampleB
-  #     kit_preset: qiaseq_mirna
+  #     adapter: AACTGTAGGCACCATCAAT
   #     umi_length: 12
   #     umi_position: 3p
   #   - name: sampleC               # SRA-deposited, already adapter-clipped
-  #     kit_preset: pretrimmed
+  #     pretrimmed: true
   #     umi_length: 0
 
 # ---- rpf -------------------------------------------------------------------
@@ -971,284 +1038,101 @@ rpf:
 """
 
 
-def _print_config_template() -> None:
-    """Write the commented config template to stdout."""
-    sys.stdout.write(_CONFIG_TEMPLATE)
+# Publication-grade overlay appended to the minimal template when
+# --profile=publication is selected. Keeps the minimal template's
+# narrative intact and adds the gates a methods-paper run should set.
+_CONFIG_TEMPLATE_PUBLICATION_OVERLAY = """\
+
+# ---- publication-readiness profile (added by --profile=publication) -------
+# Recommended companion to `mitoribopy all --strict`. Every key below is
+# already accepted by the orchestrator; the overlay just makes the
+# publication-grade defaults explicit so a reviewer reading the YAML can
+# see that the run was gated correctly.
+
+# Run mode — fail loudly on anything that would invalidate a manuscript run.
+strict: true                               # CLI: --strict; gates align,
+                                           # config, rnaseq, validate-figures.
+
+# rnaseq stage: external full-transcriptome DE table is the publication
+# path. The from_fastq mode (mt-mRNA-only pyDESeq2) is for tutorials only
+# and is rejected under strict unless allow_exploratory_from_fastq_in_strict
+# is also set.
+# rnaseq:
+#   rnaseq_mode: de_table
+#   de_table: /path/to/de_table.tsv
+#   reference_gtf: /path/to/reference.fa
+#   condition_map: /path/to/conditions.tsv
+#   condition_a: control
+#   condition_b: knockdown
+
+# Periodicity statistical hardening — explicit defaults so the manifest
+# records the bootstrap CI + permutation null parameters that produced
+# the headline `spectral_ratio_3nt_ci_*` and `permutation_p` columns.
+periodicity:
+  fourier_bootstrap_n: 200                 # iters for the percentile CI over genes
+  fourier_permutations_n: 200              # iters for the circular-shift null
+  fourier_ci_alpha: 0.10                   # 90% CI; lower = wider band
+  fourier_random_seed: 42                  # recorded in periodicity.metadata.json
+  metagene_normalize: per_gene_unit_mean   # default; pin explicitly so a
+                                           # downstream reader sees the
+                                           # depth-weighting bias is removed
+"""
 
 
-def _sha256_of(path: Path) -> str | None:
-    try:
-        digest = hashlib.sha256()
-        with Path(path).open("rb") as handle:
-            for chunk in iter(lambda: handle.read(65536), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-    except OSError:
-        return None
+def _exhaustive_template_path() -> "Path | None":
+    """Return the bundled exhaustive YAML template, or None if missing.
 
-
-def _read_stage_settings(stage_dir: Path) -> dict | None:
-    path = stage_dir / "run_settings.json"
-    if not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-
-
-def _git_commit() -> str | None:
-    """Best-effort current git commit — never raises.
-
-    Returns ``None`` when not in a repo, when git is missing, or when
-    the call fails for any reason. Intentionally cheap; we never want
-    a manifest write to fail because git is misconfigured.
+    The exhaustive template lives under examples/templates/ in the repo
+    layout. When the package is pip-installed (no examples/ alongside),
+    the file is unreachable; the caller falls back to the minimal
+    template with a stderr note in that case.
     """
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
+    candidates = [
+        # repo layout: src/mitoribopy/cli/all_.py → ../../../examples/templates/...
+        Path(__file__).resolve().parent.parent.parent.parent
+        / "examples" / "templates" / "pipeline_config.example.yaml",
+    ]
+    for p in candidates:
+        if p.is_file():
+            return p
+    return None
+
+
+def _print_config_template(profile: str = "minimal") -> None:
+    """Write the commented config template for *profile* to stdout.
+
+    Profiles:
+      * minimal      — the curated short template (default; backwards-compat
+                       with pre-v0.7.0 callers that did not pass a profile).
+      * publication  — minimal + a publication-readiness overlay
+                       (--strict + rnaseq_mode=de_table + Fourier stats
+                       defaults).
+      * exhaustive   — the full annotated example from examples/templates/.
+    """
+    profile = (profile or "minimal").lower()
+    if profile == "exhaustive":
+        path = _exhaustive_template_path()
+        if path is None:
+            sys.stderr.write(
+                "[mitoribopy all] WARNING: exhaustive template not found "
+                "(this happens when the package is pip-installed without "
+                "the examples/ directory). Falling back to the minimal "
+                "template.\n"
+            )
+            sys.stdout.write(_CONFIG_TEMPLATE)
+            return
+        sys.stdout.write(path.read_text(encoding="utf-8"))
+        return
+    if profile == "publication":
+        sys.stdout.write(_CONFIG_TEMPLATE)
+        sys.stdout.write(_CONFIG_TEMPLATE_PUBLICATION_OVERLAY)
+        return
+    if profile != "minimal":
+        sys.stderr.write(
+            f"[mitoribopy all] WARNING: unknown --profile={profile!r}; "
+            "falling back to 'minimal'.\n"
         )
-    except (FileNotFoundError, subprocess.SubprocessError, OSError):
-        return None
-    if out.returncode != 0:
-        return None
-    sha = out.stdout.strip()
-    return sha or None
-
-
-def _yaml_dump(payload: dict) -> str:
-    """YAML dump if PyYAML is available, JSON fallback otherwise.
-
-    The fallback is intentional: `--print-canonical-config` needs to
-    work in lean install environments where PyYAML is not installed.
-    JSON is a strict subset of YAML so the output remains valid YAML.
-    """
-    try:
-        import yaml  # type: ignore[import-not-found]
-    except ImportError:
-        return json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    return yaml.safe_dump(
-        payload, sort_keys=True, default_flow_style=False, allow_unicode=True
-    )
-
-
-def _build_stages_block(
-    stages_run: list[str],
-    stages_skipped: list[str],
-    runtimes: dict[str, float],
-    skip_reasons: dict[str, str],
-) -> dict[str, dict]:
-    """Reshape parallel run/skipped lists into a {stage: {status, ...}} map.
-
-    Status values:
-    * ``completed`` — the stage executed successfully.
-    * ``skipped``   — the stage was not configured or was skipped via
-                      --skip-* / --resume; ``reason`` carries the trigger.
-    """
-    out: dict[str, dict] = {}
-    for stage in ("align", "rpf", "rnaseq"):
-        if stage in stages_run:
-            out[stage] = {"status": "completed"}
-            if stage in runtimes:
-                out[stage]["runtime_seconds"] = round(runtimes[stage], 3)
-        elif stage in stages_skipped:
-            entry: dict = {"status": "skipped"}
-            reason = skip_reasons.get(stage)
-            if reason:
-                entry["reason"] = reason
-            out[stage] = entry
-        else:
-            out[stage] = {"status": "not_configured"}
-    return out
-
-
-def _lift_tool_versions(
-    align: dict | None, rpf: dict | None, rnaseq: dict | None
-) -> dict[str, str]:
-    """Pull tool versions out of per-stage run_settings.json files.
-
-    Stages already record (varying subsets of) their tool versions in
-    their own run_settings; this just lifts whatever's there into a
-    flat top-level map. Missing keys stay missing — we don't probe.
-    """
-    out: dict[str, str] = {}
-    out["python"] = platform.python_version()
-    out["mitoribopy"] = __version__
-    for settings in (align, rpf, rnaseq):
-        if not isinstance(settings, dict):
-            continue
-        tools = settings.get("tools")
-        if isinstance(tools, dict):
-            for k, v in tools.items():
-                if v is not None and k not in out:
-                    out[k] = str(v)
-        # Some stages stash individual tool versions at the top level.
-        for legacy_key in (
-            "cutadapt_version",
-            "bowtie2_version",
-            "umi_tools_version",
-            "pysam_version",
-            "pydeseq2_version",
-        ):
-            v = settings.get(legacy_key)
-            if v is not None:
-                tool_name = legacy_key.removesuffix("_version")
-                out.setdefault(tool_name, str(v))
-    return out
-
-
-def _write_manifest(
-    output_dir: Path,
-    manifest_name: str,
-    *,
-    stages_run: list[str],
-    stages_skipped: list[str],
-    align_settings: dict | None,
-    rpf_settings: dict | None,
-    rnaseq_settings: dict | None,
-    config_canonical: dict,
-    config_source_path: str | None,
-    sample_sheet_path: str | None,
-    command_argv: list[str],
-    runtimes: dict[str, float],
-    skip_reasons: dict[str, str],
-    total_runtime_seconds: float | None = None,
-) -> Path:
-    """Write the v1.0.0 ``run_manifest.json`` for an ``all`` run.
-
-    Layout (top-level keys):
-    * ``schema_version``       — version of THIS layout (see
-                                 :data:`MANIFEST_SCHEMA_VERSION`).
-    * ``mitoribopy_version``
-    * ``git_commit``           — current commit when run inside a repo,
-                                 ``null`` otherwise.
-    * ``command``              — the original argv joined with spaces.
-    * ``config_source``        — path to the user-supplied YAML.
-    * ``config_source_sha256`` — SHA256 of that file as the user wrote
-                                 it (useful for "is this the same input
-                                 I used last time?" diffs).
-    * ``config_canonical``     — the merged + auto-wired config that
-                                 actually drove the run.
-    * ``sample_sheet``         — path to the unified sheet, when set.
-    * ``sample_sheet_sha256``  — its SHA256.
-    * ``reference_checksum``   — promoted from rpf settings (legacy
-                                 field; the rnaseq subcommand reads
-                                 this directly).
-    * ``stages``               — ``{align: {...}, rpf: {...}, rnaseq: {...}}``
-                                 with ``status`` + optional
-                                 ``runtime_seconds`` / ``reason``.
-    * ``align`` / ``rpf`` / ``rnaseq``
-                              — full per-stage run_settings.json
-                                copies (kept as-is for back-compat).
-    * ``tools``                — flat ``{tool: version}`` map lifted
-                                 from per-stage settings.
-    * ``warnings``             — structured warnings collected by
-                                 ``mitoribopy.io.warnings_log`` during
-                                 the run, mirrored to ``warnings.tsv``.
-    * ``outputs``              — outputs_index rows (output_type,
-                                 stage, path, description,
-                                 recommended_for, schema_version).
-                                 Same data is also written to
-                                 ``outputs_index.tsv`` (P5.8).
-    * ``runtime_seconds``      — total wall time for the orchestrator;
-                                 per-stage values live under
-                                 ``stages.<stage>.runtime_seconds`` (P5.8).
-    * ``platform``             — :func:`platform.platform` string (P5.8).
-    * ``python_version``       — running Python version (P5.8).
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    from ..io.outputs_index import (
-        build_outputs_index_rows,
-        write_outputs_index,
-    )
-    from ..io.schema_versions import OUTPUT_SCHEMA_VERSIONS
-    from ..io.warnings_log import collected as _collected_warnings
-    from ..io.warnings_log import flush_tsv as _flush_warnings_tsv
-
-    structured_warnings = [w.as_dict() for w in _collected_warnings()]
-    _flush_warnings_tsv(output_dir / "warnings.tsv")
-    # P5.8: write outputs_index.tsv before the manifest so the manifest
-    # can reference the same row set under "outputs".
-    write_outputs_index(output_dir)
-    outputs_rows = build_outputs_index_rows(output_dir)
-
-    # v0.6.2: lift resource_plan.json into the manifest so a downstream
-    # script does not have to re-read the sidecar file. The path is
-    # written by the orchestrator before any stage runs; we tolerate a
-    # missing file (e.g. permissions issues) and just record null.
-    resource_plan_blob: dict | None = None
-    plan_path = output_dir / "resource_plan.json"
-    if plan_path.is_file():
-        try:
-            resource_plan_blob = json.loads(plan_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            resource_plan_blob = None
-
-    manifest: dict = {
-        "schema_version": MANIFEST_SCHEMA_VERSION,
-        "subcommand": "all",
-        "mitoribopy_version": __version__,
-        "git_commit": _git_commit(),
-        "command": "mitoribopy all " + " ".join(command_argv),
-        "config_source": config_source_path,
-        "config_source_sha256": (
-            _sha256_of(Path(config_source_path)) if config_source_path else None
-        ),
-        "config_canonical": config_canonical,
-        "sample_sheet": sample_sheet_path,
-        "sample_sheet_sha256": (
-            _sha256_of(Path(sample_sheet_path)) if sample_sheet_path else None
-        ),
-        "stages": _build_stages_block(
-            stages_run, stages_skipped, runtimes, skip_reasons
-        ),
-        "align": align_settings,
-        "rpf": rpf_settings,
-        "rnaseq": rnaseq_settings,
-        "tools": _lift_tool_versions(align_settings, rpf_settings, rnaseq_settings),
-        # P1.12: schema versions for every advertised output TSV. A
-        # downstream script can `jq .output_schemas.te_tsv` and gate on
-        # a compatible major version.
-        "output_schemas": dict(OUTPUT_SCHEMA_VERSIONS),
-        # P1.11: structured warnings collected by mitoribopy.io.warnings_log
-        # during the run; mirrored to <output>/warnings.tsv for diff-friendly
-        # consumption.
-        "warnings": structured_warnings,
-        # P5.8: outputs_index — same rows as outputs_index.tsv. Lets a
-        # script depending on the manifest alone enumerate every TSV /
-        # plot / sidecar the run advertised.
-        "outputs": outputs_rows,
-        # P5.8: top-level runtime + platform metadata required by §8.
-        "runtime_seconds": (
-            float(total_runtime_seconds)
-            if total_runtime_seconds is not None
-            else sum(runtimes.values())
-        ),
-        "platform": platform.platform(),
-        "python_version": platform.python_version(),
-        # v0.6.2: orchestrator-level resource plan (mirrors
-        # <run_root>/resource_plan.json). null when the orchestrator
-        # could not write the sidecar.
-        "resource_plan": resource_plan_blob,
-    }
-
-    # Promote rpf's reference_checksum so future rnaseq invocations
-    # reading this manifest directly can find it without drilling into
-    # the rpf section.
-    if rpf_settings and rpf_settings.get("reference_checksum"):
-        manifest["reference_checksum"] = rpf_settings["reference_checksum"]
-
-    path = output_dir / manifest_name
-    path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
-    )
-    return path
+    sys.stdout.write(_CONFIG_TEMPLATE)
 
 
 # ---------------------------------------------------------------------------
@@ -1430,7 +1314,7 @@ def run(argv: Iterable[str]) -> int:
     common.apply_common_arguments(args)
 
     if args.print_config_template:
-        _print_config_template()
+        _print_config_template(profile=getattr(args, "profile", "minimal"))
         return 0
 
     if args.print_canonical_config:
@@ -1560,6 +1444,46 @@ def run(argv: Iterable[str]) -> int:
     # config_canonical blob records the resolved value.
     if has_rnaseq:
         config["rnaseq"]["rnaseq_mode"] = rnaseq_mode
+
+    # Publication-safe gates on the rnaseq stage. The in-tree from-FASTQ
+    # path runs pyDESeq2 on the mt-mRNA subset only and is exploratory;
+    # pseudo-replicates are never valid biological replicates. Both are
+    # fail-fast under --strict so a manuscript run cannot accidentally
+    # ship results that look like full-transcriptome DE.
+    if getattr(args, "strict", False) and has_rnaseq:
+        rnaseq_cfg = config.get("rnaseq", {}) or {}
+        allow_pseudo = bool(
+            rnaseq_cfg.get("allow_pseudo_replicates")
+            or rnaseq_cfg.get("allow-pseudo-replicates")
+            or rnaseq_cfg.get("allow_pseudo_replicates_for_demo_not_publication")
+        )
+        if allow_pseudo:
+            print(
+                "[mitoribopy all] ERROR: --strict refuses "
+                "rnaseq.allow_pseudo_replicates=true. Pseudo-replicates "
+                "are not valid biological replicates; the resulting "
+                "p-values are not publication-grade. Re-run without "
+                "--strict if you intentionally want demo / exploratory "
+                "output.",
+                file=sys.stderr,
+            )
+            return 2
+        if has_fastq_mode and not rnaseq_cfg.get(
+            "allow_exploratory_from_fastq_in_strict"
+        ):
+            print(
+                "[mitoribopy all] ERROR: --strict refuses "
+                "rnaseq_mode=from_fastq. The in-tree from-FASTQ path runs "
+                "pyDESeq2 on the mt-mRNA subset only — that is not a "
+                "full-transcriptome DE result and should not back a "
+                "manuscript figure. Use rnaseq_mode=de_table with an "
+                "external full-transcriptome DESeq2 / Xtail / Anota2Seq "
+                "table instead. To override (NOT for publication), set "
+                "rnaseq.allow_exploratory_from_fastq_in_strict: true in "
+                "your config.",
+                file=sys.stderr,
+            )
+            return 2
 
     _auto_wire_paths(
         config,

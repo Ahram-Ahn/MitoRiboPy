@@ -529,6 +529,12 @@ def run_codon_correlation(
             fit = _fit_regression(x, y, method=regression)
             slope = float(fit["slope"])
             intercept = float(fit["intercept"])
+            # Theil-Sen returns a 95 % CI on the slope (scipy default
+            # alpha=0.05). For other regressions the keys are absent;
+            # we record NaN so the summary TSV / sidecar columns are
+            # still well-defined.
+            slope_ci_low = float(fit.get("slope_ci_low", float("nan")))
+            slope_ci_high = float(fit.get("slope_ci_high", float("nan")))
             # Predict over the full table (including low-support codons)
             # so the residual column covers every row.
             full_pred = slope * merged_current["base_metric"].to_numpy() + intercept
@@ -648,13 +654,18 @@ def run_codon_correlation(
                 axis_min=axis_min,
                 axis_max=axis_max,
             )
+            slope_ci_str = (
+                f"slope = {slope:.3f}  95% CI [{slope_ci_low:.3f}, {slope_ci_high:.3f}]"
+                if math.isfinite(slope_ci_low) and math.isfinite(slope_ci_high)
+                else f"slope = {slope:.3f}"
+            )
             stat_lines = [
                 f"metric = {metric}",
                 f"regression = {regression}",
                 f"r (transformed) = {r_value:.3f}",
                 f"Spearman rho = {spearman_r:.3f}",
                 f"Kendall tau = {kendall_tau:.3f}",
-                f"slope = {slope:.3f}",
+                slope_ci_str,
                 f"intercept = {intercept:.3f}",
                 f"N primary = {int(primary_mask.sum())}",
                 f"N total = {len(merged_current)}",
@@ -732,6 +743,22 @@ def run_codon_correlation(
             # ``codon_correlation.metadata.json`` still records the
             # cross-plot policy (metric, regression, support_min_raw).
             n_pts = int(len(merged_current))
+            # v0.7.0: surface the robust-fit slope + CI in the sidecar
+            # so validate-figures (and any downstream tooling reading
+            # the JSON) can audit the fit quality without re-running
+            # scipy.
+            fit_extra: dict = {
+                "regression": str(regression),
+                "slope": float(slope),
+                "intercept": float(intercept),
+                "slope_ci_low": (
+                    float(slope_ci_low) if math.isfinite(slope_ci_low) else None
+                ),
+                "slope_ci_high": (
+                    float(slope_ci_high) if math.isfinite(slope_ci_high) else None
+                ),
+                "slope_ci_alpha": 0.05,
+            }
             write_plot_metadata(
                 out_png,
                 plot_type="codon_correlation_scatter",
@@ -741,6 +768,7 @@ def run_codon_correlation(
                 n_points_drawn=n_pts,
                 formats=["png", "svg"],
                 dpi=300,
+                extra=fit_extra,
             )
             log_info("COR", f"Plot saved => {out_svg} (+ 300 dpi PNG)")
 
@@ -756,6 +784,8 @@ def run_codon_correlation(
                 "Spearman_r": spearman_r,
                 "Kendall_tau": kendall_tau,
                 "RobustSlope": slope,
+                "RobustSlope_CI_low": slope_ci_low,
+                "RobustSlope_CI_high": slope_ci_high,
                 "RobustIntercept": intercept,
                 "NumCodons": len(merged_current),
                 "NumCodonsPrimary": int(primary_mask.sum()),

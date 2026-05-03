@@ -1,0 +1,40 @@
+# MitoRiboPy smoke fixture — expected output files.
+#
+# Format: one path per line, relative to the run root passed to
+# `mitoribopy all --output`. Comments (#) and blank lines are ignored
+# by tests/test_smoke_fixture.py.
+#
+# Every listed file MUST exist after a successful smoke run. We assert
+# existence and non-zero size; we do NOT assert content hashes because
+# the synthetic FASTQs are RNG-derived and the alignment + offset
+# selection numbers depend on the exact randint draws.
+
+# --- Top-level provenance ----------------------------------------------------
+run_manifest.json
+canonical_config.yaml
+outputs_index.tsv
+warnings.tsv
+summary_qc.tsv
+SUMMARY.md
+
+# --- align stage -------------------------------------------------------------
+align/read_counts.tsv
+align/run_settings.json
+align/kit_resolution.tsv
+
+# --- rpf stage --------------------------------------------------------------
+rpf/rpf_counts.tsv
+rpf/run_settings.json
+
+# --- periodicity QC bundle (the v0.7.0 publication-readiness surface) -------
+rpf/qc/fourier_spectrum_combined.tsv
+rpf/qc/fourier_period3_score_combined.tsv
+rpf/qc/periodicity.metadata.json
+rpf/qc/strand_sanity.tsv
+rpf/qc/strand_sanity_per_transcript.tsv
+rpf/qc/metagene_start.tsv
+rpf/qc/metagene_stop.tsv
+
+# --- per-site translation profile + coverage --------------------------------
+rpf/translation_profile/p_site/codon_usage.csv
+rpf/translation_profile/a_site/codon_usage.csv

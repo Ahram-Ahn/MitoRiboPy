@@ -1,5 +1,5 @@
 # MitoRiboPy align -- exhaustive config example for `mitoribopy align --config`.
-# Compatible with: MitoRiboPy 0.4.5+
+# Compatible with: MitoRiboPy 0.7.0+
 #
 # This is a FLAT YAML (no `align:` wrapper). Pass it to the standalone
 # align subcommand:
@@ -39,17 +39,18 @@
 # mt_index: input_data/indexes/mt_tx              # bowtie2 prefix
 # output: results/align                           # output directory
 
-# --- Library prep / kit ------------------------------------------------
-kit_preset: auto                       # auto | illumina_smallrna | illumina_truseq |
-                                       # illumina_truseq_umi | qiaseq_mirna |
-                                       # pretrimmed | custom
-# adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA   # required when kit_preset=custom
+# --- Library prep / adapter --------------------------------------------
+# Auto-detection is the default; pin `adapter:` only when detection
+# cannot identify your library. `pretrimmed: true` declares already-
+# trimmed FASTQs and is mutually exclusive with `adapter:`.
+# adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+# pretrimmed: true                     # already-trimmed FASTQs
 # umi_length: 8                        # global UMI override
-# umi_position: 5p                     # 5p | 3p
+# umi_position: 5p                     # 5p | 3p | both
 # sample_overrides: per_sample_overrides.tsv
-                                       # for mixed-UMI batches; columns: sample,
-                                       # kit_preset, adapter, umi_length,
-                                       # umi_position, dedup_strategy
+                                       # for mixed-UMI / mixed-adapter batches;
+                                       # columns: sample, adapter, pretrimmed,
+                                       # umi_length, umi_position, dedup_strategy
 
 # --- Adapter detection -------------------------------------------------
 adapter_detection: auto                # auto | off | strict

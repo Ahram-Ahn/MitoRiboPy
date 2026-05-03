@@ -798,6 +798,75 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
             "metagene_start.tsv / metagene_stop.tsv plots. Default: 90."
         ),
     )
+    optional_group.add_argument(
+        "--periodicity-metagene-normalize",
+        "--periodicity_metagene_normalize",
+        choices=("per_gene_unit_mean", "none"),
+        default="per_gene_unit_mean",
+        help=(
+            "How metagene_{start,stop}.tsv aggregates per-transcript "
+            "signals. 'per_gene_unit_mean' (v0.9.0+ default) divides "
+            "each transcript's per-position density by its own mean "
+            "before averaging — removes the depth-weighting bias where "
+            "one high-expression transcript dominates the metagene "
+            "shape. 'none' reproduces the < v0.9.0 raw-position-count "
+            "sum for users that pinned to those numbers."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-fourier-bootstrap-n",
+        "--periodicity_fourier_bootstrap_n",
+        type=int,
+        default=None,
+        help=(
+            "Bootstrap iterations for the percentile CI on the metagene "
+            "Fourier ratio. Default: 200. Set to 0 to disable the CI "
+            "without disabling the permutation null."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-fourier-permutations-n",
+        "--periodicity_fourier_permutations_n",
+        type=int,
+        default=None,
+        help=(
+            "Circular-shift permutations for the empirical null on the "
+            "metagene Fourier ratio. Default: 200. Set to 0 to disable "
+            "the null without disabling the CI."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-fourier-ci-alpha",
+        "--periodicity_fourier_ci_alpha",
+        type=float,
+        default=None,
+        help=(
+            "Two-sided alpha for the Fourier percentile bootstrap CI. "
+            "Default: 0.10 (90%% CI)."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-fourier-random-seed",
+        "--periodicity_fourier_random_seed",
+        type=int,
+        default=None,
+        help=(
+            "RNG seed for the Fourier bootstrap + permutation draws. "
+            "Default: 42. Recorded in periodicity.metadata.json so a "
+            "reviewer can reproduce the exact CI / p-value bounds."
+        ),
+    )
+    optional_group.add_argument(
+        "--periodicity-no-fourier-stats",
+        "--periodicity_no_fourier_stats",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the bootstrap CI + circular-shift permutation null "
+            "on the metagene Fourier ratio. Faster, but the score "
+            "table loses CI / permutation_p columns."
+        ),
+    )
     return parser
 
 

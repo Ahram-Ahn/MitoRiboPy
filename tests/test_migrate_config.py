@@ -17,7 +17,6 @@ import pytest
 
 from mitoribopy import cli
 from mitoribopy.config.migrate import (
-    KIT_PRESET_LEGACY,
     LEGACY_ALIGN_TOPLEVEL,
     LEGACY_RPF_TOPLEVEL,
     STRAIN_SHORTCUTS,
@@ -29,7 +28,7 @@ from mitoribopy.config.migrate import (
 
 
 def test_migrate_renames_legacy_align_keys() -> None:
-    cfg = {"align": {"fastq_dir": "input/", "kit_preset": "auto"}}
+    cfg = {"align": {"fastq_dir": "input/"}}
     canonical, log = migrate(cfg)
     assert "fastq_dir" not in canonical["align"]
     assert canonical["align"]["fastq"] == "input/"
@@ -62,11 +61,13 @@ def test_migrate_strain_shortcuts() -> None:
     assert canonical["rpf"]["strain"] == "h.sapiens"
 
 
-def test_migrate_kit_preset_legacy() -> None:
-    for legacy, canonical_name in KIT_PRESET_LEGACY.items():
-        canonical, log = migrate({"align": {"kit_preset": legacy}})
-        assert canonical["align"]["kit_preset"] == canonical_name
-        assert any(legacy in line and canonical_name in line for line in log)
+def test_migrate_kit_preset_dropped_with_log() -> None:
+    """v0.7.1: kit_preset removed from user-facing input. The migrator
+    drops the key with a logged warning so the user knows to add an
+    explicit ``adapter:`` / ``pretrimmed:`` value if needed."""
+    canonical, log = migrate({"align": {"kit_preset": "truseq_smallrna"}})
+    assert "kit_preset" not in canonical["align"]
+    assert any("kit_preset" in line and "REMOVED" in line for line in log)
 
 
 def test_migrate_offset_pick_reference_value_rewrite() -> None:
@@ -85,23 +86,22 @@ def test_migrate_rnaseq_mode_value_rewrite() -> None:
     assert any("from-fastq" in line and "from_fastq" in line for line in log)
 
 
-def test_migrate_per_sample_kit_preset_rewrite() -> None:
-    """`align.samples[*].kit_preset` legacy values must also be rewritten."""
+def test_migrate_per_sample_kit_preset_dropped() -> None:
+    """`align.samples[*].kit_preset` must also be stripped (v0.7.1)."""
     cfg = {
         "align": {
             "samples": [
                 {"name": "A", "kit_preset": "truseq_smallrna"},
-                {"name": "B", "kit_preset": "illumina_smallrna"},  # already canonical
+                {"name": "B", "kit_preset": "illumina_smallrna"},
             ]
         }
     }
     canonical, log = migrate(cfg)
     samples = canonical["align"]["samples"]
-    assert samples[0]["kit_preset"] == "illumina_smallrna"
-    assert samples[1]["kit_preset"] == "illumina_smallrna"
+    assert "kit_preset" not in samples[0]
+    assert "kit_preset" not in samples[1]
     assert any(
-        "samples[0].kit_preset" in line and "truseq_smallrna" in line
-        for line in log
+        "samples[0].kit_preset" in line and "REMOVED" in line for line in log
     )
 
 
@@ -125,12 +125,12 @@ def test_migrate_flat_config_without_section_wrapper() -> None:
     assert canonical["strain"] == "h.sapiens"
     assert "merge_density" not in canonical
     assert canonical["codon_density_window"] is True
-    assert canonical["kit_preset"] == "illumina_smallrna"
+    assert "kit_preset" not in canonical
 
 
 def test_migrate_no_op_for_canonical_config() -> None:
     cfg = {
-        "align": {"fastq": "input/", "kit_preset": "illumina_smallrna"},
+        "align": {"fastq": "input/", "adapter": "AGATCGGAAGAGC"},
         "rpf": {"strain": "h.sapiens", "codon_density_window": True},
     }
     canonical, log = migrate(cfg)
@@ -169,11 +169,13 @@ def test_migrate_config_cli_stdout_emits_canonical_yaml(
     canonical = yaml.safe_load(captured.out)
     assert canonical["align"]["fastq"] == "input/"
     assert "fastq_dir" not in canonical["align"]
-    assert canonical["align"]["kit_preset"] == "illumina_smallrna"
+    # v0.7.1: kit_preset is dropped, not rewritten.
+    assert "kit_preset" not in canonical["align"]
     assert canonical["rpf"]["strain"] == "h.sapiens"
     assert canonical["rpf"]["codon_density_window"] is True
     # stderr: human-readable change log.
     assert "fastq_dir" in captured.err
+    assert "kit_preset" in captured.err
     assert "merge_density" in captured.err
 
 

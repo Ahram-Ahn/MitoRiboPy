@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MitoRiboPy rpf -- exhaustive shell-script template (rpf stage only).
-# Compatible with: MitoRiboPy 0.6.2+
+# Compatible with: MitoRiboPy 0.7.0+
 #
 # Runs only the rpf stage:
 #

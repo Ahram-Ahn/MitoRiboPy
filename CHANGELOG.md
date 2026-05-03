@@ -7,76 +7,351 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+Forward-looking entries only. Implemented changes are recorded under a
+versioned release header. Long-running design notes live in
+[`docs/developer/roadmap.md`](docs/developer/roadmap.md).
+
+### Planned
+- `mitoribopy all --print-config-template --profile {minimal,publication,exhaustive}`
+  as the single source of truth for example templates; the published
+  templates would be regenerated from this.
+- Bundled smoke fixture under `examples/smoke/` (tiny references + 1k
+  reads + expected-outputs manifest) so a fresh PyPI install can run a
+  30-second end-to-end sanity check.
+
+## [0.7.1] - 2026-05-02
+
 ### Changed (BREAKING)
-- **Periodicity QC bundle replaced with an aggregate-then-DFT metagene Fourier analysis.** The frame-fraction QC bundle (`qc_summary.tsv`/`.md`, `frame_counts_by_sample_length.tsv`, `frame_counts_by_gene.tsv`, `gene_periodicity.tsv`, `phase_score`) and the four named frame-heatmap plots (`frame_fraction_heatmap.svg`, `frame_by_length_heatmap.{png,svg}`, `read_length_periodicity_barplot.svg`, `gene_phase_score_dotplot.svg`) are removed. The Fourier-spectrum bundle is rewritten end-to-end: per-gene normalise (divide by window mean) → element-wise mean across qualifying transcripts → mean-centre → Hann window → direct DFT at exactly period 3.0 (not bin-snapped). New default window: **99 nt = 33 codons** (multiple of 3, no period-3 leakage); skip 5 codons after AUG (initiation peak) and 1 codon before stop (termination peak). The `utr3` region was dropped — human mt-mRNA 3' UTRs are too short for a meaningful 99-nt window, and the user-facing artefact is cleaner without a sparse third panel. New outputs: `fourier_spectrum_combined.tsv` and `fourier_period3_score_combined.tsv` (one row per `[sample, read_length, gene_set, region]`; `gene_set ∈ {combined, ATP86, ND4L4}`; `region ∈ {orf_start, orf_stop}`). The score table includes `spectral_ratio_3nt` and an `snr_call` tier (`excellent ≥ 10×`, `healthy ≥ 5×`, `modest ≥ 2×`, `broken < 2×`). **Three figures per (sample, read_length)**: `*_combined.png` (single trace per panel from canonical mt-mRNAs), `*_ATP86.png` (junction-bracketed ATP8/ATP6 bicistronic — top: ATP8 frame, bottom: ATP6 frame, windows overlapping at the bicistronic junction nt 177-202), `*_ND4L4.png` (junction-bracketed ND4L/ND4 — windows flank the 4-nt junction). Each panel shows the spectral_ratio_3nt and snr_call as in-figure annotations.
+- **Adapter-trimming UX simplified — kit-preset input removed.** The
+  user-facing `--kit-preset` flag, `align.kit_preset:` config key, and
+  `kit_preset` columns (sample sheet + sample-overrides TSV +
+  `align.samples:` YAML block) are gone. Auto-detection of the 3'
+  adapter is now the only path; pass `--adapter <SEQ>` (or
+  `adapter: <SEQ>` in YAML) when detection cannot identify the library,
+  and the new `--pretrimmed` flag (or `pretrimmed: true` in YAML)
+  declares already-trimmed FASTQs explicitly. Detection still
+  identifies named adapter families internally and reports the kit name
+  in `kit_resolution.tsv` (`detected_kit` and `applied_kit` columns) so
+  provenance is preserved — the asymmetry is intentional: kit names are
+  output for reporting, not input from users.
 
-  **Migration**: scripts that read `qc_summary.tsv` for the per-sample QC verdict should switch to `fourier_period3_score_combined.tsv` and filter by `gene_set == "combined"`, `region == "orf_start"` (or `"orf_stop"`); the headline column is `spectral_ratio_3nt`. Scripts that read `frame_counts_by_sample_length.tsv` to pick a best read length should use `mitoribopy summarize`'s output (which now reads from the Fourier score table). The `--phase-score`, `--periodicity-phase-score`, `--periodicity-exclude-start-codons`, `--periodicity-exclude-stop-codons`, `--periodicity-min-reads-per-length`, `--good-frame-fraction`, `--warn-frame-fraction`, `--min-reads-per-length`, `--min-reads-per-gene`, `--exclude-start-codons`, `--exclude-stop-codons` CLI flags are removed. The standalone `mitoribopy periodicity` subcommand now exposes `--fourier-window-nt`, `--drop-codons-after-start`, `--drop-codons-before-stop`, `--min-mean-coverage`, `--min-total-counts`, `--no-plots` instead. The annotation `sequence_aliases` field (already populated by `_apply_bicistronic_defaults` for ATP86 / ND4L4) is now consulted by the chrom-to-transcript lookup, so fused-FASTA datasets resolve to BOTH constituent transcripts (ATP8 + ATP6 / ND4L + ND4) for the bicistronic-figure panels.
+  **Migration:**
+  - `--kit-preset illumina_smallrna` → `--adapter TGGAATTCTCGGGTGCCAAGG`
+  - `--kit-preset illumina_truseq` → `--adapter AGATCGGAAGAGCACACGTCTGAACTCCAGTCA`
+  - `--kit-preset illumina_truseq_umi` → same `--adapter` plus `--umi-length 8 --umi-position 5p`
+  - `--kit-preset qiaseq_mirna` → `--adapter AACTGTAGGCACCATCAAT --umi-length 12 --umi-position 3p`
+  - `--kit-preset pretrimmed` → `--pretrimmed`
+  - `--kit-preset auto` → omit (this is the default)
+  - YAML / sample-sheet `kit_preset:` entries: replace with `adapter:` /
+    `pretrimmed:` per the same mapping. `mitoribopy migrate-config`
+    drops the key with a logged warning so you can review case-by-case.
+  - The `--adapter-detection off` mode now requires `--adapter` or
+    `--pretrimmed` (previously required `--kit-preset`).
+  - `KIT_PRESET_ALIASES` and `resolve_kit_alias()` are removed (legacy
+    vendor names like `truseq_smallrna` / `nebnext_smallrna` no longer
+    needed canonicalisation since the user input vector is gone).
 
-  Statistical hardening (bootstrap CI over genes, circular-shift permutation null) is marked TODO in `src/mitoribopy/analysis/fourier_spectrum.py` — the `spectral_ratio_3nt` value does not change, but the `amp_3nt_ci_low/high` and `permutation_p` columns are not yet populated. Implement when reviewers ask.
-- **Native dual-end UMI support.** `umi_position` accepts `both` (alongside `5p` / `3p`); `--umi-length-5p` and `--umi-length-3p` flags + matching sample-sheet columns wire dual-end UMI libraries (xGen Duplex, Twist) through cutadapt's two-pass trim. Pass 1 extracts the 5' UMI; pass 2 extracts the 3' UMI and APPENDS to the QNAME so umi_tools dedups on the concatenated `<5pUMI><3pUMI>` token. `recommend_umi_method` now uses the combined length when picking `directional` vs `unique`.
-- **Per-plot `.metadata.json` sidecars** for codon-correlation scatters, translation-profile footprint-density depth plots, and codon-usage bar plots. Eliminates `FIGURE_QC_WARN` in `mitoribopy validate-figures` for those three families. Folder-level `codon_correlation.metadata.json` is preserved (downstream tooling references it) — the per-plot sidecar coexists with it.
+  Internal sentinels (`pretrimmed`, `custom`) and the named adapter-
+  family presets (`illumina_smallrna`, `illumina_truseq`,
+  `illumina_truseq_umi`, `qiaseq_mirna`) remain in
+  `mitoribopy.align._types.KIT_PRESETS` because the detector still
+  emits them as the `applied_kit` / `detected_kit` labels.
 
-### Removed (BREAKING)
-- **`fft_period3_power.tsv` and the `--fft-period3` / `--periodicity-fft-period3` flags.** The single-scalar `power[k=1/3] / median(background)` computation collapsed too much information. Replaced by the metagene Fourier bundle (see the BREAKING entry above). Migration: scripts that read `fft_period3_power.tsv` should switch to `fourier_period3_score_combined.tsv` (`spectral_ratio_3nt` column with the `snr_call` tier).
+- **`SampleOverride` dataclass:** `kit_preset` field replaced with
+  `pretrimmed: bool | None`. `mitoribopy.align._types.SampleOverride`
+  imports that referenced `kit_preset` need updating.
 
-- **Per-frame split coverage plot.** New
+- **`SampleRow` dataclass:** `kit_preset` field replaced with
+  `pretrimmed: bool | None`. Sample sheets carrying a `kit_preset`
+  column raise `SampleSheetError` with a migration message.
+
+- **`run_settings.json`:** `kit_preset_default` field removed; replaced
+  with `pretrimmed_default: bool` alongside the existing
+  `adapter_default`.
+
+## [0.7.0] - 2026-05-02
+
+### Publication-readiness — consolidated release
+
+This is the publication-grade snapshot of MitoRiboPy. It supersedes
+the in-flight v0.8.0 / v0.9.0 / v0.9.1 entries that previously sat
+between v0.6.2 and HEAD: those bumps were the cumulative iteration
+notes for the periodicity rewrite, the statistical hardening, and the
+follow-through wiring. Re-issued here as a single v0.7.0 release
+because there is no public artefact for v0.8.x / v0.9.x and a coherent
+SemVer trajectory v0.6.2 → v0.7.0 → v1.0.0 (API freeze) is preferable
+to four-version churn for users who pin against PyPI.
+
+The biological invariant is preserved: TACO1-KO polyproline stalling
+in `MT-CO1` survives the metagene-Fourier rewrite, the new metagene
+normalisation default, the dedup defaults, and the offset-selection
+machinery (see [`docs/validation/taco1_ko_regression.md`](docs/validation/taco1_ko_regression.md)).
+
+### Changed (BREAKING)
+- **Periodicity QC bundle replaced with an aggregate-then-DFT metagene
+  Fourier analysis.** The frame-fraction QC bundle (`qc_summary.tsv` /
+  `qc_summary.md`, `frame_counts_by_sample_length.tsv`,
+  `frame_counts_by_gene.tsv`, `gene_periodicity.tsv`, `phase_score`)
+  and the four named frame-heatmap plots
+  (`frame_fraction_heatmap.svg`, `frame_by_length_heatmap.{png,svg}`,
+  `read_length_periodicity_barplot.svg`,
+  `gene_phase_score_dotplot.svg`) are removed. The Fourier-spectrum
+  bundle is rewritten end-to-end: per-gene normalise (divide by window
+  mean) → element-wise mean across qualifying transcripts →
+  mean-centre + linear detrend → Hann window → direct DFT at exactly
+  period 3.0 (not bin-snapped). Default window: **99 nt = 33 codons**
+  (multiple of 3, no period-3 leakage); skip 5 codons after AUG
+  (initiation peak) and 1 codon before stop (termination peak). The
+  `utr3` region is dropped — human mt-mRNA 3' UTRs are too short for a
+  meaningful 99-nt window. New outputs: `fourier_spectrum_combined.tsv`
+  and `fourier_period3_score_combined.tsv` (one row per `[sample,
+  read_length, gene_set, region]`; `gene_set ∈ {combined, ATP86,
+  ND4L4}`; `region ∈ {orf_start, orf_stop}`). Three figures per
+  `(sample, read_length)`: `*_combined.png` (single trace per panel
+  from canonical mt-mRNAs), `*_ATP86.png` (junction-bracketed
+  ATP8/ATP6 bicistronic — top: ATP8 frame, bottom: ATP6 frame, windows
+  overlapping at the bicistronic junction nt 177-202), `*_ND4L4.png`
+  (junction-bracketed ND4L/ND4 — windows flank the 4-nt junction).
+  Each panel shows the `spectral_ratio_3nt` and `snr_call` as
+  in-figure annotations.
+
+  **Migration**: scripts that read `qc_summary.tsv` for the per-sample
+  QC verdict should switch to `fourier_period3_score_combined.tsv` and
+  filter by `gene_set == "combined"`, `region == "orf_start"` (or
+  `"orf_stop"`); the headline column is `spectral_ratio_3nt`. Scripts
+  that read `frame_counts_by_sample_length.tsv` to pick a best read
+  length should use `mitoribopy summarize`'s output (which now reads
+  from the Fourier score table). The `--phase-score`,
+  `--periodicity-phase-score`, `--periodicity-exclude-start-codons`,
+  `--periodicity-exclude-stop-codons`, `--periodicity-min-reads-per-length`,
+  `--good-frame-fraction`, `--warn-frame-fraction`,
+  `--min-reads-per-length`, `--min-reads-per-gene`,
+  `--exclude-start-codons`, `--exclude-stop-codons` CLI flags are
+  removed. The standalone `mitoribopy periodicity` subcommand exposes
+  `--fourier-window-nt`, `--drop-codons-after-start`,
+  `--drop-codons-before-stop`, `--min-mean-coverage`,
+  `--min-total-counts`, `--no-plots`, plus the new statistical-
+  hardening flags listed below. The annotation `sequence_aliases`
+  field is consulted by the chrom-to-transcript lookup so fused-FASTA
+  datasets resolve to BOTH constituent transcripts (ATP8 + ATP6 /
+  ND4L + ND4) for the bicistronic-figure panels.
+
+- **Metagene aggregation defaults to per-gene unit-mean normalisation.**
+  `compute_metagene` now divides each transcript's per-position density
+  by its own mean before averaging, so a single high-expression
+  transcript no longer dominates the metagene shape (the Fourier path
+  was already per-gene-unit-mean; the metagene TSV / plot were not).
+  The legacy depth-weighted sum is preserved behind
+  `compute_metagene(..., normalize="none")`.
+  `metagene_{start,stop}.tsv` and the legacy alias
+  `periodicity_{start,stop}.tsv` gain new columns `normalize` and
+  `n_transcripts` plus a `# normalize: ...` header comment so the
+  flavour is unambiguous; the legacy alias also carries a
+  `# DEPRECATED: ... will be removed in v1.0.0` header. Plot y-axis
+  labels read `"P-site density (per-gene unit-mean)"` (vs. the legacy
+  `"P-site reads"` only when the user opts back into `normalize="none"`).
+  Exposed at the pipeline level via `mitoribopy rpf
+  --periodicity-metagene-normalize {per_gene_unit_mean,none}` and the
+  matching `metagene_normalize` key in the `mitoribopy all` YAML
+  `periodicity:` block.
+
+- **`from_fastq` rnaseq mode no longer surfaces Wald p-values.** The
+  in-tree pyDESeq2 path runs on the 13-mt-mRNA subset only; the
+  dispersion-shrinkage estimator is unreliable at that gene count, so
+  `de_table.tsv` and `rpf_de_table.tsv` written by the from-FASTQ
+  flow now have `padj = NA` for every row. `log2FoldChange` and
+  `baseMean` are preserved (point estimates remain meaningful). The
+  publication-grade flow (`rnaseq_mode=de_table` with an external
+  full-transcriptome DE table) is unchanged. New `nullify_padj`
+  parameter on `mitoribopy.rnaseq.de_analysis.deseq2_to_de_table` lets
+  a downstream caller opt into the same behaviour. Stderr prints a
+  banner explaining the choice when the from-FASTQ path runs.
+
+- **Native dual-end UMI support.** `umi_position` accepts `both`
+  (alongside `5p` / `3p`); `--umi-length-5p` and `--umi-length-3p`
+  flags + matching sample-sheet columns wire dual-end UMI libraries
+  (xGen Duplex, Twist) through cutadapt's two-pass trim. Pass 1
+  extracts the 5' UMI; pass 2 extracts the 3' UMI and APPENDS to the
+  QNAME so `umi_tools` dedups on the concatenated `<5pUMI><3pUMI>`
+  token. `recommend_umi_method` uses the combined length when picking
+  `directional` vs `unique`.
+
+### Added — statistical hardening
+- **Bootstrap CI + circular-shift permutation null for the metagene
+  Fourier QC.** `fourier_period3_score_combined.tsv` (schema bumped
+  to `1.1`) gains `amp_3nt_ci_{low,high}`,
+  `spectral_ratio_3nt(_local)_ci_{low,high}`, `permutation_p`,
+  `permutation_p_local`, plus audit fields `n_bootstrap`,
+  `n_permutations`, `ci_alpha`, `ci_method`, `null_method`.
+  Defaults: 200 bootstrap iterations + 200 circular-shift permutations
+  + 90 % percentile CI + RNG seed 42 (recorded in
+  `periodicity.metadata.json`). Vectorised via a precomputed DFT basis
+  matrix so the additional cost is on the order of seconds. New CLI
+  knobs on `mitoribopy periodicity`: `--bootstrap-n`,
+  `--permutations-n`, `--ci-alpha`, `--random-seed`, `--no-stats`.
+  Same knobs reachable from `mitoribopy rpf` via
+  `--periodicity-fourier-{bootstrap-n,permutations-n,ci-alpha,random-seed}`
+  and `--periodicity-no-fourier-stats`, and from `mitoribopy all` via
+  the YAML `periodicity:` block (`fourier_bootstrap_n`,
+  `fourier_permutations_n`, `fourier_ci_alpha`, `fourier_random_seed`,
+  `no_fourier_stats`). Below `MIN_GENES_FOR_BOOTSTRAP_CI = 3`
+  qualifying tracks the CI is skipped (NaN columns + `ci_method ==
+  "skipped_too_few_genes"`) rather than emitted at misleadingly tight
+  precision.
+
+### Added — provenance + audit
+- **`run_manifest.json` JSON Schema** at
+  `src/mitoribopy/data/run_manifest.schema.json` (draft 2020-12). Two
+  public helpers in `mitoribopy.data`: `load_run_manifest_schema()`
+  and `validate_run_manifest(manifest)`. The validator uses
+  `jsonschema` when available (added to the `[dev]` and new `[schema]`
+  extras) and falls back to a minimal required-key + type check
+  otherwise so the package gains no new hard dependency.
+  `mitoribopy all` validates its own manifest at the end of every
+  run; a schema drift records a `W_MANIFEST_SCHEMA_DRIFT` warning
+  (mirrored to `warnings.tsv` and embedded in the manifest under
+  `warnings`) rather than failing the run, so the user keeps every
+  other output. `tests/test_run_manifest_schema.py` validates a
+  representative manifest in CI.
+- **Per-(sample, transcript) strand-sanity audit.**
+  `<output>/rpf/qc/strand_sanity_per_transcript.tsv` (schema `1.0`) is
+  written alongside the per-sample summary so a localised antisense
+  bleed-through on one mt-mRNA (an unmasked NUMT, a misannotated
+  reference contig) surfaces at a glance instead of being averaged
+  away. Public helper:
+  `mitoribopy.analysis.periodicity.compute_per_transcript_strand_sanity`.
+  Both `strand_sanity.tsv` and `strand_sanity_per_transcript.tsv` are
+  registered in `outputs_index.tsv`.
+- **`E_OFFSET_FALLBACK_USED` warning** records (mirrored to
+  `warnings.tsv` and the manifest) when a per-sample offset table was
+  supplied but the requested sample is missing from it — the silent
+  fallback to the combined-across-samples offsets that previously
+  biased downstream codon-usage tables for that sample is now visible
+  to a reviewer. Per-(stage, sample) deduplication keeps the log
+  compact.
+
+### Added — packaging + reproducibility
+- **Bundled smoke fixture under [`examples/smoke/`](examples/smoke/).**
+  Three synthetic mt-mRNAs (`MT-CO1`, `MT-ND1`, `MT-ATP6`), two
+  samples (one WT, one KO), no UMIs, no contaminants. A user installs
+  `mitoribopy>=0.7.0` and runs `python generate_smoke_fastqs.py`
+  followed by `mitoribopy all --config pipeline_config.smoke.yaml
+  --output results/` — the whole pipeline (cutadapt → bowtie2 → BED →
+  offsets → translation profile → coverage → metagene Fourier QC)
+  finishes in 10–30 s and asserts every file in
+  [`expected_outputs.txt`](examples/smoke/expected_outputs.txt) exists +
+  is non-empty. New pytest marker `smoke`; `pytest -m smoke` re-runs
+  the same flow in CI when the external tools are available, skipped
+  cleanly otherwise. README's *Installation* section gains a
+  "30-second smoke test" callout.
+- **`mitoribopy all --print-config-template --profile {minimal,
+  publication,exhaustive}`** unifies the three template flavours behind
+  a single flag. `minimal` (default; backwards-compatible) is the
+  curated short template. `publication` appends a documented overlay
+  declaring `strict: true`, `rnaseq_mode: de_table` (commented),
+  and explicit Fourier statistical-hardening defaults
+  (`fourier_bootstrap_n: 200`, `fourier_permutations_n: 200`,
+  `fourier_ci_alpha: 0.10`, `metagene_normalize: per_gene_unit_mean`),
+  so a methods-paper run sees the right gates without hunting for
+  them. `exhaustive` prints the full annotated example from
+  [`examples/templates/pipeline_config.example.yaml`](examples/templates/pipeline_config.example.yaml).
+  Unknown profiles fall back to `minimal` with a warning. Tests in
+  [`tests/test_print_config_template_profiles.py`](tests/test_print_config_template_profiles.py).
+- **Theil-Sen slope CI surfaced through the codon-correlation outputs.**
+  The CI was always computed (`scipy.stats.theilslopes` returns
+  `lo_slope` / `hi_slope` by default) but was dropped before reaching
+  the user. v0.7.0 routes `RobustSlope_CI_low` / `RobustSlope_CI_high`
+  into the codon-correlation summary CSV, embeds them in the per-plot
+  metadata sidecar (under `slope`, `slope_ci_low`, `slope_ci_high`,
+  `slope_ci_alpha=0.05`), and renders them inline in the figure as
+  `slope = X.XXX  95% CI [lo, hi]`. Tests in
+  [`tests/test_codon_correlation_slope_ci.py`](tests/test_codon_correlation_slope_ci.py).
+- **`pipeline/manifest.py`** extracted from `cli/all_.py` (which had
+  grown past 2 350 LoC). The new module owns `MANIFEST_SCHEMA_VERSION`,
+  the manifest builder (`write_manifest`), and the helpers
+  (`sha256_of`, `read_stage_settings`, `git_commit`, `yaml_dump`,
+  `build_stages_block`, `lift_tool_versions`,
+  `W_MANIFEST_SCHEMA_DRIFT_CODE`). `cli/all_.py` re-exports the
+  public surface so downstream code that imports from the original
+  location keeps working; the CLI module is now ~300 lines smaller
+  (2 353 → 2 050 LoC). Tests in
+  [`tests/test_pipeline_manifest_module.py`](tests/test_pipeline_manifest_module.py).
+
+### Added — UX surfaces
+- **`SUMMARY.md` "Periodicity statistical confidence" section.**
+  `summary/render.py` reads the score TSV and renders a per-sample
+  table with `spectral_ratio_3nt`, its 90 % bootstrap CI, the
+  circular-shift permutation p, and the `snr_call` tier. A reviewer no
+  longer has to open the TSV to see the QC verdict + uncertainty.
+- **Fourier figure annotations show CI + permutation_p** inline next
+  to `spectral_ratio_3nt` (e.g. `8.42x  CI [6.10, 10.55]  p<0.001`).
+  The per-figure metadata sidecar embeds the same fields so
+  `validate-figures` can reason about them without re-reading the
+  score TSV.
+- **Per-plot `.metadata.json` sidecars** for codon-correlation
+  scatters, translation-profile footprint-density depth plots, and
+  codon-usage bar plots. Eliminates `FIGURE_QC_WARN` in
+  `mitoribopy validate-figures` for those three families.
+- **Per-frame split coverage plot.**
   `<output>/rpf/coverage_profile_plots/{p_site,a_site}_density_{rpm,raw}_frame_split/`
   directories complement the existing `_frame` overlay folders. Each
-  figure stacks three sub-rows per sample (frame 0, +1, +2) sharing the
-  y-axis, so low-frame signal at the same CDS position is no longer
-  hidden under tall same-position bars from another frame. Useful for
-  fused overlapping ORFs (e.g. human `ATP86` where the ATP6 ORF is
-  +2 nt offset from ATP8). Each folder ships a
-  `coverage_plot.metadata.json` sidecar with the same frame formula
-  and palette as the overlay variant. Implemented as
-  `_plot_frame_split` in
-  `src/mitoribopy/plotting/coverage_profile_plots.py`.
-- **Human mt-mRNA overlap-pair annotation.** `gene_periodicity.tsv`
-  gains an `is_overlap_pair` column (default on) flagging known
-  overlap regions: canonical names (`MT-ATP8`, `MT-ATP6`, `MT-ND4L`,
-  `MT-ND4`), no-hyphen short forms (`MTATP8`, …), AND the fused-ORF
-  spellings used by some FASTAs (`ATP86` = ATP8+ATP6,
-  `ND4L4` = ND4L+ND4 — including the bundled
-  `input_data/human-mt-mRNA.fasta`). Treat `is_overlap_pair=true` rows
-  as inherently ambiguous-frame even when their per-frame fractions
-  look clean. Public surface:
-  `mitoribopy.analysis.periodicity_qc.HUMAN_MT_OVERLAPPING_GENES` and
-  `is_known_overlap_gene(name)`.
-- **`exclude_start_codons` / `exclude_stop_codons` plumbed through the
-  pipeline path.** Added as parameters to `compute_frame_summary`,
-  `compute_frame_summary_by_length`, `build_gene_periodicity`,
-  `run_periodicity_qc`, and `run_periodicity_qc_bundle`. Defaults stay
-  at 0 to preserve historical pooled numbers; the standalone
-  `mitoribopy periodicity` CLI applies the spec defaults of 6 / 3
-  uniformly across the per-length and gene-level tables.
-- **`compute_phase_score` plumbing.** `run_periodicity_qc` now accepts
-  `compute_phase_score=True` and forwards it to
-  `run_periodicity_qc_bundle`. Previously the orchestrator hardcoded
-  it off and there was no override path.
-- **`periodicity.metadata.json` records `exclude_start_codons`,
-  `exclude_stop_codons`, and `phase_score_enabled`** alongside the
-  existing thresholds, so a reviewer can re-derive every periodicity
-  number from disk without re-running the CLI.
+  figure stacks three sub-rows per sample (frame 0, +1, +2) sharing
+  the y-axis, so low-frame signal is no longer hidden under tall
+  same-position bars from another frame.
+- **Stage-level config validation.** `mitoribopy validate-config`
+  rejects unknown keys inside `align`, `rpf`, `rnaseq`, `execution`,
+  and `periodicity` sections. Typos surface a `did you mean …`
+  suggestion via `difflib.get_close_matches`. `--strict` upgrades the
+  warning to a hard error.
+- **`CITATION.cff`** at the repository root for software citation. The
+  README's *Citation* section reproduces the suggested manuscript
+  block.
+- **Test coverage.** New test files: `test_fourier_stats.py`
+  (12 tests), `test_metagene_normalization.py` (5 tests),
+  `test_offset_fallback_warning.py` (5 tests),
+  `test_per_transcript_strand_sanity.py` (4 tests),
+  `test_from_fastq_padj_guard.py` (3 tests),
+  `test_run_manifest_schema.py` (9 tests),
+  `test_fourier_edge_cases.py` (11 tests for empty BED / zero-coverage
+  / short-CDS / single-period basis), and
+  `test_version_consistency.py` (cross-source version pin check).
+
+### Removed (BREAKING)
+- **`fft_period3_power.tsv` and the `--fft-period3` /
+  `--periodicity-fft-period3` flags.** Replaced by the metagene
+  Fourier bundle.
+- **`mark-duplicates` dedup strategy** (already removed in v0.4.5;
+  re-confirmed here as the publication-safe default — coordinate-only
+  dedup destroys codon-occupancy signal on low-complexity mt-Ribo-seq
+  libraries; see `docs/validation/taco1_ko_regression.md`).
 
 ### Fixed
 - **`build_qc_summary` `best_read_length_dominant_fraction` bug.** The
-  field was computed via a tortured `A and B or C` ternary that also
-  called `Series.get(...)` like a dict; in the case where the dominant
-  frame differed from the expected frame the value collapsed to the
-  expected-frame fraction instead of the actual maximum. Replaced with
-  a direct `max(f0, f1, f2)` from the chosen row.
-- **`build_qc_summary` depth-aware best-length pick.** Previously the
-  best read length was selected purely by `expected_frame_fraction`,
-  so a 5-read length with lucky frame-0 dominance could outrank a
-  5,000-read length at 0.75. Now the candidate pool is restricted to
-  rows clearing `min_reads_per_length` whenever any qualify; falls
-  back to all rows otherwise.
+  field was computed via a `A and B or C` ternary that also called
+  `Series.get(...)` like a dict; when the dominant frame differed
+  from the expected frame the value collapsed to the expected-frame
+  fraction instead of the actual maximum. Replaced with a direct
+  `max(f0, f1, f2)` from the chosen row.
+- **`build_qc_summary` depth-aware best-length pick.** The candidate
+  pool is now restricted to rows clearing `min_reads_per_length`
+  whenever any qualify, with fallback to all rows otherwise — a 5-read
+  length with lucky frame-0 dominance no longer outranks a 5,000-read
+  length at 0.75.
+- **`exclude_start_codons` / `exclude_stop_codons` plumbed through the
+  pipeline path** as parameters to `compute_frame_summary`,
+  `compute_frame_summary_by_length`, `build_gene_periodicity`,
+  `run_periodicity_qc`, and `run_periodicity_qc_bundle`.
 
-### Tests
-- New `tests/test_periodicity_refinements.py` covers the depth-aware
-  best-length pick, the dominant-fraction bug fix, the codon-edge
-  exclusion plumbing, and the overlap-pair helper (including the
-  fused-ORF spellings).
+### Notes
+- `MANIFEST_SCHEMA_VERSION` is at `1.3.0`. The `output_schemas` map
+  in the manifest records `fourier_period3_score_combined.tsv: "1.1"`
+  and `strand_sanity_per_transcript.tsv: "1.0"`. Downstream consumers
+  that gate on schema versions should accept the new minor version.
+- The `[schema]` optional-dependency extra installs `jsonschema` for
+  full draft 2020-12 validation of `run_manifest.json` without pulling
+  in the full dev tooling: `pip install 'mitoribopy[schema]'`.
+- `CLAUDE.md`'s back-compat-shim removal note now correctly cites
+  v1.0.0 (was the long-passed v0.4.0).
 
 ## [0.6.2] - 2026-05-01
 

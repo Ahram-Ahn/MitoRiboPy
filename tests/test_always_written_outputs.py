@@ -33,7 +33,7 @@ def _clear_warnings():
 def _write_min_yaml(path: Path, *, with_align: bool = True) -> None:
     sections: list[str] = []
     if with_align:
-        sections.append("align:\n  kit_preset: truseq_smallrna\n")
+        sections.append("align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n")
     path.write_text("".join(sections) or "rpf:\n  strain: h\n")
 
 

@@ -44,9 +44,11 @@ import pandas as pd
 __all__ = [
     "MetageneProfile",
     "StrandSanity",
+    "PerTranscriptStrandSanity",
     "compute_p_site_positions",
     "compute_metagene",
     "compute_strand_sanity",
+    "compute_per_transcript_strand_sanity",
     "run_periodicity_qc",
 ]
 
@@ -78,12 +80,31 @@ DEFAULT_WINDOW_CODONS = DEFAULT_WINDOW_NT // 3
 
 @dataclass(frozen=True)
 class MetageneProfile:
-    """Per-sample, per-relative-position P-site density."""
+    """Per-sample, per-relative-position P-site density.
+
+    The ``normalize`` field records how per-transcript signals were
+    aggregated into ``density``:
+
+    * ``"per_gene_unit_mean"`` (the v0.9.0+ default) — each transcript's
+      per-position density is divided by its own mean before being
+      averaged with the others. Removes the depth-weighting bias where
+      one high-expression transcript dominates the metagene shape.
+    * ``"none"`` — raw per-position counts summed across transcripts;
+      proportional to depth × expression. Kept as an opt-in for
+      reproducing the < v0.9.0 behaviour.
+
+    ``n_transcripts`` is the number of transcripts that contributed
+    (the qualifying-tracks count after any zero-mean filter under
+    ``per_gene_unit_mean``). Zero means the profile is the empty
+    placeholder.
+    """
 
     sample: str
     anchor: str  # 'start' | 'stop'
     positions: np.ndarray  # 1D int array (relative-to-anchor nt offset)
     density: np.ndarray  # 1D float array, same length as positions
+    normalize: str = "per_gene_unit_mean"
+    n_transcripts: int = 0
 
 
 @dataclass(frozen=True)
@@ -103,24 +124,97 @@ class StrandSanity:
     minus_fraction: float
 
 
+@dataclass(frozen=True)
+class PerTranscriptStrandSanity:
+    """Per-(sample, transcript) minus-strand fraction.
+
+    The per-sample summary (:class:`StrandSanity`) can hide a localized
+    antisense bleed-through on one mt-mRNA: a single misannotated
+    transcript or an unmasked NUMT can produce many minus-strand reads
+    on one chromosome while every other chromosome is clean. Splitting
+    the audit by transcript surfaces that pattern at a glance.
+    """
+
+    sample: str
+    transcript: str
+    n_total: int
+    n_minus: int
+    minus_fraction: float
+
+
 # ---------------------------------------------------------------------------
 # Core computation — pure functions on DataFrames + offset tables
 # ---------------------------------------------------------------------------
+
+
+_OFFSET_FALLBACK_REPORTED: set[tuple[str, int]] = set()
+
+
+def _reset_offset_fallback_reporter() -> None:
+    """Test hook: clear the per-process dedup set for the fallback warning."""
+    _OFFSET_FALLBACK_REPORTED.clear()
 
 
 def _resolve_offsets_for_sample(
     selected_offsets_by_sample: dict[str, pd.DataFrame] | None,
     selected_offsets_combined: pd.DataFrame | None,
     sample: str,
+    *,
+    record_warning: bool = True,
+    stage: str = "PERIODICITY",
 ) -> pd.DataFrame | None:
     """Return the per-length 5' offset table for ``sample``.
 
     Falls back to the combined table when no per-sample table is
-    available (e.g. ``--offset_mode combined``). Returns ``None`` when
-    neither is set.
+    available (e.g. ``--offset_mode combined``, or a per-sample table
+    that simply does not include this sample). Returns ``None`` when
+    neither source is populated.
+
+    When the per-sample dictionary IS supplied but the requested sample
+    is missing from it, we record a structured warning
+    (``E_OFFSET_FALLBACK_USED``) so a reviewer reading
+    ``warnings.tsv`` / ``run_manifest.json`` can see at a glance that
+    the run silently degraded from per-sample to combined offsets for
+    that sample. The opposite case — no per-sample dict at all,
+    intentional combined-mode runs — is silent. Per (stage, sample)
+    deduplication keeps the log free of repeats when the resolver is
+    called many times for the same sample (start metagene + stop
+    metagene + Fourier path in one run).
     """
-    if selected_offsets_by_sample and sample in selected_offsets_by_sample:
+    if selected_offsets_by_sample is None:
+        return selected_offsets_combined
+    if sample in selected_offsets_by_sample:
         return selected_offsets_by_sample[sample]
+    if record_warning and selected_offsets_combined is not None:
+        key = (str(stage), id(selected_offsets_by_sample))
+        # Dedup per (stage, dict-instance, sample) so multi-call sites
+        # do not flood warnings.tsv.
+        sample_key = (str(stage), hash((id(selected_offsets_by_sample), sample)))
+        if sample_key not in _OFFSET_FALLBACK_REPORTED:
+            _OFFSET_FALLBACK_REPORTED.add(sample_key)
+            from ..errors import E_OFFSET_FALLBACK_USED
+            from ..io import warnings_log
+
+            warnings_log.record(
+                stage=stage,
+                sample_id=str(sample),
+                code=E_OFFSET_FALLBACK_USED,
+                severity="warn",
+                message=(
+                    f"Per-sample offsets requested but sample {sample!r} is "
+                    f"missing from the per-sample table; falling back to the "
+                    f"combined-across-samples offsets. Downstream codon-usage "
+                    f"and periodicity outputs may be biased toward the "
+                    f"average-of-other-samples offset choice."
+                ),
+                suggested_action=(
+                    "Inspect the offset_diagnostics/ outputs for this "
+                    "sample, and either pool more reads (e.g. concatenate "
+                    "technical replicates before alignment) or rerun with "
+                    "--offset_mode combined and document that choice in the "
+                    "manuscript methods."
+                ),
+            )
     return selected_offsets_combined
 
 
@@ -191,6 +285,9 @@ def compute_p_site_positions(
     return sub
 
 
+_VALID_METAGENE_NORMALIZATIONS = ("per_gene_unit_mean", "none")
+
+
 def compute_metagene(
     bed_with_psite: pd.DataFrame,
     annotation_df: pd.DataFrame,
@@ -198,6 +295,7 @@ def compute_metagene(
     sample: str,
     anchor: str,
     window_nt: int = DEFAULT_WINDOW_NT,
+    normalize: str = "per_gene_unit_mean",
 ) -> MetageneProfile:
     """Build a start- or stop-anchored P-site density metagene.
 
@@ -206,14 +304,34 @@ def compute_metagene(
     ``anchor='stop'`` the axis is ``(-window_nt, 0]`` (P-site nt offset
     from the first nt of the stop codon).
 
-    Density is summed across transcripts with no per-transcript
-    normalisation (a longer / more-expressed transcript contributes
-    more signal). This matches the convention used in published mt-
-    Ribo-seq metagene plots and keeps the output interpretable as raw
-    P-site read counts.
+    Aggregation modes (``normalize``):
+
+    * ``"per_gene_unit_mean"`` (default in v0.9.0+) — each contributing
+      transcript's per-position density is divided by its own mean
+      across the window before being averaged with the others. The
+      resulting metagene reflects the *shape* shared across transcripts,
+      not the depth × expression product, so a single high-expression
+      transcript no longer dominates. This matches the per-gene
+      normalisation already used in the Fourier-spectrum path
+      (:mod:`mitoribopy.analysis.fourier_spectrum`); using it here too
+      keeps the headline TSV / plot consistent with the QC story.
+    * ``"none"`` — raw per-position counts summed across transcripts;
+      proportional to depth × expression. Kept as an opt-in for
+      reproducing the < v0.9.0 behaviour. The legacy depth-weighted
+      interpretation is preserved verbatim.
+
+    Migration note: scripts that parsed ``metagene_*.tsv`` and assumed
+    integer-count semantics now see fractional means. Pass
+    ``normalize='none'`` to recover the old behaviour.
     """
     if anchor not in {"start", "stop"}:
         raise ValueError(f"anchor must be 'start' or 'stop', got {anchor!r}")
+    norm = str(normalize)
+    if norm not in _VALID_METAGENE_NORMALIZATIONS:
+        raise ValueError(
+            f"normalize must be one of {_VALID_METAGENE_NORMALIZATIONS}, "
+            f"got {normalize!r}"
+        )
 
     if anchor == "start":
         positions = np.arange(0, window_nt, dtype=int)
@@ -224,6 +342,7 @@ def compute_metagene(
     if bed_with_psite.empty or "P_site" not in bed_with_psite.columns:
         return MetageneProfile(
             sample=sample, anchor=anchor, positions=positions, density=density,
+            normalize=norm, n_transcripts=0,
         )
 
     ann = annotation_df.set_index("transcript")[
@@ -237,32 +356,58 @@ def compute_metagene(
     if df.empty:
         return MetageneProfile(
             sample=sample, anchor=anchor, positions=positions, density=density,
+            normalize=norm, n_transcripts=0,
         )
 
     if anchor == "start":
-        anchor_pos = df["transcript"].map(ann["start_codon"]).astype(int)
-        rel = df["P_site"].astype(int) - anchor_pos
-        mask = (rel >= 0) & (rel < window_nt)
-        rel = rel[mask]
+        anchor_pos_all = df["transcript"].map(ann["start_codon"]).astype(int)
+        rel_all = df["P_site"].astype(int) - anchor_pos_all
+        mask_window = (rel_all >= 0) & (rel_all < window_nt)
     else:
-        anchor_pos = df["transcript"].map(ann["stop_codon"]).astype(int)
-        rel = df["P_site"].astype(int) - anchor_pos
+        anchor_pos_all = df["transcript"].map(ann["stop_codon"]).astype(int)
+        rel_all = df["P_site"].astype(int) - anchor_pos_all
         # rel range we want: (-window_nt, 0]  (axis index = rel + window_nt - 1)
-        mask = (rel > -window_nt) & (rel <= 0)
-        rel = rel[mask]
+        mask_window = (rel_all > -window_nt) & (rel_all <= 0)
 
-    if rel.empty:
+    df_window = df.loc[mask_window].copy()
+    df_window["_rel"] = rel_all.loc[mask_window]
+    if df_window.empty:
         return MetageneProfile(
             sample=sample, anchor=anchor, positions=positions, density=density,
+            normalize=norm, n_transcripts=0,
         )
 
     if anchor == "start":
-        idx = rel.to_numpy()
+        df_window["_idx"] = df_window["_rel"].astype(int)
     else:
-        idx = (rel + window_nt - 1).to_numpy()
-    np.add.at(density, idx, 1.0)
+        df_window["_idx"] = (df_window["_rel"] + window_nt - 1).astype(int)
+
+    if norm == "none":
+        np.add.at(density, df_window["_idx"].to_numpy(), 1.0)
+        return MetageneProfile(
+            sample=sample, anchor=anchor, positions=positions, density=density,
+            normalize=norm,
+            n_transcripts=int(df_window["transcript"].nunique()),
+        )
+
+    # per_gene_unit_mean: build per-transcript density vectors, divide
+    # each by its own mean, then average across qualifying transcripts.
+    n_qualified = 0
+    accumulator = np.zeros(window_nt, dtype=float)
+    for tx, sub in df_window.groupby("transcript", sort=False):
+        per_tx = np.zeros(window_nt, dtype=float)
+        np.add.at(per_tx, sub["_idx"].to_numpy(), 1.0)
+        mean_per_tx = float(per_tx.mean())
+        if mean_per_tx <= 0:
+            continue
+        accumulator += per_tx / mean_per_tx
+        n_qualified += 1
+
+    if n_qualified > 0:
+        density = accumulator / n_qualified
     return MetageneProfile(
         sample=sample, anchor=anchor, positions=positions, density=density,
+        normalize=norm, n_transcripts=n_qualified,
     )
 
 
@@ -287,20 +432,85 @@ def compute_strand_sanity(
     )
 
 
+def compute_per_transcript_strand_sanity(
+    bed_df: pd.DataFrame, *, sample: str,
+) -> list[PerTranscriptStrandSanity]:
+    """Per-transcript minus-strand fraction for one sample.
+
+    The per-sample summary collapses an antisense bleed-through
+    localised to one mt-mRNA into the all-transcripts mean. Splitting
+    by transcript surfaces a single misannotated reference contig or
+    an unmasked NUMT pulling reads onto the wrong strand. Returns an
+    empty list when the BED has no rows for ``sample`` or no
+    ``strand`` column.
+    """
+    sub = bed_df[bed_df["sample_name"] == sample]
+    if sub.empty or "strand" not in sub.columns or "chrom" not in sub.columns:
+        return []
+    minus = sub["strand"].astype(str).str.strip() == "-"
+    rows: list[PerTranscriptStrandSanity] = []
+    for chrom, group in sub.groupby("chrom", sort=True):
+        n_total = int(len(group))
+        n_minus = int(minus.loc[group.index].sum())
+        rows.append(PerTranscriptStrandSanity(
+            sample=str(sample),
+            transcript=str(chrom),
+            n_total=n_total,
+            n_minus=n_minus,
+            minus_fraction=(n_minus / n_total) if n_total else 0.0,
+        ))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator + writers
 # ---------------------------------------------------------------------------
 
 
+_DEPRECATED_PERIODICITY_TSVS: frozenset[str] = frozenset({
+    "periodicity_start.tsv",
+    "periodicity_stop.tsv",
+})
+
+
 def _write_metagene_tsv(
     profiles: Iterable[MetageneProfile], path: Path,
 ) -> None:
+    """Write a metagene TSV with the normalisation mode in a header comment.
+
+    The header comment carries the normalisation policy so downstream
+    consumers can detect at a glance whether ``density`` is a
+    per-transcript-mean-then-mean (``per_gene_unit_mean``) or a
+    raw-position-count sum (``none``). pandas / csv readers that pass
+    ``comment="#"`` ignore the line; readers that don't see a leading
+    comment line that's still safe to skip.
+
+    The legacy ``periodicity_{start,stop}.tsv`` filenames are still
+    written verbatim for backwards compatibility but are deprecated as
+    of v0.9.0 and scheduled for removal in v1.0.0; consumers should
+    switch to the spec-compliant ``metagene_{start,stop}.tsv`` filenames
+    that carry identical data. A ``# DEPRECATED`` comment is added to
+    the legacy paths so a human reading the file sees the warning.
+    """
+    profiles_list = list(profiles)
     path.parent.mkdir(parents=True, exist_ok=True)
+    norm_modes = sorted({p.normalize for p in profiles_list}) or ["per_gene_unit_mean"]
+    is_deprecated = path.name in _DEPRECATED_PERIODICITY_TSVS
     with path.open("w", encoding="utf-8") as h:
-        h.write("sample\tanchor\tposition\tdensity\n")
-        for p in profiles:
+        if is_deprecated:
+            h.write(
+                "# DEPRECATED: periodicity_{start,stop}.tsv will be removed "
+                "in v1.0.0. Read metagene_{start,stop}.tsv instead "
+                "(identical contents).\n"
+            )
+        h.write(f"# normalize: {','.join(norm_modes)}\n")
+        h.write("sample\tanchor\tposition\tdensity\tnormalize\tn_transcripts\n")
+        for p in profiles_list:
             for pos, dens in zip(p.positions, p.density):
-                h.write(f"{p.sample}\t{p.anchor}\t{int(pos)}\t{dens:.6g}\n")
+                h.write(
+                    f"{p.sample}\t{p.anchor}\t{int(pos)}\t{dens:.6g}"
+                    f"\t{p.normalize}\t{int(p.n_transcripts)}\n"
+                )
 
 
 def _write_strand_tsv(
@@ -313,6 +523,36 @@ def _write_strand_tsv(
             h.write(
                 f"{r.sample}\t{r.n_total}\t{r.n_minus}\t{r.minus_fraction:.6g}\n"
             )
+
+
+def _write_per_transcript_strand_tsv(
+    rows: Iterable[PerTranscriptStrandSanity], path: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as h:
+        h.write("sample\ttranscript\tn_total\tn_minus\tminus_fraction\n")
+        for r in rows:
+            h.write(
+                f"{r.sample}\t{r.transcript}\t{r.n_total}\t{r.n_minus}"
+                f"\t{r.minus_fraction:.6g}\n"
+            )
+
+
+def _metagene_y_label(profile: MetageneProfile | None, *, site_letter: str) -> str:
+    """Pick the right y-axis label given the profile's normalisation mode.
+
+    Pre-v0.9.0 the metagene was a depth-weighted sum and "P-site reads"
+    was a fair description. The v0.9.0 default is per-gene unit-mean,
+    so the y-axis carries fractional density values that are NOT raw
+    counts; mislabelling them as "reads" would mislead a reviewer about
+    the scale.
+    """
+    site_label = "P-site" if str(site_letter).lower() == "p" else "A-site"
+    if profile is None:
+        return f"{site_label} density"
+    if profile.normalize == "per_gene_unit_mean":
+        return f"{site_label} density (per-gene unit-mean)"
+    return f"{site_label} reads"
 
 
 def _plot_metagene_panels(
@@ -380,7 +620,7 @@ def _plot_metagene_panels(
                 else "nt from stop codon"
             )
             if col_i == 0:
-                ax.set_ylabel("P-site reads")
+                ax.set_ylabel(_metagene_y_label(profile, site_letter="p"))
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
 
@@ -459,7 +699,7 @@ def _plot_metagene_single_anchor(
         ax.set_xlabel(
             "nt from start codon" if anchor == "start" else "nt from stop codon"
         )
-        ax.set_ylabel(f"{site_label} reads")
+        ax.set_ylabel(_metagene_y_label(profile, site_letter=site_letter))
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
@@ -495,6 +735,16 @@ def run_periodicity_qc(
     fourier_window_nt: int | None = None,
     fourier_render_plots: bool = True,
     metagene_nt: int | None = None,
+    # v0.9.0: how the per-transcript signals are aggregated into the
+    # start- / stop-anchored metagene density. See compute_metagene().
+    metagene_normalize: str = "per_gene_unit_mean",
+    # Statistical hardening (v0.9.0). All have library defaults; pass
+    # `compute_stats=False` to skip bootstrap + permutation entirely.
+    fourier_n_bootstrap: int | None = None,
+    fourier_n_permutations: int | None = None,
+    fourier_ci_alpha: float | None = None,
+    fourier_random_seed: int | None = None,
+    fourier_compute_stats: bool = True,
     # Accepted for backwards-compatible call sites; ignored under the
     # current Fourier-only QC contract.
     min_cds_reads_per_length: int = _DEFAULT_MIN_CDS_READS_PER_LENGTH,
@@ -534,6 +784,7 @@ def run_periodicity_qc(
     start_profiles: list[MetageneProfile] = []
     stop_profiles: list[MetageneProfile] = []
     strand_rows: list[StrandSanity] = []
+    per_tx_strand_rows: list[PerTranscriptStrandSanity] = []
 
     for sample in samples:
         psite = compute_p_site_positions(
@@ -547,18 +798,26 @@ def run_periodicity_qc(
         start_profiles.append(compute_metagene(
             psite, annotation_df,
             sample=sample, anchor="start", window_nt=effective_window_nt,
+            normalize=str(metagene_normalize),
         ))
         stop_profiles.append(compute_metagene(
             psite, annotation_df,
             sample=sample, anchor="stop", window_nt=effective_window_nt,
+            normalize=str(metagene_normalize),
         ))
         strand_rows.append(compute_strand_sanity(bed_df, sample=sample))
+        per_tx_strand_rows.extend(
+            compute_per_transcript_strand_sanity(bed_df, sample=sample)
+        )
 
     _write_metagene_tsv(start_profiles, output_dir / "periodicity_start.tsv")
     _write_metagene_tsv(stop_profiles, output_dir / "periodicity_stop.tsv")
     _write_metagene_tsv(start_profiles, output_dir / "metagene_start.tsv")
     _write_metagene_tsv(stop_profiles, output_dir / "metagene_stop.tsv")
     _write_strand_tsv(strand_rows, output_dir / "strand_sanity.tsv")
+    _write_per_transcript_strand_tsv(
+        per_tx_strand_rows, output_dir / "strand_sanity_per_transcript.tsv",
+    )
 
     # Stack per-sample P-site coordinates so the Fourier bundle has all
     # the data in one BED-shaped DataFrame.
@@ -583,6 +842,14 @@ def run_periodicity_qc(
     fourier_kwargs = {}
     if fourier_window_nt is not None:
         fourier_kwargs["window_nt"] = int(fourier_window_nt)
+    if fourier_n_bootstrap is not None:
+        fourier_kwargs["n_bootstrap"] = int(fourier_n_bootstrap)
+    if fourier_n_permutations is not None:
+        fourier_kwargs["n_permutations"] = int(fourier_n_permutations)
+    if fourier_ci_alpha is not None:
+        fourier_kwargs["ci_alpha"] = float(fourier_ci_alpha)
+    if fourier_random_seed is not None:
+        fourier_kwargs["random_seed"] = int(fourier_random_seed)
 
     _qc_bundle(
         bed_with_psite=bed_with_psite_concat,
@@ -591,6 +858,7 @@ def run_periodicity_qc(
         output_dir=output_dir,
         site_type=str(offset_site).lower() or "p",  # type: ignore[arg-type]
         render_plots=fourier_render_plots,
+        compute_stats=bool(fourier_compute_stats),
         **fourier_kwargs,
     )
 
@@ -617,4 +885,5 @@ def run_periodicity_qc(
         "periodicity_start": start_profiles,
         "periodicity_stop": stop_profiles,
         "strand_sanity": strand_rows,
+        "strand_sanity_per_transcript": per_tx_strand_rows,
     }

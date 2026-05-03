@@ -173,7 +173,7 @@ def test_benchmark_cli_subsample_actually_subsamples(
 
     cfg_path = tmp_path / "c.yaml"
     cfg_path.write_text(
-        "align:\n  kit_preset: auto\n"
+        "align:\n  # adapter auto-detection (default)\n"
         f"  fastq_dir: {raw_dir}\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     )

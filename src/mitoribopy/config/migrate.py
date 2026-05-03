@@ -18,7 +18,6 @@ from typing import Iterable
 
 __all__ = [
     "DEDUP_STRATEGY_VALUE_REWRITES",
-    "KIT_PRESET_LEGACY",
     "LEGACY_ALIGN_TOPLEVEL",
     "LEGACY_RNASEQ_TOPLEVEL",
     "LEGACY_RPF_TOPLEVEL",
@@ -50,17 +49,6 @@ LEGACY_ALIGN_TOPLEVEL: dict[str, str] = {
 STRAIN_SHORTCUTS: dict[str, str] = {
     "h": "h.sapiens",
     "y": "s.cerevisiae",
-}
-
-
-# Kit preset legacy spellings, taken from
-# `mitoribopy.align._types.KIT_PRESET_ALIASES`. Replicated here so the
-# migration tool does not import the align module (keeps the migration
-# usable on configs targeting older versions).
-KIT_PRESET_LEGACY: dict[str, str] = {
-    "truseq_smallrna": "illumina_smallrna",
-    "nebnext_smallrna": "illumina_truseq",
-    "nebnext_ultra_umi": "illumina_truseq_umi",
 }
 
 
@@ -137,26 +125,37 @@ def _rewrite_strain(
     return out
 
 
-def _rewrite_kit_preset(
+def _drop_removed_kit_preset(
     section: dict, *, log: list[str], path: str
 ) -> dict:
+    """Strip ``kit_preset`` keys (removed in v0.7.1) and record removals.
+
+    Migration is intentionally lossy here: the user's previous kit name
+    cannot be auto-translated into the new model (adapter sequence vs
+    pretrimmed flag) without potentially picking the wrong default. We
+    drop the key with a loud log entry so the user knows to add an
+    explicit ``adapter:`` or ``pretrimmed:`` value if auto-detection
+    would be insufficient.
+    """
     out = dict(section)
-    if "kit_preset" in out and out["kit_preset"] in KIT_PRESET_LEGACY:
-        new = KIT_PRESET_LEGACY[out["kit_preset"]]
-        log.append(f"{path}.kit_preset: '{out['kit_preset']}' -> '{new}'")
-        out["kit_preset"] = new
-    # align.samples[*].kit_preset rewrite: each per-sample override too.
+    if "kit_preset" in out:
+        log.append(
+            f"{path}.kit_preset: REMOVED (no replacement); previous value "
+            f"{out['kit_preset']!r}. Auto-detection now picks the kit; if "
+            "you need to pin the adapter, add 'adapter: <SEQ>' (or "
+            "'pretrimmed: true' for already-trimmed FASTQs)."
+        )
+        out.pop("kit_preset", None)
     samples = out.get("samples")
     if isinstance(samples, list):
         new_samples = []
         for index, entry in enumerate(samples):
-            if isinstance(entry, dict) and entry.get("kit_preset") in KIT_PRESET_LEGACY:
-                new_kit = KIT_PRESET_LEGACY[entry["kit_preset"]]
+            if isinstance(entry, dict) and "kit_preset" in entry:
                 log.append(
-                    f"{path}.samples[{index}].kit_preset: "
-                    f"'{entry['kit_preset']}' -> '{new_kit}'"
+                    f"{path}.samples[{index}].kit_preset: REMOVED "
+                    f"(previous value {entry['kit_preset']!r})."
                 )
-                entry = {**entry, "kit_preset": new_kit}
+                entry = {k: v for k, v in entry.items() if k != "kit_preset"}
             new_samples.append(entry)
         out["samples"] = new_samples
     return out
@@ -232,7 +231,7 @@ def migrate(raw_config: dict) -> tuple[dict, list[str]]:
         cfg["align"] = _rename_keys(
             cfg["align"], LEGACY_ALIGN_TOPLEVEL, log=log, path="align"
         )
-        cfg["align"] = _rewrite_kit_preset(
+        cfg["align"] = _drop_removed_kit_preset(
             cfg["align"], log=log, path="align"
         )
         cfg["align"] = _rewrite_dedup_strategy(
@@ -261,7 +260,7 @@ def migrate(raw_config: dict) -> tuple[dict, list[str]]:
         cfg = _rename_keys(cfg, LEGACY_RPF_TOPLEVEL, log=log, path="")
         cfg = _rename_keys(cfg, LEGACY_RNASEQ_TOPLEVEL, log=log, path="")
         cfg = _rewrite_strain(cfg, log=log, path="")
-        cfg = _rewrite_kit_preset(cfg, log=log, path="")
+        cfg = _drop_removed_kit_preset(cfg, log=log, path="")
         cfg = _rewrite_offset_pick_reference(cfg, log=log, path="")
         cfg = _rewrite_rnaseq_mode(cfg, log=log, path="")
         cfg = _rewrite_dedup_strategy(cfg, log=log, path="")

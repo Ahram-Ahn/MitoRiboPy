@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Ahram-Ahn/MitoRiboPy/blob/main/src/mitoribopy/data/run_manifest.schema.json",
+  "title": "MitoRiboPy run_manifest.json",
+  "description": "Schema for the run_manifest.json that mitoribopy all writes at the run root. Required fields are the publication-grade reproducibility minimum: package version, command, config + sample-sheet hashes, stage records, output index, runtime, platform, and warnings. Optional fields are advisory.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mitoribopy_version",
+    "command",
+    "config_canonical",
+    "stages",
+    "output_schemas",
+    "outputs",
+    "tools",
+    "warnings",
+    "runtime_seconds",
+    "platform",
+    "python_version"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Manifest layout version (semver). MAJOR bump for breaking layout changes; MINOR for additive fields.",
+      "pattern": "^\\d+\\.\\d+(\\.\\d+)?$"
+    },
+    "subcommand": {
+      "type": "string",
+      "enum": ["all"],
+      "description": "Always 'all' for orchestrator-written manifests."
+    },
+    "mitoribopy_version": {
+      "type": "string",
+      "description": "PEP 440 version of the mitoribopy package that produced this run."
+    },
+    "git_commit": {
+      "type": ["string", "null"],
+      "description": "Current commit when the package was installed from a git checkout; null when unknown."
+    },
+    "command": {
+      "type": "string",
+      "description": "Full argv joined with spaces, prefixed by the subcommand name."
+    },
+    "config_source": {
+      "type": ["string", "null"],
+      "description": "Path to the user-supplied YAML / TOML / JSON config; null when no file was used."
+    },
+    "config_source_sha256": {
+      "type": ["string", "null"],
+      "description": "SHA256 of the user's config file as written. Used by --resume to detect drift."
+    },
+    "config_canonical": {
+      "type": "object",
+      "description": "Merged + auto-wired canonical config that actually drove the run.",
+      "additionalProperties": true
+    },
+    "sample_sheet": {
+      "type": ["string", "null"],
+      "description": "Path to the unified per-project sample sheet TSV, when set."
+    },
+    "sample_sheet_sha256": {
+      "type": ["string", "null"],
+      "description": "SHA256 of the sample sheet. Used by --resume to detect drift."
+    },
+    "reference_checksum": {
+      "type": ["string", "null"],
+      "description": "SHA256 of the reference FASTA (promoted from the rpf settings for backwards-compat lookup). May be a placeholder string in test fixtures."
+    },
+    "stages": {
+      "type": "object",
+      "description": "Per-stage status, runtime, and skip-reason record.",
+      "additionalProperties": false,
+      "properties": {
+        "align": {"$ref": "#/$defs/stageRecord"},
+        "rpf":   {"$ref": "#/$defs/stageRecord"},
+        "rnaseq":{"$ref": "#/$defs/stageRecord"}
+      }
+    },
+    "align": {
+      "type": ["object", "null"],
+      "description": "Verbatim copy of the align stage's run_settings.json (or null when align did not run)."
+    },
+    "rpf": {
+      "type": ["object", "null"],
+      "description": "Verbatim copy of the rpf stage's run_settings.json (or null when rpf did not run)."
+    },
+    "rnaseq": {
+      "type": ["object", "null"],
+      "description": "Verbatim copy of the rnaseq stage's run_settings.json (or null when rnaseq did not run)."
+    },
+    "tools": {
+      "type": "object",
+      "description": "Flat {tool: version} map lifted from per-stage settings (cutadapt, bowtie2, samtools, umi_tools, ...).",
+      "additionalProperties": {"type": ["string", "null"]}
+    },
+    "output_schemas": {
+      "type": "object",
+      "description": "{filename: schema_version} for every advertised output TSV. A downstream consumer can gate on a compatible major version.",
+      "additionalProperties": {"type": "string", "pattern": "^\\d+\\.\\d+$"}
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Structured warnings collected during the run. Mirrored to warnings.tsv.",
+      "items": {"$ref": "#/$defs/warningRecord"}
+    },
+    "outputs": {
+      "type": "array",
+      "description": "outputs_index rows enumerating every advertised TSV, plot, and sidecar.",
+      "items": {"$ref": "#/$defs/outputsIndexRow"}
+    },
+    "runtime_seconds": {
+      "type": "number",
+      "description": "Total wall-clock seconds for the orchestrator.",
+      "minimum": 0
+    },
+    "platform": {
+      "type": "string",
+      "description": "platform.platform() string of the host that produced the run."
+    },
+    "python_version": {
+      "type": "string",
+      "description": "platform.python_version() string of the host that produced the run."
+    },
+    "resource_plan": {
+      "type": ["object", "null"],
+      "description": "Mirror of resource_plan.json: orchestrator-level CPU / memory budget. Null when the sidecar was not produced."
+    }
+  },
+  "$defs": {
+    "stageRecord": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "One of: completed (stage ran to completion), skipped (--resume hit cached output, or --skip-* flag), not_configured (no section for the stage in the YAML), error (stage raised before completing).",
+          "enum": ["completed", "skipped", "not_configured", "error"]
+        },
+        "runtime_seconds": {"type": ["number", "null"], "minimum": 0},
+        "reason": {"type": ["string", "null"]}
+      }
+    },
+    "warningRecord": {
+      "type": "object",
+      "required": ["stage", "severity", "message"],
+      "additionalProperties": true,
+      "properties": {
+        "timestamp": {"type": ["string", "null"]},
+        "stage": {"type": "string"},
+        "severity": {"type": "string", "enum": ["info", "warn", "error"]},
+        "sample_id": {"type": ["string", "null"]},
+        "code": {"type": ["string", "null"]},
+        "message": {"type": "string"},
+        "suggested_action": {"type": ["string", "null"]}
+      }
+    },
+    "outputsIndexRow": {
+      "type": "object",
+      "required": ["output_type", "stage", "path"],
+      "additionalProperties": true,
+      "properties": {
+        "output_type": {"type": "string"},
+        "stage": {"type": "string"},
+        "path": {"type": "string"},
+        "description": {"type": ["string", "null"]},
+        "recommended_for": {"type": ["string", "null"]},
+        "schema_version": {"type": ["string", "null"], "pattern": "^(\\d+\\.\\d+)?$"}
+      }
+    }
+  }
+}

@@ -1142,9 +1142,21 @@ def _run_from_fastq(args, output_dir: Path) -> int:
         contrast_b=args.condition_b,
         assay="rna",
     )
-    de_table = deseq2_to_de_table(results_df)
+    # from_fastq mode fits DESeq2 on the 13 mt-mRNAs only — too few
+    # genes for the dispersion-shrinkage estimator to be reliable. We
+    # keep the log2FoldChange but null the Wald padj so a downstream
+    # user cannot accidentally cite "padj < 0.05" from this fit. The
+    # publication-grade flow is rnaseq_mode=de_table with an external
+    # full-transcriptome table.
+    de_table = deseq2_to_de_table(results_df, nullify_padj=True)
     de_table_path = output_dir / "de_table.tsv"
     write_de_table_tsv(de_table, de_table_path)
+    sys.stderr.write(
+        "[mitoribopy rnaseq] from_fastq: nulled padj in de_table.tsv "
+        "(N genes too small for reliable Wald inference; keep log2FC, "
+        "drop p-values). Use rnaseq_mode=de_table with a full-"
+        "transcriptome external DE table for publication-grade stats.\n"
+    )
 
     # Run pyDESeq2 a second time on the Ribo-seq subset so we get a
     # statistically grounded RPF log2FC + padj. Only attempted when at
@@ -1169,7 +1181,9 @@ def _run_from_fastq(args, output_dir: Path) -> int:
                 f"({exc}); RPF volcano plot will be omitted.\n"
             )
         else:
-            rpf_de_table = deseq2_to_de_table(rpf_results_df)
+            # Same rationale as the RNA side: 13-gene Wald inference is
+            # unreliable; keep log2FC, null padj.
+            rpf_de_table = deseq2_to_de_table(rpf_results_df, nullify_padj=True)
             rpf_de_table_path = output_dir / "rpf_de_table.tsv"
             write_de_table_tsv(rpf_de_table, rpf_de_table_path)
 

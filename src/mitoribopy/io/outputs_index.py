@@ -194,9 +194,37 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
         description=(
             "Sidecar JSON recording the Fourier window, codon-skip "
             "settings, gene_set definitions, and DFT method used for "
-            "the periodicity QC bundle."
+            "the periodicity QC bundle. v0.9.0+ also records the "
+            "bootstrap CI and circular-shift permutation null knobs "
+            "(n_bootstrap, n_permutations, ci_alpha, random_seed, "
+            "ci_method, null_method) so a reviewer can reproduce the "
+            "exact CI / p-value bounds."
         ),
         recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="strand_sanity",
+        stage="rpf",
+        relative_path="rpf/qc/strand_sanity.tsv",
+        description=(
+            "Per-sample minus-strand fraction. The mt-transcriptome "
+            "FASTA is sense-oriented, so a non-zero fraction signals "
+            "a wrong --library-strandedness setting upstream."
+        ),
+        recommended_for="reviewer-spot-check",
+    ),
+    OutputDescriptor(
+        output_type="strand_sanity_per_transcript",
+        stage="rpf",
+        relative_path="rpf/qc/strand_sanity_per_transcript.tsv",
+        description=(
+            "Per-(sample, transcript) minus-strand fraction (v0.9.0+). "
+            "Surfaces a localised antisense bleed-through on one "
+            "mt-mRNA (e.g. an unmasked NUMT or a misannotated reference "
+            "contig) that the per-sample mean would hide."
+        ),
+        recommended_for="reviewer-spot-check",
+        schema_key="strand_sanity_per_transcript.tsv",
     ),
     OutputDescriptor(
         output_type="codon_correlation_metrics_p",

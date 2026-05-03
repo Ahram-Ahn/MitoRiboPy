@@ -193,6 +193,58 @@ def test_render_summary_md_includes_key_sections(tmp_path: Path) -> None:
     assert "no structured warnings" in md
 
 
+def test_render_summary_md_includes_periodicity_confidence_section(tmp_path: Path) -> None:
+    """v0.9.0+ SUMMARY.md surfaces the headline Fourier CI + permutation p."""
+    run_root = tmp_path / "results"
+    qc_dir = run_root / "rpf" / "qc"
+    qc_dir.mkdir(parents=True)
+    score_path = qc_dir / "fourier_period3_score_combined.tsv"
+    score_path.write_text(
+        "sample\tread_length\tgene_set\tregion\tn_genes\tn_sites_total\tn_nt"
+        "\tspectral_ratio_3nt\tspectral_ratio_3nt_ci_low"
+        "\tspectral_ratio_3nt_ci_high\tpermutation_p\tsnr_call\n"
+        "WT_R1\t32\tcombined\torf_start\t9\t12345\t99"
+        "\t8.42\t6.10\t10.55\t0.0005\thealthy\n"
+        "KO_R1\t32\tcombined\torf_start\t9\t11500\t99"
+        "\t1.42\t1.05\t1.85\t0.412\tbroken\n"
+    )
+    manifest = {
+        "mitoribopy_version": "0.9.0",
+        "schema_version": "1.3.0",
+        "command": "mitoribopy all",
+        "config_source": "c.yaml",
+        "stages": {},
+    }
+    md = render_summary_md(
+        run_root=run_root,
+        manifest=manifest,
+        summary_qc_rows=[],
+        warnings=[],
+    )
+    assert "## Periodicity statistical confidence" in md
+    assert "WT_R1" in md and "8.42x" in md
+    assert "[6.10, 10.55]" in md
+    assert "<0.001" in md  # The Laplace-smoothed perm p formatter.
+    assert "KO_R1" in md and "broken" in md
+
+
+def test_render_summary_md_skips_periodicity_section_when_table_missing(tmp_path: Path) -> None:
+    """No score TSV → no spurious empty section."""
+    run_root = tmp_path / "results"
+    md = render_summary_md(
+        run_root=run_root,
+        manifest={
+            "mitoribopy_version": "0.9.0",
+            "schema_version": "1.3.0",
+            "command": "mitoribopy all",
+            "stages": {},
+        },
+        summary_qc_rows=[],
+        warnings=[],
+    )
+    assert "## Periodicity statistical confidence" not in md
+
+
 def test_render_summary_md_lists_warnings(tmp_path: Path) -> None:
     manifest = {
         "mitoribopy_version": "0.5.1",

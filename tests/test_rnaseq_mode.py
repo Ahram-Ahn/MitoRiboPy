@@ -215,7 +215,7 @@ def test_print_canonical_config_records_resolved_mode(tmp_path, capsys) -> None:
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
         f"samples:\n  table: {sheet}\n"
-        "align:\n  kit_preset: auto\n"
+        "align:\n  # adapter auto-detection (default)\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n  gene_id_convention: bare\n"
         "  condition_a: WT\n  condition_b: KO\n"
@@ -328,7 +328,7 @@ def test_explicit_rnaseq_mode_argv_passes_through_to_subcommand(
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n"
         "  rna_fastq:\n    - rna1.fq.gz\n"

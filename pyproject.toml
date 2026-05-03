@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "MitoRiboPy"
-version = "0.6.2"
+version = "0.7.1"
 description = "Mitochondrial ribosome profiling analysis pipeline."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -48,12 +48,21 @@ Changelog = "https://github.com/Ahram-Ahn/MitoRiboPy/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 dev = [
   "pytest>=7.4",
+  # Optional but installed in dev so the run_manifest.json schema test
+  # exercises the full draft 2020-12 validator instead of the minimal
+  # required-key fallback.
+  "jsonschema>=4.21",
 ]
 toml-py310 = [
   "tomli>=2.0;python_version<'3.11'",
 ]
 fastq = [
   "pydeseq2>=0.4",
+]
+schema = [
+  # Standalone extra for users who want full schema validation of
+  # run_manifest.json without the rest of the dev tooling.
+  "jsonschema>=4.21",
 ]
 
 [project.scripts]
@@ -72,4 +81,5 @@ where = ["src"]
 testpaths = ["tests"]
 markers = [
   "requires_tools: integration tests that invoke real external bioinformatics tools (cutadapt, bowtie2, samtools, umi_tools) and are skipped when those are not on PATH.",
+  "smoke: end-to-end smoke test against the bundled examples/smoke/ fixture. Requires the same external tools as requires_tools; opt-in via 'pytest -m smoke'.",
 ]

@@ -44,7 +44,14 @@ OUTPUT_SCHEMA_VERSIONS: dict[str, str] = {
     "figure_qc.tsv":      "1.0",  # per-plot mechanical QC (overlap / counts / SVG)
     # Metagene Fourier periodicity bundle (v0.8.0).
     "fourier_spectrum_combined.tsv":      "1.0",
-    "fourier_period3_score_combined.tsv": "1.0",
+    # v0.9.0: + amp_3nt_ci_*, spectral_ratio_3nt(_local)_ci_*,
+    # permutation_p(_local), n_bootstrap, n_permutations, ci_alpha,
+    # ci_method, null_method (all appended at end → MINOR bump).
+    "fourier_period3_score_combined.tsv": "1.1",
+    # v0.9.0: per-(sample, transcript) minus-strand audit. Surfaces a
+    # localised antisense bleed-through that the all-transcripts mean
+    # in strand_sanity.tsv hides.
+    "strand_sanity_per_transcript.tsv":   "1.0",
 }
 
 

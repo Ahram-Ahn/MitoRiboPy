@@ -10,7 +10,7 @@ every `mitoribopy` subcommand. For prose, examples, and decision
 trees see [the README](../../README.md) and the tutorials under
 [`docs/tutorials/`](../tutorials/).
 
-Generated against MitoRiboPy v0.6.2.
+Generated against MitoRiboPy v0.7.0.
 
 ## Subcommand summary
 

@@ -1,0 +1,47 @@
+# MitoRiboPy smoke fixture pipeline config.
+# Compatible with: MitoRiboPy 0.7.0+
+#
+# Drives the end-to-end smoke test in examples/smoke/. Two synthetic
+# samples (WT, KO), three synthetic mt-mRNAs, no UMIs, no contaminants
+# subtracted (the synthetic FASTQs do not include any). Expected
+# wall-clock: 10-30 seconds. Run from this directory:
+#
+#   python generate_smoke_fastqs.py
+#   mitoribopy all --config pipeline_config.smoke.yaml --output results/
+
+execution:
+  threads: 2
+  parallel_samples: 1
+  single_sample_mode: true                 # serial align is plenty for 6k reads.
+
+samples: samples.tsv
+condition_map: samples.condition_map.tsv
+
+align:
+  fastq: fastqs/
+  mt_index: bowtie2_index/human_mt_tiny
+  # No contaminant subtraction in the smoke fixture — the synthetic
+  # FASTQs have no rRNA / NUMT contamination by construction.
+  contam_index: null
+  # adapter auto-detection is the default — no need to declare it
+  umi_position: none
+  dedup_strategy: skip                     # no UMIs => no umi_tools needed
+
+rpf:
+  strain: custom
+  fasta: human_mt_tiny.fa
+  rpf: [30, 34]                            # smoke synthetic reads are 32 nt
+  rpf_min_count_frac: 0.0                  # accept every length under the smoke fixture
+  offset_mode: combined                    # only 6k reads — per-sample is too noisy
+  offset_min: 10
+  offset_max: 14
+  analysis_sites: both                     # exercise both P-site and A-site outputs
+
+# No rnaseq stage — the smoke fixture is align + rpf only.
+
+# Keep the Fourier statistical hardening cheap on the smoke fixture.
+# Real runs use the defaults (200 / 200).
+periodicity:
+  fourier_bootstrap_n: 50
+  fourier_permutations_n: 50
+  fourier_random_seed: 42

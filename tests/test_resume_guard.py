@@ -212,7 +212,7 @@ def test_all_resume_succeeds_when_config_unchanged(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Sentinels exist + hashes match prior manifest -> resume skips both stages."""
-    cfg_text = "align:\n  kit_preset: auto\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
+    cfg_text = "align:\n  # adapter auto-detection (default)\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     cfg, run_root = _make_prior_run(tmp_path, config_text=cfg_text)
 
     # Fake prior manifest with the SHA of the current config.
@@ -254,7 +254,7 @@ def test_all_resume_blocks_when_config_changed(
     tmp_path: Path, capsys
 ) -> None:
     """Edit the config after the prior run -> --resume must refuse to skip."""
-    cfg_text = "align:\n  kit_preset: auto\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
+    cfg_text = "align:\n  # adapter auto-detection (default)\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     cfg, run_root = _make_prior_run(tmp_path, config_text=cfg_text)
 
     from mitoribopy import __version__
@@ -278,7 +278,7 @@ def test_all_resume_blocks_when_config_changed(
 def test_all_force_resume_bypasses_hash_guard(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
-    cfg_text = "align:\n  kit_preset: auto\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
+    cfg_text = "align:\n  # adapter auto-detection (default)\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     cfg, run_root = _make_prior_run(tmp_path, config_text=cfg_text)
 
     from mitoribopy import __version__
@@ -327,7 +327,7 @@ def test_all_force_resume_env_var_bypasses_hash_guard(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
     """MITORIBOPY_FORCE_RESUME=1 has the same effect as --force-resume."""
-    cfg_text = "align:\n  kit_preset: auto\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
+    cfg_text = "align:\n  # adapter auto-detection (default)\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     cfg, run_root = _make_prior_run(tmp_path, config_text=cfg_text)
 
     from mitoribopy import __version__
@@ -371,7 +371,7 @@ def test_all_resume_first_run_no_prior_manifest_is_ok(
 ) -> None:
     """Sentinels exist but no prior manifest (e.g. interrupted older run);
     fall back to the historical sentinel-only behaviour."""
-    cfg_text = "align:\n  kit_preset: auto\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
+    cfg_text = "align:\n  # adapter auto-detection (default)\nrpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     cfg, run_root = _make_prior_run(tmp_path, config_text=cfg_text)
     # Note: no run_manifest.json written.
 

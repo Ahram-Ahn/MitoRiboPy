@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: "MitoRiboPy: Mitochondrial ribosome profiling analysis pipeline"
+message: "If you use this software, please cite both the GitHub release tag and the Zenodo DOI rather than the package name alone."
+type: software
+authors:
+  - family-names: Ahn
+    given-names: Ahram
+    affiliation: "Barrientos lab, University of Miami"
+repository-code: "https://github.com/Ahram-Ahn/MitoRiboPy"
+url: "https://github.com/Ahram-Ahn/MitoRiboPy"
+license: MIT
+version: "0.7.1"
+date-released: "2026-05-02"
+keywords:
+  - bioinformatics
+  - ribosome-profiling
+  - ribo-seq
+  - mitochondria
+  - translation-efficiency
+abstract: >
+  MitoRiboPy is a Python pipeline for mitochondrial ribosome profiling
+  (mt-Ribo-seq). It provides a single-command end-to-end orchestration
+  (mitoribopy all) covering FASTQ preprocessing, contaminant filtering,
+  mt-transcriptome alignment, P-site / A-site offset selection,
+  per-codon translation profiles, coverage profiles (with frame-split
+  panels for overlapping ORFs), and an aggregate-then-DFT metagene
+  Fourier periodicity QC bundle. An optional rnaseq stage computes
+  translation efficiency (TE / delta-TE) either from an external
+  full-transcriptome DESeq2 / Xtail / Anota2Seq table (publication-safe
+  flow) or from raw FASTQ via in-tree pyDESeq2 on the mt-mRNA subset
+  (exploratory).

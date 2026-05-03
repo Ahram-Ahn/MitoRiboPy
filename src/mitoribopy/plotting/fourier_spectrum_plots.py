@@ -139,11 +139,38 @@ def _plot_one_panel(
         snr_tier_local = str(score_row.get("snr_call_local", "no_signal"))
         n_genes = int(score_row.get("n_genes", 0))
         n_sites = int(score_row.get("n_sites_total", 0))
-        text = (
-            f"3-nt ratio (global, p=2-10): {ratio:.2f}x  ({snr_tier})\n"
-            f"3-nt ratio (local, p=4-6):   {ratio_local:.2f}x  ({snr_tier_local})\n"
-            f"n genes = {n_genes}  |  n sites = {n_sites:,}"
+        # v0.9.0: bootstrap CI + permutation_p when available.
+        ci_lo = score_row.get("spectral_ratio_3nt_ci_low")
+        ci_hi = score_row.get("spectral_ratio_3nt_ci_high")
+        ci_local_lo = score_row.get("spectral_ratio_3nt_local_ci_low")
+        ci_local_hi = score_row.get("spectral_ratio_3nt_local_ci_high")
+        perm_p = score_row.get("permutation_p")
+        perm_p_local = score_row.get("permutation_p_local")
+        ci_method = str(score_row.get("ci_method", "")) if score_row.get("ci_method") else ""
+
+        def _fmt_ci(lo, hi) -> str:
+            if pd.isna(lo) or pd.isna(hi):
+                return ""
+            return f"  CI [{float(lo):.2f}, {float(hi):.2f}]"
+
+        def _fmt_p(p) -> str:
+            if p is None or pd.isna(p):
+                return ""
+            p_val = float(p)
+            return f"  p={p_val:.3f}" if p_val >= 0.001 else f"  p<0.001"
+
+        line_global = (
+            f"3-nt ratio (global, p=2-10): {ratio:.2f}x  ({snr_tier})"
+            + _fmt_ci(ci_lo, ci_hi) + _fmt_p(perm_p)
         )
+        line_local = (
+            f"3-nt ratio (local, p=4-6):   {ratio_local:.2f}x  ({snr_tier_local})"
+            + _fmt_ci(ci_local_lo, ci_local_hi) + _fmt_p(perm_p_local)
+        )
+        line_n = f"n genes = {n_genes}  |  n sites = {n_sites:,}"
+        if ci_method == "skipped_too_few_genes":
+            line_n += "  |  CI: too few genes"
+        text = "\n".join((line_global, line_local, line_n))
         ax.text(
             0.97, 0.93, text,
             transform=ax.transAxes,
@@ -195,19 +222,38 @@ def _render_two_panel_figure(
             tx = _ND4L4_PANEL_TRANSCRIPT.get(region)
         else:
             tx = "<combined>"
+        def _opt_float(key: str) -> float | None:
+            if score_row is None:
+                return None
+            val = score_row.get(key)
+            if val is None or pd.isna(val):
+                return None
+            return float(val)
+
         panel_layout.append({
             "region": region,
             "transcript": tx,
             "n_genes": int(score_row["n_genes"]) if score_row is not None else 0,
             "n_sites_total": int(score_row["n_sites_total"]) if score_row is not None else 0,
-            "spectral_ratio_3nt": (
-                float(score_row["spectral_ratio_3nt"])
-                if score_row is not None and pd.notna(score_row.get("spectral_ratio_3nt"))
+            "spectral_ratio_3nt": _opt_float("spectral_ratio_3nt"),
+            "spectral_ratio_3nt_local": _opt_float("spectral_ratio_3nt_local"),
+            # v0.9.0 statistical hardening — embed CI bounds + p-value
+            # in the sidecar so validate-figures can reason about them
+            # without re-reading the score TSV.
+            "spectral_ratio_3nt_ci_low": _opt_float("spectral_ratio_3nt_ci_low"),
+            "spectral_ratio_3nt_ci_high": _opt_float("spectral_ratio_3nt_ci_high"),
+            "spectral_ratio_3nt_local_ci_low": _opt_float("spectral_ratio_3nt_local_ci_low"),
+            "spectral_ratio_3nt_local_ci_high": _opt_float("spectral_ratio_3nt_local_ci_high"),
+            "permutation_p": _opt_float("permutation_p"),
+            "permutation_p_local": _opt_float("permutation_p_local"),
+            "ci_method": (
+                str(score_row.get("ci_method"))
+                if score_row is not None and score_row.get("ci_method")
                 else None
             ),
-            "spectral_ratio_3nt_local": (
-                float(score_row["spectral_ratio_3nt_local"])
-                if score_row is not None and pd.notna(score_row.get("spectral_ratio_3nt_local"))
+            "null_method": (
+                str(score_row.get("null_method"))
+                if score_row is not None and score_row.get("null_method")
                 else None
             ),
         })

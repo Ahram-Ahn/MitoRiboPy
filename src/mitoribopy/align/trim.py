@@ -1,9 +1,9 @@
-"""cutadapt wrapper with kit-aware adapter and UMI handling.
+"""cutadapt wrapper with adapter-detection-aware UMI handling.
 
 Step B of the ``mitoribopy align`` pipeline. Runs cutadapt with:
 
-* a kit-preset-resolved 3' adapter (never silently defaulted; ``custom``
-  preset requires ``--adapter``),
+* a 3' adapter resolved by auto-detection or supplied via ``--adapter``
+  (never silently defaulted),
 * 5' or 3' UMI extraction into the read name when ``umi_length > 0``,
 * a length filter whose defaults (15-45 nt) match published mt-RPF
   distributions and are configurable via CLI.
@@ -26,7 +26,6 @@ from ._types import (
     KitPreset,
     ResolvedKit,
     UmiPosition,
-    resolve_kit_alias,
 )
 
 
@@ -45,6 +44,13 @@ def resolve_kit_settings(
 ) -> ResolvedKit:
     """Apply the kit preset's defaults, then the explicit CLI overrides.
 
+    *kit* is the internal preset name produced by adapter detection
+    (``illumina_smallrna``, ``illumina_truseq``, …) or one of the
+    sentinels ``pretrimmed`` / ``custom``. It is no longer a user input
+    since v0.7.1; the per-sample resolver in :mod:`mitoribopy.align.
+    sample_resolve` constructs it from the detector output or the
+    user's ``--adapter`` / ``--pretrimmed`` flags.
+
     For ``umi_position == "both"`` libraries the caller must supply
     ``umi_length_5p`` and ``umi_length_3p`` (or have them in the kit
     preset). When *both* per-end lengths and ``umi_length`` are set,
@@ -59,12 +65,9 @@ def resolve_kit_settings(
         if *kit* is not a known preset name.
     ValueError
         if the effective configuration is internally inconsistent
-        (notably: ``custom`` with no ``--adapter``, dual-end UMI without
+        (notably: ``custom`` with no adapter, dual-end UMI without
         per-end lengths, or a per-end / total length mismatch).
     """
-    # Translate any legacy vendor-specific alias to its canonical
-    # adapter-family preset name before lookup.
-    kit = resolve_kit_alias(kit)
     try:
         preset: KitPreset = KIT_PRESETS[kit]
     except KeyError as exc:
@@ -73,27 +76,16 @@ def resolve_kit_settings(
             f"Unknown kit preset: {kit!r}. Known presets: {known}."
         ) from exc
 
-    if kit == "auto":
-        raise ValueError(
-            "Cannot resolve kit settings against the 'auto' sentinel. The "
-            "per-sample resolver in mitoribopy.align.sample_resolve must "
-            "translate 'auto' to a real preset before calling this function."
-        )
-
     effective_adapter = adapter if adapter is not None else preset.adapter
     # The 'pretrimmed' preset legitimately has no adapter — cutadapt will
     # skip the -a flag and only do length + quality filtering. Every
     # other adapter-less resolution is an error (most often: 'custom'
-    # without --adapter).
+    # was selected by the resolver without an accompanying adapter
+    # sequence, which should never happen but is checked defensively).
     if effective_adapter is None and kit != "pretrimmed":
-        named = ", ".join(
-            name for name in KIT_PRESETS if name not in {"custom", "auto"}
-        )
         raise ValueError(
-            "The 'custom' kit preset requires an explicit --adapter <SEQ>. "
-            "Either pass --adapter, switch to a named kit preset "
-            f"({named}), or use --kit-preset pretrimmed for already-trimmed "
-            "FASTQs."
+            f"Resolved kit {kit!r} has no adapter sequence. Pass --adapter "
+            "<SEQ>, or use --pretrimmed for already-trimmed FASTQs."
         )
 
     effective_umi_length = umi_length if umi_length is not None else preset.umi_length

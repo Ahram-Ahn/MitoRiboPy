@@ -20,7 +20,6 @@
 #   sample_NOUMI (umi_length=0, dedup=skip).
 
 align:
-  kit_preset: auto
   fastq: examples/mock_mixed_umi/
   contam_index: examples/mock_mixed_umi/indexes/rrna
   mt_index: examples/mock_mixed_umi/indexes/mt
@@ -41,11 +40,11 @@ align:
 
   samples:
     - name: sample_UMI
-      kit_preset: illumina_truseq_umi
+      adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
       umi_length: 8
       umi_position: 5p
     - name: sample_NOUMI
-      kit_preset: pretrimmed
+      pretrimmed: true
       umi_length: 0
 
 rpf:

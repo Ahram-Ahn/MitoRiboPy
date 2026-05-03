@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MitoRiboPy -- exhaustive shell-script template (end-to-end).
-# Compatible with: MitoRiboPy 0.6.2+
+# Compatible with: MitoRiboPy 0.7.0+
 #
 # Calls each subcommand (align -> rpf -> optional rnaseq) directly with
 # every available flag spelled out, so you can see and edit exactly
@@ -97,17 +97,18 @@ ALIGN_OPTS=(
   # --fastq /path/to/extra_sample.fq.gz
   # --fastq /path/to/another.fq.gz
 
-  # --- Library prep / kit ------------------------------------------------
-  --kit-preset auto                # auto | illumina_smallrna | illumina_truseq |
-                                   # illumina_truseq_umi | qiaseq_mirna |
-                                   # pretrimmed | custom
-  # --adapter AGATCGGAAGAGCACACGTCTGAACTCCAGTCA   # required when kit_preset=custom
+  # --- Library prep / adapter --------------------------------------------
+  # Auto-detection is the default; pin --adapter only when detection
+  # cannot identify your library. --pretrimmed declares already-trimmed
+  # FASTQs and is mutually exclusive with --adapter.
+  # --adapter AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+  # --pretrimmed                   # already-trimmed FASTQs
   # --umi-length 8                 # global UMI override
-  # --umi-position 5p              # 5p | 3p
+  # --umi-position 5p              # 5p | 3p | both
   # --sample-overrides "${PROJECT_ROOT}/per_sample_overrides.tsv"
-                                   # for mixed-UMI batches; columns: sample,
-                                   # kit_preset, adapter, umi_length,
-                                   # umi_position, dedup_strategy
+                                   # for mixed-UMI / mixed-adapter batches;
+                                   # columns: sample, adapter, pretrimmed,
+                                   # umi_length, umi_position, dedup_strategy
 
   # --- Adapter detection -------------------------------------------------
   --adapter-detection auto         # auto | off | strict

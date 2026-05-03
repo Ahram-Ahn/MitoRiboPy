@@ -6,6 +6,10 @@ runs every cheap structural check before any stage actually fires:
 
 * file exists / parses
 * unknown top-level keys are flagged
+* unknown stage-level keys (inside ``align`` / ``rpf`` / ``rnaseq`` /
+  ``execution`` / ``periodicity``) are flagged with ``did you mean``
+  suggestions sourced from the live argparse parsers, so a typo like
+  ``rpf.offset_pick_refernce`` no longer silently runs under defaults
 * mutually-exclusive sections (``de_table`` vs ``rna_fastq``) caught
 * ``samples:`` block conflicts with explicit per-stage inputs caught
 * every path-shaped value (FASTQs, references, indexes, sample sheet)
@@ -14,7 +18,7 @@ runs every cheap structural check before any stage actually fires:
 
 Exit codes:
 * 0 — config is valid (or has only warnings)
-* 2 — at least one structural error
+* 2 — at least one structural error (or any warning when ``--strict``)
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from pathlib import Path
 from typing import Iterable
 
 from . import common
+from ..config import stage_keys
 
 
 VALIDATE_CONFIG_HELP = (
@@ -144,6 +149,40 @@ def _check_unknown_top_level_keys(
             + ", ".join(repr(k) for k in unknown)
             + f". Recognised: {sorted(known)}."
         )
+
+
+def _check_unknown_stage_keys(
+    cfg: dict, errors: list[str], warnings: list[str], *, strict: bool
+) -> None:
+    """Flag unknown keys nested inside each stage section.
+
+    Unknown stage keys are warnings in normal mode (so an old YAML can
+    still be inspected) and errors in ``--strict`` mode (so a
+    publication-grade config cannot ship with a silent typo).
+
+    The orchestrator's ``execution`` cascade only reads recognised keys,
+    so a typo there would have been silently ignored. Same for
+    ``periodicity``. Both now fail loudly here.
+    """
+    for stage in ("align", "rpf", "rnaseq", "execution", "periodicity"):
+        section = cfg.get(stage)
+        if not isinstance(section, dict):
+            continue
+        try:
+            unknown = stage_keys.find_unknown_keys(section, stage)
+        except Exception as exc:  # pragma: no cover — parser introspection
+            warnings.append(
+                f"could not introspect {stage!r} stage parser: {exc!s}"
+            )
+            continue
+        for key, suggestions in unknown:
+            message = stage_keys.format_unknown_key_message(
+                stage, key, suggestions
+            )
+            if strict:
+                errors.append(message)
+            else:
+                warnings.append(message)
 
 
 def _check_mutually_exclusive(
@@ -321,6 +360,9 @@ def run(argv: Iterable[str]) -> int:
             warnings.append(f"legacy key (auto-canonicalised): {line}")
 
     _check_unknown_top_level_keys(canonical, errors)
+    _check_unknown_stage_keys(
+        canonical, errors, warnings, strict=args.strict
+    )
     _check_sheet_conflicts(canonical, errors)
     _check_mutually_exclusive(canonical, errors)
     _check_rnaseq_mode(canonical, errors)

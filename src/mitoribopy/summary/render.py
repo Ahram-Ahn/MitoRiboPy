@@ -54,6 +54,80 @@ def _markdown_table(
     return "\n".join([header, sep, *body_lines])
 
 
+def _format_periodicity_confidence_section(
+    score_table_path: Path,
+) -> str | None:
+    """Read fourier_period3_score_combined.tsv and render a per-sample
+    statistical-confidence table for the SUMMARY.md.
+
+    Picks the headline row per sample — the ``combined`` gene_set,
+    ``orf_start`` region, highest ``n_sites_total`` read length — and
+    reports the spectral ratio with its bootstrap CI and permutation
+    p-value. Returns ``None`` when the score TSV is missing or the
+    headline row cannot be located.
+    """
+    if not score_table_path.is_file():
+        return None
+    try:
+        import pandas as pd
+    except ImportError:  # pragma: no cover - pandas is a hard dep
+        return None
+    try:
+        score = pd.read_csv(score_table_path, sep="\t", comment="#")
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return None
+    if score.empty:
+        return None
+
+    sub = score[
+        (score.get("gene_set") == "combined")
+        & (score.get("region") == "orf_start")
+    ].copy()
+    if sub.empty:
+        return None
+    # Pick the read length with the most sites per sample.
+    sub_sorted = sub.sort_values(
+        ["sample", "n_sites_total"], ascending=[True, False],
+    )
+    headline = sub_sorted.drop_duplicates(subset=["sample"], keep="first")
+
+    rows: list[dict[str, str]] = []
+    for _, r in headline.iterrows():
+        ratio = r.get("spectral_ratio_3nt")
+        ci_lo = r.get("spectral_ratio_3nt_ci_low")
+        ci_hi = r.get("spectral_ratio_3nt_ci_high")
+        perm_p = r.get("permutation_p")
+        snr = r.get("snr_call", "")
+        if pd.notna(ci_lo) and pd.notna(ci_hi):
+            ci_str = f"[{float(ci_lo):.2f}, {float(ci_hi):.2f}]"
+        else:
+            ci_str = "—"
+        if pd.notna(perm_p):
+            p_val = float(perm_p)
+            p_str = "<0.001" if p_val < 0.001 else f"{p_val:.3f}"
+        else:
+            p_str = "—"
+        rows.append({
+            "sample": str(r.get("sample", "")),
+            "read_length": str(int(r.get("read_length", 0))),
+            "n_genes": str(int(r.get("n_genes", 0))),
+            "spectral_ratio_3nt": (
+                f"{float(ratio):.2f}x" if pd.notna(ratio) else "—"
+            ),
+            "ci_90pct": ci_str,
+            "permutation_p": p_str,
+            "snr_call": str(snr or "—"),
+        })
+
+    if not rows:
+        return None
+    columns = (
+        "sample", "read_length", "n_genes",
+        "spectral_ratio_3nt", "ci_90pct", "permutation_p", "snr_call",
+    )
+    return _markdown_table(columns, rows)
+
+
 def render_summary_md(
     *,
     run_root: Path,
@@ -115,6 +189,26 @@ def render_summary_md(
         body += _section(
             "Per-sample QC (subset)",
             _markdown_table(qc_columns, summary_qc_rows),
+        )
+
+    # v0.9.0: Statistical confidence on the metagene Fourier QC.
+    # Pulls the headline (sample, gene_set=combined, region=orf_start,
+    # max-sites read_length) row out of fourier_period3_score_combined.tsv
+    # and renders the spectral ratio with its bootstrap CI and the
+    # circular-shift permutation p-value. Skipped silently when the
+    # score TSV is missing or the headline row cannot be located (e.g.
+    # very small fixtures).
+    score_table = run_root / "rpf" / "qc" / "fourier_period3_score_combined.tsv"
+    confidence_table = _format_periodicity_confidence_section(score_table)
+    if confidence_table is not None:
+        body += _section(
+            "Periodicity statistical confidence",
+            confidence_table
+            + "\n\nColumns: spectral_ratio_3nt = amp(3) / median(amp at "
+            "non-period-3 background); ci_90pct = 90 % bootstrap CI over "
+            "genes; permutation_p = Laplace-smoothed circular-shift null "
+            "p; snr_call = four-tier verdict (excellent ≥ 10×, "
+            "healthy ≥ 5×, modest ≥ 2×, broken < 2×).",
         )
 
     # Warnings

@@ -186,20 +186,39 @@ def _safe_value(value: Any) -> float | None:
     return f
 
 
-def deseq2_to_de_table(results_df: "pd.DataFrame") -> DeTable:
+def deseq2_to_de_table(
+    results_df: "pd.DataFrame",
+    *,
+    nullify_padj: bool = False,
+) -> DeTable:
     """Convert a pyDESeq2 ``results_df`` to a canonical :class:`DeTable`.
 
     NaN / ±Inf are mapped to ``None`` (mirrors
     :func:`mitoribopy.rnaseq.de_loader._safe_float`).
+
+    Parameters
+    ----------
+    nullify_padj:
+        When ``True``, the ``padj`` column on every output row is set
+        to ``None`` regardless of the input value. The intended caller
+        is the ``rnaseq_mode=from_fastq`` orchestrator, which fits
+        DESeq2 on the 13-mt-mRNA subset — too few genes for the
+        dispersion-shrinkage estimator to be reliable. We keep the
+        log2FoldChange (a reasonable point estimate even with low gene
+        count) but suppress the Wald p-value so a downstream user
+        cannot accidentally cite "padj < 0.05" from a 13-gene fit. The
+        publication-grade flow uses ``rnaseq_mode=de_table`` with an
+        external full-transcriptome DE table where padj is meaningful.
     """
     column_map = DE_COLUMN_ALIASES["deseq2"]
     rows: list[dict] = []
     for gene_id, row in results_df.iterrows():
+        padj_value = None if nullify_padj else _safe_value(row.get("padj"))
         rows.append(
             {
                 "gene_id": str(gene_id),
                 "log2fc": _safe_value(row.get("log2FoldChange")),
-                "padj": _safe_value(row.get("padj")),
+                "padj": padj_value,
                 "basemean": _safe_value(row.get("baseMean")),
             }
         )

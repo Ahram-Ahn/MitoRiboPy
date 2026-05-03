@@ -156,6 +156,14 @@ __all__ = [
     "compute_spectral_ratio_3nt",
     "compute_spectral_ratio_3nt_local",
     "snr_call_for_ratio",
+    "DEFAULT_BOOTSTRAP_N",
+    "DEFAULT_PERMUTATIONS_N",
+    "DEFAULT_CI_ALPHA",
+    "DEFAULT_RANDOM_SEED",
+    "MIN_GENES_FOR_BOOTSTRAP_CI",
+    "build_basis_matrix",
+    "bootstrap_period3_ci",
+    "circular_shift_permutation_p",
     "build_fourier_spectrum_combined_table",
     "build_fourier_period3_score_combined_table",
 ]
@@ -196,6 +204,35 @@ amp(3) by the median over a NARROW codon-scale window (default
 periods 4-6 nt) so the score reflects "peak vs. nearby noise" rather
 than "peak vs. everything else." Report both columns and let the
 reviewer compare.
+"""
+
+DEFAULT_BOOTSTRAP_N: int = 200
+"""Bootstrap iterations for percentile CI over per-gene tracks."""
+
+DEFAULT_PERMUTATIONS_N: int = 200
+"""Circular-shift permutations for the empirical null on spectral ratios."""
+
+DEFAULT_CI_ALPHA: float = 0.10
+"""Two-sided alpha for the percentile bootstrap CI (default 90% CI)."""
+
+DEFAULT_RANDOM_SEED: int = 42
+"""Default RNG seed so bootstrap / permutation outputs are reproducible.
+
+The seed is recorded in ``periodicity.metadata.json`` so a reviewer can
+reproduce the exact CI / p-value bounds. Pass a different value via
+``mitoribopy periodicity --random-seed`` to spot-check that conclusions
+do not depend on this single draw.
+"""
+
+MIN_GENES_FOR_BOOTSTRAP_CI: int = 3
+"""Below this many qualifying per-gene tracks we refuse to emit a CI.
+
+A bootstrap CI from < 3 genes is misleadingly narrow (the bootstrap
+cannot resample variability it has not seen). Below this threshold the
+``ci_method`` column is set to ``"skipped_too_few_genes"`` and the CI
+columns are NaN. The point estimate (``spectral_ratio_3nt``) is still
+emitted; the user retains the ability to look at the metagene figure
+and judge it visually.
 """
 
 # Bicistronic-overlap transcripts (and their fused-FASTA spellings).
@@ -734,6 +771,249 @@ def snr_call_for_ratio(ratio: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Vectorised DFT basis + bootstrap / permutation helpers
+# ---------------------------------------------------------------------------
+
+
+def build_basis_matrix(window_nt: int, periods: np.ndarray) -> np.ndarray:
+    """Pre-compute the direct-DFT basis matrix ``B[k, n] = exp(-2j*pi*n/p_k)``.
+
+    Returns a ``(P, N)`` complex array. Multiplying a length-N signal by
+    ``B.T`` produces the per-period complex amplitudes in one matmul,
+    avoiding the per-period Python loop in :func:`direct_dft_amplitude`.
+    Sharing the matrix across many bootstrap / permutation iterations is
+    what makes the statistical hardening cheap enough to run on by
+    default.
+    """
+    n = np.arange(int(window_nt), dtype=float)
+    periods_arr = np.asarray(periods, dtype=float)
+    exponent = -2j * np.pi * np.outer(1.0 / periods_arr, n)
+    return np.exp(exponent)
+
+
+def _amplitudes_for_signals(
+    signals: np.ndarray, basis: np.ndarray,
+) -> np.ndarray:
+    """Direct DFT amplitudes for a batch of length-N signals.
+
+    ``signals`` shape ``(M, N)``; ``basis`` shape ``(P, N)``. Returns a
+    ``(M, P)`` array of normalised amplitudes (``|sum| / ||x||_2``).
+    Rows whose L2 norm is 0 emit NaN amplitudes.
+    """
+    z = signals @ basis.T
+    norms = np.sqrt(np.sum(signals ** 2, axis=1))
+    norms = np.where(norms > 0, norms, np.nan)
+    return np.abs(z) / norms[:, None]
+
+
+def _ratios_from_amplitudes(
+    amps: np.ndarray, *,
+    idx_target: int,
+    idx_global_bg: np.ndarray,
+    idx_local_bg: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """For each signal (row) return ``(global_ratio, local_ratio)``."""
+    target = amps[:, idx_target]
+    global_med = np.nanmedian(amps[:, idx_global_bg], axis=1) if idx_global_bg.size else np.full(amps.shape[0], np.nan)
+    local_med = np.nanmedian(amps[:, idx_local_bg], axis=1) if idx_local_bg.size else np.full(amps.shape[0], np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        global_ratio = np.where(global_med > 0, target / global_med, np.nan)
+        local_ratio = np.where(local_med > 0, target / local_med, np.nan)
+    return global_ratio, local_ratio
+
+
+def _percentile_ci(values: np.ndarray, alpha: float) -> tuple[float, float]:
+    """Two-sided percentile CI from a finite-value sample."""
+    finite = values[np.isfinite(values)]
+    if finite.size < 2:
+        return float("nan"), float("nan")
+    half = 100.0 * float(alpha) / 2.0
+    lo = float(np.percentile(finite, half))
+    hi = float(np.percentile(finite, 100.0 - half))
+    return lo, hi
+
+
+def bootstrap_period3_ci(
+    tracks: list["_PerGeneTrack"],
+    *,
+    periods: np.ndarray = DEFAULT_PERIOD_GRID,
+    target_period: float = 3.0,
+    exclude_window: tuple[float, float] = (2.8, 3.2),
+    local_range: tuple[float, float] = DEFAULT_LOCAL_BACKGROUND_RANGE,
+    n_bootstrap: int = DEFAULT_BOOTSTRAP_N,
+    ci_alpha: float = DEFAULT_CI_ALPHA,
+    rng: np.random.Generator | None = None,
+    basis: np.ndarray | None = None,
+) -> dict:
+    """Nonparametric bootstrap-over-genes CI for amp(3) and the spectral ratios.
+
+    Resamples the per-gene normalised tracks with replacement, recomputes
+    the metagene + amp(3) + global / local ratios, and returns the
+    two-sided percentile CI for each. Returns NaN CI columns when fewer
+    than :data:`MIN_GENES_FOR_BOOTSTRAP_CI` genes are available — a CI
+    drawn from < 3 genes is misleadingly tight.
+
+    Notes
+    -----
+    The bootstrap operates on the already-preprocessed
+    (unit-mean → linear-detrend → Hann-windowed) per-gene tracks, so the
+    resulting CI reflects gene-to-gene variability of the metagene
+    spectrum. It does NOT capture per-read sampling noise; the
+    :func:`circular_shift_permutation_p` companion captures the
+    significance of the *peak location* itself.
+    """
+    n_genes = len(tracks)
+    out = {
+        "amp_3nt_ci_low": float("nan"),
+        "amp_3nt_ci_high": float("nan"),
+        "spectral_ratio_3nt_ci_low": float("nan"),
+        "spectral_ratio_3nt_ci_high": float("nan"),
+        "spectral_ratio_3nt_local_ci_low": float("nan"),
+        "spectral_ratio_3nt_local_ci_high": float("nan"),
+        "n_bootstrap": int(n_bootstrap),
+        "ci_alpha": float(ci_alpha),
+        "ci_method": "percentile_over_genes",
+    }
+    if n_genes < MIN_GENES_FOR_BOOTSTRAP_CI or n_bootstrap < 1:
+        out["ci_method"] = "skipped_too_few_genes"
+        return out
+
+    rng = rng if rng is not None else np.random.default_rng(DEFAULT_RANDOM_SEED)
+    window_nt = tracks[0].normalized.size
+    if window_nt == 0:
+        out["ci_method"] = "skipped_empty_window"
+        return out
+
+    periods_arr = np.asarray(periods, dtype=float)
+    if basis is None:
+        basis = build_basis_matrix(window_nt, periods_arr)
+
+    target_idx = int(np.argmin(np.abs(periods_arr - float(target_period))))
+    lo, hi = float(exclude_window[0]), float(exclude_window[1])
+    idx_global_bg = np.where((periods_arr < lo) | (periods_arr > hi))[0]
+    local_lo, local_hi = float(local_range[0]), float(local_range[1])
+    idx_local_bg = np.where(
+        (periods_arr >= local_lo) & (periods_arr <= local_hi)
+    )[0]
+
+    stacked = np.stack([t.normalized for t in tracks], axis=0)  # (G, W)
+    sample_idx = rng.integers(0, n_genes, size=(int(n_bootstrap), n_genes))
+    boot_metagenes = np.mean(stacked[sample_idx], axis=1)  # (B, W)
+    amps = _amplitudes_for_signals(boot_metagenes, basis)  # (B, P)
+    target_amps = amps[:, target_idx]
+    global_ratios, local_ratios = _ratios_from_amplitudes(
+        amps, idx_target=target_idx,
+        idx_global_bg=idx_global_bg, idx_local_bg=idx_local_bg,
+    )
+
+    out["amp_3nt_ci_low"], out["amp_3nt_ci_high"] = _percentile_ci(
+        target_amps, ci_alpha,
+    )
+    out["spectral_ratio_3nt_ci_low"], out["spectral_ratio_3nt_ci_high"] = (
+        _percentile_ci(global_ratios, ci_alpha)
+    )
+    (
+        out["spectral_ratio_3nt_local_ci_low"],
+        out["spectral_ratio_3nt_local_ci_high"],
+    ) = _percentile_ci(local_ratios, ci_alpha)
+    return out
+
+
+def circular_shift_permutation_p(
+    tracks: list["_PerGeneTrack"],
+    *,
+    observed_ratio: float,
+    observed_ratio_local: float,
+    periods: np.ndarray = DEFAULT_PERIOD_GRID,
+    target_period: float = 3.0,
+    exclude_window: tuple[float, float] = (2.8, 3.2),
+    local_range: tuple[float, float] = DEFAULT_LOCAL_BACKGROUND_RANGE,
+    n_permutations: int = DEFAULT_PERMUTATIONS_N,
+    rng: np.random.Generator | None = None,
+    basis: np.ndarray | None = None,
+) -> dict:
+    """Circular-shift permutation null for the spectral ratios.
+
+    For each permutation iteration: every per-gene RAW coverage track is
+    independently shifted by a uniformly random integer offset in
+    ``[0, W-1]``; the per-gene unit-mean → linear-detrend → Hann-window
+    pipeline is re-applied; the resulting metagene spectral ratios are
+    computed. The Laplace-smoothed empirical p-value is the fraction of
+    permutations whose ratio is >= the observed ratio,
+    ``(k + 1) / (n_permutations + 1)``.
+
+    The null hypothesis is "no codon-phase coherence across genes" —
+    circular shifts preserve each gene's marginal coverage shape but
+    randomise its position relative to the codon grid. A p-value near
+    0 means the observed peak at period 3 is unlikely under that null.
+    """
+    n_genes = len(tracks)
+    out = {
+        "permutation_p": float("nan"),
+        "permutation_p_local": float("nan"),
+        "n_permutations": int(n_permutations),
+        "null_method": "circular_shift_per_gene",
+    }
+    if n_genes < 1 or n_permutations < 1:
+        out["null_method"] = "skipped_no_tracks"
+        return out
+    rng = rng if rng is not None else np.random.default_rng(
+        DEFAULT_RANDOM_SEED + 1
+    )
+    window_nt = tracks[0].raw_coverage.size
+    if window_nt == 0:
+        out["null_method"] = "skipped_empty_window"
+        return out
+
+    periods_arr = np.asarray(periods, dtype=float)
+    if basis is None:
+        basis = build_basis_matrix(window_nt, periods_arr)
+    target_idx = int(np.argmin(np.abs(periods_arr - float(target_period))))
+    lo, hi = float(exclude_window[0]), float(exclude_window[1])
+    idx_global_bg = np.where((periods_arr < lo) | (periods_arr > hi))[0]
+    local_lo, local_hi = float(local_range[0]), float(local_range[1])
+    idx_local_bg = np.where(
+        (periods_arr >= local_lo) & (periods_arr <= local_hi)
+    )[0]
+    hann = np.hanning(window_nt)
+
+    raw = np.stack([t.raw_coverage for t in tracks], axis=0)  # (G, W)
+    # Vectorise the per-gene circular shift for one permutation iter:
+    # gather indices `(arange(W) - shift) mod W` give the shifted vector.
+    base_idx = np.arange(window_nt)
+    n_perm = int(n_permutations)
+    metagenes = np.empty((n_perm, window_nt), dtype=float)
+    for perm_i in range(n_perm):
+        shifts = rng.integers(0, window_nt, size=n_genes)
+        gather = (base_idx[None, :] - shifts[:, None]) % window_nt
+        shifted = np.take_along_axis(raw, gather, axis=1)
+        # Per-gene normalize + linear detrend + Hann (matches the live
+        # path in _normalize_and_window).
+        means = shifted.mean(axis=1)
+        keep = means > 0
+        normalized = np.zeros_like(shifted)
+        if np.any(keep):
+            unit = shifted[keep] / means[keep, None]
+            unit_dt = _sp_signal.detrend(unit, axis=1, type="linear")
+            normalized[keep] = unit_dt * hann[None, :]
+        metagenes[perm_i] = np.mean(normalized, axis=0)
+
+    amps = _amplitudes_for_signals(metagenes, basis)
+    null_global, null_local = _ratios_from_amplitudes(
+        amps, idx_target=target_idx,
+        idx_global_bg=idx_global_bg, idx_local_bg=idx_local_bg,
+    )
+
+    if np.isfinite(observed_ratio):
+        n_ge = int(np.sum(np.isfinite(null_global) & (null_global >= float(observed_ratio))))
+        out["permutation_p"] = (n_ge + 1) / (n_perm + 1)
+    if np.isfinite(observed_ratio_local):
+        n_ge = int(np.sum(np.isfinite(null_local) & (null_local >= float(observed_ratio_local))))
+        out["permutation_p_local"] = (n_ge + 1) / (n_perm + 1)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Aggregate-table builders
 # ---------------------------------------------------------------------------
 
@@ -749,7 +1029,15 @@ _SCORE_COMBINED_COLS: tuple[str, ...] = (
     "n_genes", "n_sites_total", "n_nt",
     "amp_at_3nt", "background_amp_median", "spectral_ratio_3nt",
     "local_background_amp_median", "spectral_ratio_3nt_local",
-    "snr_call", "snr_call_local", "transcripts",
+    "snr_call", "snr_call_local",
+    # v0.9.0: statistical hardening — bootstrap CI + permutation null.
+    "amp_3nt_ci_low", "amp_3nt_ci_high",
+    "spectral_ratio_3nt_ci_low", "spectral_ratio_3nt_ci_high",
+    "spectral_ratio_3nt_local_ci_low", "spectral_ratio_3nt_local_ci_high",
+    "permutation_p", "permutation_p_local",
+    "n_bootstrap", "n_permutations", "ci_alpha",
+    "ci_method", "null_method",
+    "transcripts",
 )
 
 
@@ -815,8 +1103,13 @@ def build_fourier_period3_score_combined_table(
     target_period: float = 3.0,
     exclude_window: tuple[float, float] = (2.8, 3.2),
     local_range: tuple[float, float] = DEFAULT_LOCAL_BACKGROUND_RANGE,
+    n_bootstrap: int = DEFAULT_BOOTSTRAP_N,
+    n_permutations: int = DEFAULT_PERMUTATIONS_N,
+    ci_alpha: float = DEFAULT_CI_ALPHA,
+    random_seed: int = DEFAULT_RANDOM_SEED,
+    compute_stats: bool = True,
 ) -> pd.DataFrame:
-    """Per-(sample, length, gene_set, region) period-3 amplitude + ratios.
+    """Per-(sample, length, gene_set, region) period-3 amplitude + ratios + CI + p.
 
     Two complementary scalars are reported per row:
 
@@ -832,6 +1125,28 @@ def build_fourier_period3_score_combined_table(
     ({"excellent", "healthy", "modest", "broken", "no_signal"}) per
     the thresholds in :func:`snr_call_for_ratio`.
 
+    Statistical hardening (v0.9.0+): when ``compute_stats=True`` (the
+    default) every row also carries
+
+    * ``amp_3nt_ci_{low,high}``, ``spectral_ratio_3nt_ci_{low,high}``,
+      ``spectral_ratio_3nt_local_ci_{low,high}`` — two-sided percentile
+      CI from a nonparametric bootstrap-over-genes (default 200 iters,
+      90 % CI). Skipped (NaN columns, ``ci_method="skipped_too_few_genes"``)
+      when fewer than :data:`MIN_GENES_FOR_BOOTSTRAP_CI` genes are
+      available.
+    * ``permutation_p`` / ``permutation_p_local`` — Laplace-smoothed
+      empirical p-values from a per-gene circular-shift permutation null
+      (default 200 iters). The null hypothesis is "no codon-phase
+      coherence across genes"; small p means the period-3 peak is
+      unlikely under that null.
+    * ``n_bootstrap`` / ``n_permutations`` / ``ci_alpha`` /
+      ``ci_method`` / ``null_method`` — audit fields recording the
+      exact procedure that produced the CI / p columns.
+
+    The bootstrap and permutation steps share a single deterministic
+    RNG seeded with ``random_seed`` (default 42), so re-running the same
+    inputs produces byte-identical CI / p columns.
+
     The ``transcripts`` column is a semicolon-joined list of the
     transcripts that contributed to the metagene — auditability.
     """
@@ -840,6 +1155,14 @@ def build_fourier_period3_score_combined_table(
 
     rows: list[dict] = []
     grouped = _group_tracks(tracks)
+    rng = np.random.default_rng(int(random_seed))
+    boot_rng = np.random.default_rng(int(random_seed))
+    perm_rng = np.random.default_rng(int(random_seed) + 1)
+    # Pre-compute a basis matrix once per window-size — every track in
+    # one run shares the same window_nt, so this is a single allocation
+    # that's reused across every (sample, length, gene_set, region).
+    basis_cache: dict[int, np.ndarray] = {}
+    periods_arr = np.asarray(periods, dtype=float)
     for (sample, read_length, gene_set, region), group in grouped.items():
         metagene = build_metagene(group)
         if metagene.size == 0:
@@ -869,6 +1192,56 @@ def build_fourier_period3_score_combined_table(
             float(np.median(local_bg.dropna()))
             if not local_bg.dropna().empty else float("nan")
         )
+
+        # Statistical hardening — bootstrap CI + permutation null.
+        if compute_stats:
+            window_nt = group[0].normalized.size
+            basis = basis_cache.get(window_nt)
+            if basis is None:
+                basis = build_basis_matrix(window_nt, periods_arr)
+                basis_cache[window_nt] = basis
+            stats_boot = bootstrap_period3_ci(
+                group,
+                periods=periods_arr,
+                target_period=target_period,
+                exclude_window=exclude_window,
+                local_range=local_range,
+                n_bootstrap=int(n_bootstrap),
+                ci_alpha=float(ci_alpha),
+                rng=boot_rng,
+                basis=basis,
+            )
+            stats_perm = circular_shift_permutation_p(
+                group,
+                observed_ratio=float(ratio),
+                observed_ratio_local=float(ratio_local),
+                periods=periods_arr,
+                target_period=target_period,
+                exclude_window=exclude_window,
+                local_range=local_range,
+                n_permutations=int(n_permutations),
+                rng=perm_rng,
+                basis=basis,
+            )
+        else:
+            stats_boot = {
+                "amp_3nt_ci_low": float("nan"),
+                "amp_3nt_ci_high": float("nan"),
+                "spectral_ratio_3nt_ci_low": float("nan"),
+                "spectral_ratio_3nt_ci_high": float("nan"),
+                "spectral_ratio_3nt_local_ci_low": float("nan"),
+                "spectral_ratio_3nt_local_ci_high": float("nan"),
+                "n_bootstrap": 0,
+                "ci_alpha": float(ci_alpha),
+                "ci_method": "disabled",
+            }
+            stats_perm = {
+                "permutation_p": float("nan"),
+                "permutation_p_local": float("nan"),
+                "n_permutations": 0,
+                "null_method": "disabled",
+            }
+
         rows.append({
             "sample": sample,
             "read_length": int(read_length),
@@ -884,9 +1257,19 @@ def build_fourier_period3_score_combined_table(
             "spectral_ratio_3nt_local": float(ratio_local),
             "snr_call": snr_call_for_ratio(ratio),
             "snr_call_local": snr_call_for_ratio(ratio_local),
+            "amp_3nt_ci_low": stats_boot["amp_3nt_ci_low"],
+            "amp_3nt_ci_high": stats_boot["amp_3nt_ci_high"],
+            "spectral_ratio_3nt_ci_low": stats_boot["spectral_ratio_3nt_ci_low"],
+            "spectral_ratio_3nt_ci_high": stats_boot["spectral_ratio_3nt_ci_high"],
+            "spectral_ratio_3nt_local_ci_low": stats_boot["spectral_ratio_3nt_local_ci_low"],
+            "spectral_ratio_3nt_local_ci_high": stats_boot["spectral_ratio_3nt_local_ci_high"],
+            "permutation_p": stats_perm["permutation_p"],
+            "permutation_p_local": stats_perm["permutation_p_local"],
+            "n_bootstrap": int(stats_boot["n_bootstrap"]),
+            "n_permutations": int(stats_perm["n_permutations"]),
+            "ci_alpha": float(stats_boot["ci_alpha"]),
+            "ci_method": str(stats_boot["ci_method"]),
+            "null_method": str(stats_perm["null_method"]),
             "transcripts": ";".join(sorted(t.transcript for t in group)),
         })
-    # TODO(stats): bootstrap CI over genes (resample with replacement,
-    # recompute ratio, percentile) and circular-shift permutation null
-    # (shift each track by random offset, recompute ratio, empirical p).
     return pd.DataFrame(rows, columns=list(_SCORE_COMBINED_COLS))

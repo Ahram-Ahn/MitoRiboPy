@@ -1,0 +1,3 @@
+sample_id	assay	fastq_r1	umi_position
+WT_smoke_1	ribo	fastqs/WT_smoke_1.fastq.gz	none
+KO_smoke_1	ribo	fastqs/KO_smoke_1.fastq.gz	none

@@ -78,7 +78,7 @@ def _seed_rnaseq_outputs(run_root: Path) -> None:
 def cfg_align_rpf(tmp_path: Path) -> Path:
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: auto\n"
+        "align:\n  # adapter auto-detection (default)\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     )
     return cfg
@@ -88,7 +88,7 @@ def cfg_align_rpf(tmp_path: Path) -> Path:
 def cfg_align_rpf_rnaseq(tmp_path: Path) -> Path:
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: auto\n"
+        "align:\n  # adapter auto-detection (default)\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n  de_table: /tmp/de.tsv\n"
     )

@@ -127,8 +127,8 @@ WARNING_CODES: tuple[WarningCode, ...] = (
             "match threshold and could not pick one."
         ),
         remediation=(
-            "Set `kit_preset:` (or the per-sample override) explicitly "
-            "in the YAML / sample sheet."
+            "Pin the 3' adapter explicitly with `--adapter <SEQ>` (CLI) "
+            "or `adapter: <SEQ>` (YAML / sample sheet)."
         ),
     ),
     WarningCode(
@@ -137,13 +137,13 @@ WARNING_CODES: tuple[WarningCode, ...] = (
         stage="align",
         sample_scoped=True,
         summary=(
-            "Kit preset / config declared a UMI but no UMI bases were "
+            "Resolved kit declared a UMI but no UMI bases were "
             "extracted by cutadapt."
         ),
         remediation=(
             "Verify `umi_length` / `umi_position` against the library "
             "prep documentation; pre-trimmed reads may need "
-            "`kit_preset: pretrimmed` instead."
+            "`--pretrimmed` (or `pretrimmed: true` in YAML) instead."
         ),
     ),
     WarningCode(

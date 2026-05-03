@@ -68,13 +68,12 @@ UmiPosition = Literal["5p", "3p", "both"]
 
 @dataclass(frozen=True)
 class KitPreset:
-    """Library-prep kit defaults for adapter and UMI handling.
+    """Library-prep kit signature used for adapter detection and reporting.
 
-    The ``adapter`` may be ``None`` for ``custom``, in which case the user
-    MUST pass ``--adapter`` explicitly. This is intentional: a silently
-    wrong adapter is one of the worst failure modes for mt-Ribo-seq
-    because it shifts the RPF length distribution outside the 15-45 nt
-    filter and drops reads the user does not realize they lost.
+    Kit presets are an INTERNAL concept since v0.7.1: the user-facing
+    ``--kit-preset`` flag was removed. Users supply ``--adapter`` or let
+    auto-detection identify the kit; the names here are produced by the
+    detector and surface only in ``kit_resolution.tsv`` for provenance.
     """
 
     name: str
@@ -92,27 +91,18 @@ class KitPreset:
 # Canonical preset registry, organized by adapter family rather than
 # kit brand. Most commercial library prep kits share one of three 3'
 # adapter sequences; differentiating presets by adapter family (instead
-# of by vendor name) keeps the registry small, makes detection
-# unambiguous (no two presets share an adapter), and lets a single
-# preset cover an entire family of kits. Vendor names live in the
-# ``description`` and in the ``KIT_PRESET_ALIASES`` map below.
+# of by vendor name) keeps the registry small and makes detection
+# unambiguous (no two presets share an adapter).
+#
+# Two non-detecting sentinels live alongside the real adapter families:
+# ``pretrimmed`` (no adapter to trim — auto-inferred or declared via
+# ``--pretrimmed``) and ``custom`` (the kit name reported when the user
+# supplied an unknown ``--adapter`` sequence directly).
 #
 # Every adapter sequence here MUST be cross-checked against the kit
 # vendor's documentation; a mismatch silently corrupts real data.
 KIT_PRESETS: dict[str, KitPreset] = {
-    # --- Sentinels / fallbacks ---
-    "auto": KitPreset(
-        name="auto",
-        adapter=None,
-        umi_length=0,
-        umi_position="5p",
-        description=(
-            "Per-sample auto detection. The orchestrator scans the head of "
-            "every input FASTQ and resolves the kit independently for each "
-            "sample. This is the default when no explicit --kit-preset is "
-            "supplied."
-        ),
-    ),
+    # --- Sentinels / fallbacks (internal labels; not user-selectable) ---
     "pretrimmed": KitPreset(
         name="pretrimmed",
         adapter=None,
@@ -122,10 +112,10 @@ KIT_PRESETS: dict[str, KitPreset] = {
             "Already-trimmed FASTQs (e.g. SRA-deposited data, or output of "
             "a prior trim step) — the adapter has already been clipped, so "
             "cutadapt skips the -a flag and only enforces length and "
-            "quality filtering. Note: 'pretrimmed' describes the INPUT "
-            "STATE ('already trimmed'), not an action this pipeline takes. "
-            "Auto-inferred when adapter detection finds no known kit "
-            "signature; can also be set explicitly to skip detection."
+            "quality filtering. 'pretrimmed' describes the INPUT STATE, "
+            "not an action this pipeline takes. Auto-inferred when adapter "
+            "detection finds no known kit signature; users can also force "
+            "it via ``--pretrimmed``."
         ),
     ),
     "custom": KitPreset(
@@ -134,12 +124,12 @@ KIT_PRESETS: dict[str, KitPreset] = {
         umi_length=0,
         umi_position="5p",
         description=(
-            "No defaults applied. --adapter must be supplied explicitly. "
-            "Use this preset whenever your kit is not one of the named "
-            "adapter families."
+            "Internal label for runs where the user supplied ``--adapter "
+            "<SEQ>`` and the sequence did not match any known adapter "
+            "family. The reported adapter is the user's literal sequence."
         ),
     ),
-    # --- Real adapter families ---
+    # --- Real adapter families (these are what the detector returns) ---
     "illumina_smallrna": KitPreset(
         name="illumina_smallrna",
         adapter="TGGAATTCTCGGGTGCCAAGG",
@@ -190,29 +180,6 @@ KIT_PRESETS: dict[str, KitPreset] = {
         ),
     ),
 }
-
-
-# Backward-compatibility aliases. Earlier releases used vendor-specific
-# preset names (``truseq_smallrna``, ``nebnext_smallrna``, …); the
-# canonical names are now adapter-family names. Old YAML configs and
-# CLI invocations keep working — :func:`resolve_kit_alias` translates
-# them transparently with an INFO log line so the user knows the mapping.
-KIT_PRESET_ALIASES: dict[str, str] = {
-    "truseq_smallrna": "illumina_smallrna",
-    "nebnext_smallrna": "illumina_truseq",
-    "nebnext_ultra_umi": "illumina_truseq_umi",
-    "truseq_stranded_total": "illumina_truseq",
-    "smarter_pico_v3": "illumina_truseq",
-    "sequoia_express": "illumina_truseq",
-}
-
-
-def resolve_kit_alias(name: str) -> str:
-    """Translate a legacy vendor-specific preset name to the canonical
-    adapter-family preset name. Pass-through for canonical names and
-    sentinels (auto, pretrimmed, custom).
-    """
-    return KIT_PRESET_ALIASES.get(name, name)
 
 
 @dataclass(frozen=True)
@@ -294,7 +261,7 @@ class DedupResult:
 
 @dataclass(frozen=True)
 class SampleOverride:
-    """Per-sample CLI/YAML override for kit + dedup resolution.
+    """Per-sample CLI/YAML override for adapter + UMI + dedup resolution.
 
     Populated from the ``align.samples:`` YAML list (via the ``mitoribopy
     all`` orchestrator) or from a TSV passed as ``--sample-overrides``
@@ -305,11 +272,15 @@ class SampleOverride:
     The ``sample`` field matches the FASTQ basename with the trailing
     ``.fq[.gz]`` / ``.fastq[.gz]`` suffix removed (the same naming
     convention :func:`mitoribopy.cli.align._sample_name` produces).
+
+    ``pretrimmed=True`` declares already-trimmed input for that sample
+    and is mutually exclusive with ``adapter`` (a sample is either
+    pretrimmed or has an adapter to trim).
     """
 
     sample: str
-    kit_preset: str | None = None
     adapter: str | None = None
+    pretrimmed: bool | None = None
     umi_length: int | None = None
     umi_position: UmiPosition | None = None
     dedup_strategy: DedupStrategy | None = None

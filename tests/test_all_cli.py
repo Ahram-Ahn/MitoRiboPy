@@ -127,7 +127,7 @@ def test_all_dry_run_polymorphic_fastq_string_becomes_fastq_dir(tmp_path, capsys
     cfg = tmp_path / "p.yaml"
     cfg.write_text(
         "align:\n"
-        "  kit_preset: auto\n"
+        "  # adapter auto-detection (default)\n"
         "  fastq: input_data/\n"
     )
     exit_code = cli.main([
@@ -179,7 +179,7 @@ def test_all_dry_run_with_config_lists_per_stage_argv(tmp_path, capsys) -> None:
     cfg = tmp_path / "pipeline.yaml"
     cfg.write_text(
         "align:\n"
-        "  kit_preset: truseq_smallrna\n"
+        "  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "  fastq_dir: fastqs/\n"
         "rpf:\n"
         "  strain: h\n"
@@ -272,7 +272,7 @@ def test_all_requires_config(capsys) -> None:
 
 def test_all_requires_output_when_not_dry_run(tmp_path, capsys) -> None:
     cfg = tmp_path / "c.yaml"
-    cfg.write_text("align:\n  kit_preset: truseq_smallrna\n")
+    cfg.write_text("align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n")
     exit_code = cli.main(["all", "--config", str(cfg)])
     assert exit_code == 2
     assert "--output" in capsys.readouterr().err
@@ -321,7 +321,7 @@ def test_all_runs_align_then_rpf_then_rnaseq(tmp_path, monkeypatch) -> None:
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n"
         "rnaseq:\n  de_table: de.tsv\n  gene_id_convention: hgnc\n"
     )
@@ -375,7 +375,7 @@ def test_all_resume_skips_stages_with_existing_outputs(tmp_path, monkeypatch) ->
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n"
     )
 
@@ -400,7 +400,7 @@ def test_all_propagates_nonzero_exit_from_align(tmp_path, monkeypatch, capsys) -
     monkeypatch.setattr(align_cli, "run", lambda argv: 2)
 
     cfg = tmp_path / "c.yaml"
-    cfg.write_text("align:\n  kit_preset: truseq_smallrna\n")
+    cfg.write_text("align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n")
     exit_code = cli.main([
         "all",
         "--config", str(cfg),
@@ -435,7 +435,7 @@ def test_all_skips_rnaseq_when_de_table_absent(tmp_path, monkeypatch) -> None:
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n"
         # rnaseq section is present but has no de_table -> skipped.
         "rnaseq:\n  gene_id_convention: hgnc\n"
@@ -463,7 +463,7 @@ def test_all_respects_skip_rpf_flag(tmp_path, monkeypatch) -> None:
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n"
     )
     exit_code = cli.main([
@@ -532,7 +532,7 @@ def test_all_runs_rnaseq_in_from_fastq_mode(tmp_path, monkeypatch) -> None:
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n"
         "  rna_fastq:\n"
@@ -639,7 +639,7 @@ def test_manifest_carries_schema_v1_metadata(tmp_path, monkeypatch) -> None:
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n"
     )
     results = tmp_path / "results"
@@ -704,7 +704,7 @@ def test_manifest_distinguishes_skipped_vs_not_configured(
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n"
         # rnaseq section absent -> not_configured.
     )
@@ -756,7 +756,7 @@ def test_manifest_records_sample_sheet_sha256(tmp_path, monkeypatch) -> None:
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
         f"samples:\n  table: {sheet}\n"
-        "align:\n  kit_preset: auto\n"
+        "align:\n  # adapter auto-detection (default)\n"
         "rpf:\n  strain: h\n"
     )
     results = tmp_path / "results"
@@ -776,7 +776,7 @@ def test_print_canonical_config_outputs_merged_yaml(tmp_path, capsys) -> None:
     would embed under config_canonical, without running any stage."""
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     )
     exit_code = cli.main([
@@ -854,7 +854,7 @@ def test_all_top_level_samples_drives_align_and_rnaseq(
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
         f"samples:\n  table: {sheet}\n"
-        "align:\n  kit_preset: auto\n"
+        "align:\n  # adapter auto-detection (default)\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n  gene_id_convention: bare\n"
         "  condition_a: WT\n  condition_b: KO\n"
@@ -947,7 +947,7 @@ def test_all_top_level_samples_shorthand_string_form(tmp_path, monkeypatch) -> N
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
         f"samples: {sheet}\n"
-        "align:\n  kit_preset: auto\n"
+        "align:\n  # adapter auto-detection (default)\n"
         "rpf:\n  strain: h\n"
     )
     exit_code = cli.main([
@@ -1002,7 +1002,7 @@ def test_all_keeps_explicit_rnaseq_reference_override(tmp_path, monkeypatch) -> 
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  kit_preset: truseq_smallrna\n"
+        "align:\n  adapter: TGGAATTCTCGGGTGCCAAGG\n"
         "rpf:\n  strain: h\n  fasta: /tmp/rpf.fa\n"
         "rnaseq:\n"
         "  rna_fastq:\n    - rna1.fq.gz\n"
