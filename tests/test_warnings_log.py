@@ -203,7 +203,7 @@ def test_mitoribopy_all_writes_warnings_tsv_and_manifest(
 
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
-        "align:\n  # adapter auto-detection (default)\n"
+        "align:\n  dedup_strategy: auto\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
     )
 

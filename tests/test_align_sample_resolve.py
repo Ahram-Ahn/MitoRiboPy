@@ -16,6 +16,12 @@ from mitoribopy.align.sample_resolve import (
 )
 
 
+# v0.7.1: kit names are an internal label only — users supply
+# ``--adapter <SEQ>`` (the literal 3' adapter sequence) or ``--pretrimmed``.
+ILLUMINA_SMALLRNA_ADAPTER = "TGGAATTCTCGGGTGCCAAGG"
+ILLUMINA_TRUSEQ_ADAPTER = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA"
+
+
 def _detection(
     name: str | None,
     rate: float = 0.95,
@@ -41,6 +47,20 @@ def _detector(map_: dict[str, DetectionResult]):
     return detector
 
 
+def _resolve(samples, **kwargs):
+    """Tiny helper to fill defaults that every test needs."""
+    base: dict = {
+        "adapter": None,
+        "pretrimmed": False,
+        "umi_length": None,
+        "umi_position": None,
+        "dedup_strategy": "auto",
+        "adapter_detection_mode": "auto",
+    }
+    base.update(kwargs)
+    return resolve_sample_resolutions(samples, **base)
+
+
 # ---------- happy path -------------------------------------------------------
 
 
@@ -57,14 +77,8 @@ def test_auto_detection_picks_per_sample_kit_independently(tmp_path) -> None:
         }
     )
 
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a), ("b", b)],
-        kit_preset="auto",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="auto",
         detector=detector,
     )
 
@@ -76,24 +90,22 @@ def test_auto_detection_picks_per_sample_kit_independently(tmp_path) -> None:
     assert all(r.source == "detected" for r in resolutions)
 
 
-def test_auto_falls_back_to_user_kit_when_detection_fails(tmp_path) -> None:
+def test_auto_falls_back_to_user_adapter_when_detection_fails(tmp_path) -> None:
     a = tmp_path / "a.fq.gz"
     a.write_text("")
 
     detector = _detector({"a.fq.gz": _detection(None, rate=0.0)})
 
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a)],
-        kit_preset="illumina_smallrna",  # explicit fallback
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="auto",
+        adapter=ILLUMINA_SMALLRNA_ADAPTER,
         detector=detector,
     )
+    # Even though detection failed, the supplied adapter happens to match
+    # a known family so the kit name is reported.
     assert resolutions[0].kit.kit == "illumina_smallrna"
-    assert resolutions[0].source == "user_fallback"
+    assert resolutions[0].kit.adapter == ILLUMINA_SMALLRNA_ADAPTER
+    assert resolutions[0].source == "user_adapter"
 
 
 def test_auto_hard_fails_when_no_detection_and_no_fallback(tmp_path) -> None:
@@ -103,14 +115,8 @@ def test_auto_hard_fails_when_no_detection_and_no_fallback(tmp_path) -> None:
     detector = _detector({"a.fq.gz": _detection(None, rate=0.0)})
 
     with pytest.raises(SampleResolutionError) as exc:
-        resolve_sample_resolutions(
+        _resolve(
             [("a", a)],
-            kit_preset="auto",  # no fallback
-            adapter=None,
-            umi_length=None,
-            umi_position=None,
-            dedup_strategy="auto",
-            adapter_detection_mode="auto",
             detector=detector,
         )
     assert "auto-detection found no known kit" in str(exc.value)
@@ -126,13 +132,9 @@ def test_strict_hard_fails_on_disagreement(tmp_path) -> None:
     detector = _detector({"a.fq.gz": _detection("illumina_truseq", rate=0.9)})
 
     with pytest.raises(SampleResolutionError) as exc:
-        resolve_sample_resolutions(
+        _resolve(
             [("a", a)],
-            kit_preset="illumina_smallrna",
-            adapter=None,
-            umi_length=None,
-            umi_position=None,
-            dedup_strategy="auto",
+            adapter=ILLUMINA_SMALLRNA_ADAPTER,
             adapter_detection_mode="strict",
             detector=detector,
         )
@@ -140,19 +142,14 @@ def test_strict_hard_fails_on_disagreement(tmp_path) -> None:
     assert "illumina_truseq" in str(exc.value)
 
 
-def test_strict_uses_detected_when_user_left_auto(tmp_path) -> None:
+def test_strict_uses_detected_when_no_user_adapter(tmp_path) -> None:
     a = tmp_path / "a.fq.gz"
     a.write_text("")
 
     detector = _detector({"a.fq.gz": _detection("illumina_smallrna")})
 
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a)],
-        kit_preset="auto",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
         adapter_detection_mode="strict",
         detector=detector,
     )
@@ -163,37 +160,28 @@ def test_strict_uses_detected_when_user_left_auto(tmp_path) -> None:
 # ---------- off mode --------------------------------------------------------
 
 
-def test_off_mode_requires_explicit_preset(tmp_path) -> None:
+def test_off_mode_requires_explicit_adapter(tmp_path) -> None:
     a = tmp_path / "a.fq.gz"
     a.write_text("")
 
     with pytest.raises(SampleResolutionError) as exc:
-        resolve_sample_resolutions(
+        _resolve(
             [("a", a)],
-            kit_preset="auto",
-            adapter=None,
-            umi_length=None,
-            umi_position=None,
-            dedup_strategy="auto",
             adapter_detection_mode="off",
         )
     assert "--adapter-detection off requires" in str(exc.value)
 
 
-def test_off_mode_uses_explicit_preset_without_scanning(tmp_path) -> None:
+def test_off_mode_uses_explicit_adapter_without_scanning(tmp_path) -> None:
     a = tmp_path / "a.fq.gz"
     a.write_text("")
 
     def explode(_path):
         raise AssertionError("detector must NOT run in off mode")
 
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a)],
-        kit_preset="illumina_smallrna",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
+        adapter=ILLUMINA_SMALLRNA_ADAPTER,
         adapter_detection_mode="off",
         detector=explode,
     )
@@ -218,14 +206,8 @@ def test_resolver_aggregates_per_sample_errors(tmp_path) -> None:
     )
 
     with pytest.raises(SampleResolutionError) as exc:
-        resolve_sample_resolutions(
+        _resolve(
             [("a", a), ("b", b)],
-            kit_preset="auto",
-            adapter=None,
-            umi_length=None,
-            umi_position=None,
-            dedup_strategy="auto",
-            adapter_detection_mode="auto",
             detector=detector,
         )
     msg = str(exc.value)
@@ -250,14 +232,8 @@ def test_required_dedup_tools_unions_per_sample_strategies(tmp_path) -> None:
             "b.fq.gz": _detection("illumina_truseq_umi"),  # UMI -> umi-tools
         }
     )
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a), ("b", b)],
-        kit_preset="auto",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="auto",
         detector=detector,
     )
     assert required_dedup_tools(resolutions) == {"umi_tools"}
@@ -267,14 +243,8 @@ def test_write_kit_resolution_tsv_writes_header_and_one_row_per_sample(tmp_path)
     a = tmp_path / "a.fq.gz"
     a.write_text("")
     detector = _detector({"a.fq.gz": _detection("illumina_smallrna")})
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a)],
-        kit_preset="auto",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="auto",
         detector=detector,
     )
     out = tmp_path / "kit_resolution.tsv"
@@ -299,14 +269,8 @@ def test_auto_infers_pretrimmed_when_no_kit_matches_and_no_fallback(tmp_path) ->
         {"a.fq.gz": _detection(None, rate=0.0, pretrimmed=True)}
     )
 
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a)],
-        kit_preset="auto",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="auto",
         detector=detector,
     )
     assert resolutions[0].kit.kit == "pretrimmed"
@@ -324,42 +288,44 @@ def test_auto_pretrimmed_inference_can_be_disabled(tmp_path) -> None:
     )
 
     with pytest.raises(SampleResolutionError):
-        resolve_sample_resolutions(
+        _resolve(
             [("a", a)],
-            kit_preset="auto",
-            adapter=None,
-            umi_length=None,
-            umi_position=None,
-            dedup_strategy="auto",
-            adapter_detection_mode="auto",
             allow_pretrimmed_inference=False,
             detector=detector,
         )
 
 
-def test_explicit_pretrimmed_kit_preset_resolves_with_no_adapter(tmp_path) -> None:
-    """``--kit-preset pretrimmed`` resolves to adapter=None so cutadapt
-    skips the -a flag entirely."""
+def test_explicit_pretrimmed_resolves_with_no_adapter(tmp_path) -> None:
+    """``--pretrimmed`` resolves to adapter=None so cutadapt skips
+    the -a flag entirely; detection is short-circuited."""
     a = tmp_path / "a.fq.gz"
     a.write_text("")
-    # Detector returns a real kit, but the user explicitly chose
-    # pretrimmed → user's choice wins via the user_fallback path.
-    detector = _detector({"a.fq.gz": _detection("illumina_smallrna")})
 
-    resolutions = resolve_sample_resolutions(
+    def explode(_path):
+        raise AssertionError("detector must NOT run when --pretrimmed is set")
+
+    resolutions = _resolve(
         [("a", a)],
-        kit_preset="pretrimmed",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="auto",
-        detector=detector,
+        pretrimmed=True,
+        detector=explode,
     )
     assert resolutions[0].kit.kit == "pretrimmed"
     assert resolutions[0].kit.adapter is None
+    assert resolutions[0].source == "explicit_pretrimmed"
     # Dedup falls through to skip (no UMI on the pretrimmed preset).
     assert resolutions[0].dedup_strategy == "skip"
+
+
+def test_pretrimmed_and_adapter_are_mutually_exclusive(tmp_path) -> None:
+    a = tmp_path / "a.fq.gz"
+    a.write_text("")
+    with pytest.raises(SampleResolutionError) as exc:
+        _resolve(
+            [("a", a)],
+            pretrimmed=True,
+            adapter=ILLUMINA_SMALLRNA_ADAPTER,
+        )
+    assert "mutually exclusive" in str(exc.value)
 
 
 def test_mixed_batch_pretrimmed_and_raw_samples(tmp_path) -> None:
@@ -377,14 +343,8 @@ def test_mixed_batch_pretrimmed_and_raw_samples(tmp_path) -> None:
         }
     )
 
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a), ("b", b)],
-        kit_preset="auto",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="auto",
         detector=detector,
     )
     by_sample = {res.sample: res for res in resolutions}
@@ -394,48 +354,40 @@ def test_mixed_batch_pretrimmed_and_raw_samples(tmp_path) -> None:
     assert by_sample["b"].source == "detected"
 
 
-def test_legacy_kit_aliases_resolve_to_canonical_presets(tmp_path) -> None:
-    """v0.4.0 vendor names (truseq_smallrna, nebnext_smallrna,
-    nebnext_ultra_umi, …) must keep working as --kit-preset choices in
-    YAML configs and CLI invocations even after the v0.4.1
-    consolidation; they translate to the canonical adapter-family
-    preset name through ``resolve_kit_alias``.
-    """
+def test_user_adapter_overrides_detected_kit(tmp_path) -> None:
+    """When detection succeeds AND --adapter is supplied, the user's
+    literal sequence wins; the detected kit name is preserved for
+    provenance reporting."""
     a = tmp_path / "a.fq.gz"
     a.write_text("")
-    detector = _detector({"a.fq.gz": _detection("illumina_smallrna")})
-
-    # User passes the legacy alias; resolver must translate it to the
-    # canonical illumina_smallrna preset.
-    resolutions = resolve_sample_resolutions(
+    # Detector says the adapter is illumina_truseq, but user passes
+    # the small-RNA adapter — we honour the user's literal sequence.
+    detector = _detector({"a.fq.gz": _detection("illumina_truseq", rate=0.9)})
+    resolutions = _resolve(
         [("a", a)],
-        kit_preset="truseq_smallrna",  # legacy alias
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="off",  # no scan; trust the alias
+        adapter=ILLUMINA_SMALLRNA_ADAPTER,
+        detector=detector,
     )
-    assert resolutions[0].kit.kit == "illumina_smallrna"
-    assert resolutions[0].kit.adapter == "TGGAATTCTCGGGTGCCAAGG"
+    res = resolutions[0]
+    # Provenance: kit name follows the detector (so the report is
+    # honest about what was seen) but the adapter sequence is the
+    # user's.
+    assert res.detected_kit == "illumina_truseq"
+    assert res.kit.adapter == ILLUMINA_SMALLRNA_ADAPTER
+    assert res.source == "user_adapter"
 
 
 def test_resolution_summary_lines_includes_detected_when_overridden(tmp_path) -> None:
     a = tmp_path / "a.fq.gz"
     a.write_text("")
-    # Detector returns NEB but user explicitly chose TruSeq → user_fallback.
+    # Detector returns truseq but user explicitly supplied small-RNA
+    # adapter → user_adapter source, with detected name preserved.
     detector = _detector({"a.fq.gz": _detection("illumina_truseq", rate=0.9)})
-    resolutions = resolve_sample_resolutions(
+    resolutions = _resolve(
         [("a", a)],
-        kit_preset="illumina_smallrna",
-        adapter=None,
-        umi_length=None,
-        umi_position=None,
-        dedup_strategy="auto",
-        adapter_detection_mode="auto",
+        adapter=ILLUMINA_SMALLRNA_ADAPTER,
         detector=detector,
     )
     line = resolution_summary_lines(resolutions)[0]
-    assert "kit=illumina_smallrna" in line
-    assert "detected=illumina_truseq" in line
-    assert "user_fallback" in line
+    assert "kit=illumina_truseq" in line
+    assert "user_adapter" in line

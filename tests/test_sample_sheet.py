@@ -46,11 +46,11 @@ def test_paired_end_and_per_sample_overrides(tmp_path: Path) -> None:
     sheet = _write(
         tmp_path / "samples.tsv",
         "sample_id\tassay\tcondition\treplicate\tfastq_1\tfastq_2\t"
-        "kit_preset\tumi_length\tumi_position\tstrandedness\n"
+        "adapter\tpretrimmed\tumi_length\tumi_position\tstrandedness\n"
         "WT_RNA_1\trna\tWT\t1\trna/WT_R1.fq.gz\trna/WT_R2.fq.gz\t"
-        "pretrimmed\t0\t5p\tforward\n"
+        "\ttrue\t0\t5p\tforward\n"
         "WT_Ribo_1\tribo\tWT\t1\tribo/WT_Ribo_1.fq.gz\t\t"
-        "illumina_truseq_umi\t8\t5p\tforward\n",
+        "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA\tfalse\t8\t5p\tforward\n",
     )
     s = load_sample_sheet(sheet)
     rna = s.by_assay("rna")
@@ -58,9 +58,12 @@ def test_paired_end_and_per_sample_overrides(tmp_path: Path) -> None:
     assert len(rna) == 1 and len(ribo) == 1
     assert rna[0].fastq_2 == Path("rna/WT_R2.fq.gz")
     assert rna[0].umi_length == 0
+    assert rna[0].pretrimmed is True
     assert ribo[0].umi_length == 8
     assert ribo[0].umi_position == "5p"
     assert ribo[0].strandedness == "forward"
+    assert ribo[0].pretrimmed is False
+    assert ribo[0].adapter == "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA"
 
 
 def test_exclude_flag_drops_row_from_active_view(tmp_path: Path) -> None:

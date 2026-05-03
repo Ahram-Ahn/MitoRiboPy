@@ -10,7 +10,7 @@ every `mitoribopy` subcommand. For prose, examples, and decision
 trees see [the README](../../README.md) and the tutorials under
 [`docs/tutorials/`](../tutorials/).
 
-Generated against MitoRiboPy v0.7.0.
+Generated against MitoRiboPy v0.7.1.
 
 ## Subcommand summary
 
@@ -37,7 +37,7 @@ usage: mitoribopy align [-h] [--config CONFIG] [--dry-run] [--threads N]
                         [--log-level {DEBUG,INFO,WARNING,ERROR}]
                         [--fastq-dir DIR] [--fastq PATH]
                         [--contam-index BT2_PREFIX] [--mt-index BT2_PREFIX]
-                        [--output DIR] [--kit-preset PRESET] [--adapter SEQ]
+                        [--output DIR] [--adapter SEQ] [--pretrimmed]
                         [--umi-length N] [--umi-position {5p,3p,both}]
                         [--umi-length-5p N] [--umi-length-3p N]
                         [--sample-overrides TSV] [--keep-intermediates]
@@ -76,25 +76,25 @@ Inputs:
   --output DIR                        Output directory for BAM/BED/read_counts (required).
 
 Library prep:
-  --kit-preset PRESET                 Library-prep adapter / UMI preset. Default 'auto' detects per sample (mixed-kit batches OK). Use 'custom' with --adapter <SEQ>. Canonical choices: illumina_smallrna | illumina_truseq | illumina_truseq_umi | qiaseq_mirna | pretrimmed | custom. Legacy vendor aliases (truseq_smallrna, nebnext_smallrna, nebnext_ultra_umi, …) are accepted but not shown in --help; the full vendor mapping lives in README → Adapter / UMI presets. [default: auto]
-  --adapter SEQ                       3' adapter sequence. Overrides the kit preset's adapter. Required when --kit-preset custom.
+  --adapter SEQ                       3' adapter sequence. By default the pipeline auto-detects the adapter from the head of each FASTQ; pass --adapter <SEQ> when detection cannot identify your library or when you want to pin a specific sequence. Mutually exclusive with --pretrimmed.
+  --pretrimmed                        Declare that the input FASTQ has already been adapter-trimmed (e.g. SRA-deposited data). cutadapt skips the -a flag and only enforces length and quality filtering. Auto-detection also infers this when no known adapter signature is present; pass this flag to assert it explicitly. Mutually exclusive with --adapter.
   --umi-length N                      UMI length in nt. Overrides the kit preset's default. For --umi-position=both this MUST equal --umi-length-5p + --umi-length-3p (it is the canonical concatenated QNAME UMI length umi_tools dedups on).
   --umi-position {5p,3p,both}         UMI position within the insert (overrides kit preset). '5p' / '3p' are single-end UMIs; 'both' is a dual-end UMI library (e.g. xGen Duplex, Twist) — supply --umi-length-5p and --umi-length-3p in that mode.
   --umi-length-5p N                   Per-end 5' UMI length in nt. Used only when --umi-position=both; ignored otherwise.
   --umi-length-3p N                   Per-end 3' UMI length in nt. Used only when --umi-position=both; ignored otherwise.
-  --sample-overrides TSV              Path to a TSV with per-sample overrides for kit_preset / adapter / umi_length / umi_position / dedup_strategy. Required header columns: 'sample' plus at least one of the override columns. The 'sample' value must match the FASTQ basename with the .fq[.gz] / .fastq[.gz] suffix removed. Empty cells (or NA / None / null) fall through to the global CLI default for that field, so a single sample can override only its UMI without restating the rest of the kit. Useful for mixed-UMI batches where each sample's UMI length / position differs.
+  --sample-overrides TSV              Path to a TSV with per-sample overrides for adapter / pretrimmed / umi_length / umi_position / dedup_strategy. Required header columns: 'sample' plus at least one of the override columns. The 'sample' value must match the FASTQ basename with the .fq[.gz] / .fastq[.gz] suffix removed. Empty cells (or NA / None / null) fall through to the global CLI default for that field, so a single sample can override only its UMI without restating the rest. Useful for mixed-UMI / mixed-adapter batches.
   --keep-intermediates                Keep the per-step intermediate files (trimmed FASTQ, contam-filtered FASTQ, pre-MAPQ BAM). By default these are deleted as soon as the next step has consumed them, since they are large, regenerable, and not needed by any downstream stage. Pass this flag when debugging a sample or comparing per-step intermediate counts.
   --tmpdir TMPDIR                     Optional override for the directory used for per-step scratch files (trimmed FASTQ, contam-filtered FASTQ, intermediate BAMs). Defaults to a subdirectory of --output. Set this to a fast local SSD when running on a cluster with slow shared storage, or to a pre-mounted tmpfs to avoid hitting disk altogether for short runs.
   --allow-count-invariant-warning     DEVELOPER / DEBUG ONLY. Demote read_counts.tsv invariant violations from errors to warnings. The default is to fail the run on any violation, since a real violation indicates a bug somewhere upstream. NEVER use for a publication run (`mitoribopy all --strict` will reject this flag too).
-  --strict-publication-mode           Reject runs that rely on inferred-rather-than-declared metadata: inferred-pretrimmed kits, ambiguous adapter detection (confidence margin < 0.10), and legacy kit preset names. Use when preparing a publication run from a cleaned sample sheet so the strict checks fail loud rather than a single sample silently picking the wrong defaults.
+  --strict-publication-mode           Reject runs that rely on inferred-rather-than-declared metadata: inferred-pretrimmed kits and ambiguous adapter detection (confidence margin < 0.10). Use when preparing a publication run so the strict checks fail loud rather than a single sample silently picking the wrong defaults.
   --resume                            Skip samples that have already completed in a previous invocation against this --output directory. Each completed sample writes a small JSON file under <output>/.sample_done/; on resume, samples whose JSON is present and parses are reloaded instead of re-run. Use this after a crash or kill mid-batch to avoid redoing the samples that already finished. The orchestrator ('mitoribopy all --resume') sets this automatically when the align stage's read_counts.tsv is missing.
-  --adapter-detection MODE            Per-sample adapter detection policy. 'auto' (default) scans every input FASTQ and picks the matching preset per sample; samples whose scan fails fall back to the user's --kit-preset / --adapter when supplied, or to the 'pretrimmed' kit when no fallback is set and the data looks already-trimmed. 'strict' scans and HARD-FAILS on any sample whose scan disagrees with an explicit --kit-preset or where no preset can be identified. 'off' skips the scan and trusts --kit-preset / --adapter for every sample (requires an explicit preset). [default: auto]
+  --adapter-detection MODE            Per-sample adapter detection policy. 'auto' (default) scans every input FASTQ and picks the matching adapter family per sample; samples whose scan fails fall back to --adapter when supplied, or to 'pretrimmed' when no fallback is set and the data looks already-trimmed. 'strict' scans and HARD-FAILS on any sample whose detected adapter conflicts with an explicit --adapter or where no adapter can be identified. 'off' skips the scan and trusts --adapter / --pretrimmed for every sample (one of those is required). [default: auto]
   --adapter-detect-reads N            Number of FASTQ reads to scan per sample during adapter auto-detection. Increase for noisy libraries where the first 5000 reads have unusual adapter distributions; decrease for a faster pre-flight pass on cleaner data. [default: 5000]
   --adapter-detect-min-rate FRAC      Minimum fraction of scanned reads that must contain an adapter prefix for the kit to be considered detected. Lower for sparsely-adapted libraries (e.g. 0.10); raise for stricter calls. [default: 0.3]
   --adapter-detect-min-len N          Adapter prefix length used as the search needle (nt). Default 12. Lower (e.g. 8) tolerates noisy adapter regions; raise (e.g. 16) for stricter matches. [default: 12]
   --adapter-detect-pretrimmed-threshold FRAC
                                       When EVERY kit's match rate is at or below this value, the FASTQ is classified as already adapter-trimmed and resolved to the 'pretrimmed' kit (cutadapt skips the -a flag). Default 0.05 (5%). [default: 0.05]
-  --no-pretrimmed-inference           Disable the auto-fallback to 'pretrimmed' when adapter detection finds no known kit. With this flag, detection failure with no --kit-preset fallback raises an error instead. [default: True]
+  --no-pretrimmed-inference           Disable the auto-fallback to 'pretrimmed' when adapter detection finds no known kit. With this flag, detection failure with no --adapter / --pretrimmed fallback raises an error instead. [default: True]
   --library-strandedness {forward,reverse,unstranded}
                                       Library strandedness. 'forward' (default, NEBNext/TruSeq small-RNA kits) enforces --norc at alignment time; 'reverse' enforces --nofw; 'unstranded' leaves bowtie2 permissive. [default: forward]
   --min-length NT                     Minimum read length kept after trimming (mt-RPF default 15). [default: 15]
@@ -168,6 +168,12 @@ usage: mitoribopy rpf [-h] [--config CONFIG] -f REF_FASTA [-s STRAIN]
                       [--periodicity-enabled | --no-periodicity-enabled | --periodicity_enabled | --no-periodicity_enabled]
                       [--periodicity-fourier-window-nt PERIODICITY_FOURIER_WINDOW_NT]
                       [--periodicity-metagene-nt PERIODICITY_METAGENE_NT]
+                      [--periodicity-metagene-normalize {per_gene_unit_mean,none}]
+                      [--periodicity-fourier-bootstrap-n PERIODICITY_FOURIER_BOOTSTRAP_N]
+                      [--periodicity-fourier-permutations-n PERIODICITY_FOURIER_PERMUTATIONS_N]
+                      [--periodicity-fourier-ci-alpha PERIODICITY_FOURIER_CI_ALPHA]
+                      [--periodicity-fourier-random-seed PERIODICITY_FOURIER_RANDOM_SEED]
+                      [--periodicity-no-fourier-stats]
 
 Run the MitoRiboPy Ribo-seq analysis stage on BED / BAM inputs.
 This subcommand filters reads, estimates P-site / A-site offsets,
@@ -442,6 +448,18 @@ Optional Modules:
                                       Window (nt) for the Fourier metagene per region (orf_start, orf_stop). Default: 99 (33 codons; multiple of 3 for clean period-3 bin alignment).
   --periodicity-metagene-nt PERIODICITY_METAGENE_NT, --periodicity_metagene_nt PERIODICITY_METAGENE_NT
                                       Window (nt) up/downstream of start/stop codons for the metagene_start.tsv / metagene_stop.tsv plots. Default: 90.
+  --periodicity-metagene-normalize {per_gene_unit_mean,none}, --periodicity_metagene_normalize {per_gene_unit_mean,none}
+                                      How metagene_{start,stop}.tsv aggregates per-transcript signals. 'per_gene_unit_mean' (v0.9.0+ default) divides each transcript's per-position density by its own mean before averaging — removes the depth-weighting bias where one high-expression transcript dominates the metagene shape. 'none' reproduces the < v0.9.0 raw-position-count sum for users that pinned to those numbers. [default: per_gene_unit_mean]
+  --periodicity-fourier-bootstrap-n PERIODICITY_FOURIER_BOOTSTRAP_N, --periodicity_fourier_bootstrap_n PERIODICITY_FOURIER_BOOTSTRAP_N
+                                      Bootstrap iterations for the percentile CI on the metagene Fourier ratio. Default: 200. Set to 0 to disable the CI without disabling the permutation null.
+  --periodicity-fourier-permutations-n PERIODICITY_FOURIER_PERMUTATIONS_N, --periodicity_fourier_permutations_n PERIODICITY_FOURIER_PERMUTATIONS_N
+                                      Circular-shift permutations for the empirical null on the metagene Fourier ratio. Default: 200. Set to 0 to disable the null without disabling the CI.
+  --periodicity-fourier-ci-alpha PERIODICITY_FOURIER_CI_ALPHA, --periodicity_fourier_ci_alpha PERIODICITY_FOURIER_CI_ALPHA
+                                      Two-sided alpha for the Fourier percentile bootstrap CI. Default: 0.10 (90% CI).
+  --periodicity-fourier-random-seed PERIODICITY_FOURIER_RANDOM_SEED, --periodicity_fourier_random_seed PERIODICITY_FOURIER_RANDOM_SEED
+                                      RNG seed for the Fourier bootstrap + permutation draws. Default: 42. Recorded in periodicity.metadata.json so a reviewer can reproduce the exact CI / p-value bounds.
+  --periodicity-no-fourier-stats, --periodicity_no_fourier_stats
+                                      Skip the bootstrap CI + circular-shift permutation null on the metagene Fourier ratio. Faster, but the score table loses CI / permutation_p columns.
 
 Examples:
   mitoribopy rpf --strain h.sapiens --fasta ref.fa --directory beds \
@@ -557,6 +575,7 @@ usage: mitoribopy all [-h] [--config CONFIG] [--dry-run] [--threads N]
                       [--resume] [--force-resume] [--skip-align] [--skip-rpf]
                       [--skip-rnaseq] [--manifest PATH]
                       [--show-stage-help STAGE] [--print-config-template]
+                      [--profile {minimal,publication,exhaustive}]
                       [--print-canonical-config] [--strict] [--progress MODE]
                       [--progress-file PATH] [--no-progress]
 
@@ -572,11 +591,14 @@ options:
   --skip-rnaseq                       Skip the rnaseq stage even when an [rnaseq] section exists.
   --manifest PATH                     Manifest filename (relative to --output). [default: run_manifest.json]
   --show-stage-help STAGE             Print the full help for one stage and exit. Useful because 'mitoribopy all --help' only shows orchestrator-level flags.
-  --print-config-template             Print a commented YAML config template covering every stage (align / rpf / rnaseq) with sensible defaults, then exit. Pipe this into a file to start a new project: 'mitoribopy all --print-config-template > pipeline_config.yaml'.
+  --print-config-template             Print a commented YAML config template covering every stage (align / rpf / rnaseq) with sensible defaults, then exit. Pipe this into a file to start a new project: 'mitoribopy all --print-config-template > pipeline_config.yaml'. Pair with --profile to pick which template to emit (default: minimal).
+  --profile {minimal,publication,exhaustive}
+                                      Template profile for --print-config-template. 'minimal' (default): the curated 80-line template with the most-edited keys. 'publication': adds publication-readiness defaults (--strict, rnaseq_mode=de_table, fourier_bootstrap_n=200) so a methods-paper run uses the right gates. 'exhaustive': prints the full annotated example from examples/templates/pipeline_config.example.yaml — every single flag with its default and a one-line comment. [default: minimal]
   --print-canonical-config            Load --config, apply every auto-wiring + sample-sheet expansion that 'mitoribopy all' would normally apply, then print the resulting canonical config to stdout (YAML if PyYAML is available, JSON otherwise) and exit. Useful for diffing your input config against what was actually executed: 'mitoribopy all --print-canonical-config --config pipeline_config.yaml --output results/'. The same blob is embedded in run_manifest.json under 'config_canonical' on real runs.
   --strict                            Publication-safe mode. A single switch that forwards strictness to every stage and post-run validation:
                                         * align: --strict-publication-mode (fail on non-default policies that would invalidate a publication run);
-                                        * config: --strict on the up-front validate-config pass (treat any deprecated-key rewrite as a hard error);
+                                        * config: --strict on the up-front validate-config pass (treat any deprecated-key rewrite or unknown stage key as a hard error);
+                                        * rnaseq: refuse 'allow_pseudo_replicates_for_demo_not_publication: true' and refuse 'rnaseq_mode: from_fastq' (the mt-mRNA-only DE path) unless the user explicitly opts back in via 'allow_exploratory_from_fastq_in_strict: true';
                                         * figures: --strict on the post-run validate-figures pass (promote warn-only QC findings to fail);
                                         * summary: warning rows in warnings.tsv are mirrored as WARN bullets in SUMMARY.md.
                                       Recommended for any run that backs a manuscript figure.
@@ -593,7 +615,7 @@ Shared options:
 
 This subcommand owns only the orchestrator flags. Stage-specific options live
 inside the config file sections whose keys match the subcommand flags
-(with dashes replaced by underscores, e.g. '--kit-preset' -> 'kit_preset').
+(with dashes replaced by underscores, e.g. '--adapter' -> 'adapter').
   align:  keys for 'mitoribopy align --help'
   rpf:    keys for 'mitoribopy rpf --help'
   rnaseq: keys for 'mitoribopy rnaseq --help'
@@ -617,7 +639,9 @@ usage: mitoribopy periodicity [-h] --site-table PATH --output DIR
                               [--drop-codons-after-start N]
                               [--drop-codons-before-stop N]
                               [--min-mean-coverage X] [--min-total-counts N]
-                              [--no-plots]
+                              [--no-plots] [--no-stats] [--bootstrap-n B]
+                              [--permutations-n P] [--ci-alpha A]
+                              [--random-seed S]
 
 Quantify 3-nt periodicity by running the metagene Fourier analysis on a pre-assigned site table.
 
@@ -632,6 +656,13 @@ options:
   --min-mean-coverage X        Skip per-gene windows whose mean coverage is below X. Default: 0.1. [default: 0.1]
   --min-total-counts N         Skip per-gene windows whose total site count is below N. Default: 30. [default: 30]
   --no-plots                   Skip the per-(sample, read_length) figures; TSVs still written. [default: True]
+
+statistical hardening (bootstrap CI + permutation null):
+  --no-stats                   Skip the bootstrap CI + circular-shift permutation null. Faster, but the score table loses amp_3nt_ci_*, spectral_ratio_3nt(_local)_ci_*, and permutation_p columns. Use only for smoke runs — the publication-facing path keeps stats on. [default: True]
+  --bootstrap-n B              Bootstrap iterations for the percentile CI over genes. Default: 200. [default: 200]
+  --permutations-n P           Circular-shift permutations for the empirical null on the spectral ratios. Default: 200. [default: 200]
+  --ci-alpha A                 Two-sided alpha for the percentile bootstrap CI. Default: 0.1 (90% CI). [default: 0.1]
+  --random-seed S              RNG seed for the bootstrap and permutation draws. Default: 42. The seed is recorded in periodicity.metadata.json so a reviewer can reproduce the exact CI / p-value bounds. [default: 42]
 
 Frame definition: (site_pos - cds_start) mod 3. The Fourier analysis is anchored at the start codon (orf_start) and the stop codon (orf_stop). site_pos must be transcript-oriented (forward-strand-relative) and 0-based.
 ```

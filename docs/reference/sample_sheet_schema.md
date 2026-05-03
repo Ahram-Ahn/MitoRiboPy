@@ -26,8 +26,8 @@ error message that lists every problem found.
 |---|---|---|
 | `replicate` | string | Free-form replicate label (`1`, `2`, `A`, …). Informational only — pairing between assays is by `sample_id`, not by row order. |
 | `fastq_2` | path | R2 FASTQ for paired-end reads. |
-| `kit_preset` | string | Per-sample kit override (`auto`, `illumina_smallrna`, `illumina_truseq`, `illumina_truseq_umi`, `qiaseq_mirna`, `pretrimmed`, `custom`). Wins over the global `--kit-preset`. |
-| `adapter` | string | Per-sample adapter sequence override. |
+| `adapter` | string | Per-sample 3' adapter sequence override. Auto-detection runs by default; pin this when detection cannot identify the library. Mutually exclusive with `pretrimmed`. |
+| `pretrimmed` | `true` \| `false` | When `true`, declares the FASTQ as already adapter-trimmed (cutadapt skips `-a` and only enforces length + quality). Mutually exclusive with `adapter`. |
 | `umi_length` | int ≥ 0 | Per-sample UMI length override. **Recommended for publication** (otherwise the rnaseq from-FASTQ path may infer it from R1 entropy and emit a `UMI_INFERRED_NO_DECLARATION` warning). For `umi_position=both`, this MUST equal `umi_length_5p + umi_length_3p`. |
 | `umi_position` | `5p` \| `3p` \| `both` | Per-sample UMI position. Required when `umi_length > 0` to avoid ambiguity. `both` is dual-end UMI (xGen Duplex, Twist) — supply `umi_length_5p` and `umi_length_3p`. |
 | `umi_length_5p` | int ≥ 0 | Per-end 5' UMI length when `umi_position=both`. Required (must be > 0) for that mode; ignored otherwise. |
@@ -84,14 +84,20 @@ same for the per-flag equivalents.
 ## Example
 
 ```
-sample_id	assay	condition	replicate	fastq_1	fastq_2	kit_preset	umi_length	umi_position	strandedness	dedup_strategy	exclude	notes
-WT_Ribo_1	ribo	WT	1	ribo/WT_Ribo_1.fq.gz		illumina_truseq_umi	8	5p	forward	umi-tools	false	first replicate
-WT_Ribo_2	ribo	WT	2	ribo/WT_Ribo_2.fq.gz		illumina_truseq_umi	8	5p	forward	umi-tools	false
-KO_Ribo_1	ribo	KO	1	ribo/KO_Ribo_1.fq.gz		illumina_truseq_umi	8	5p	forward	umi-tools	false
-KO_Ribo_2	ribo	KO	2	ribo/KO_Ribo_2.fq.gz		illumina_truseq_umi	8	5p	forward	umi-tools	true	failed library
-WT_RNA_1	rna	WT	1	rna/WT_R1.fq.gz	rna/WT_R2.fq.gz	pretrimmed	0	5p	forward	skip	false
-KO_RNA_1	rna	KO	1	rna/KO_R1.fq.gz	rna/KO_R2.fq.gz	pretrimmed	0	5p	forward	skip	false
+sample_id	assay	condition	replicate	fastq_1	fastq_2	adapter	pretrimmed	umi_length	umi_position	strandedness	dedup_strategy	exclude	notes
+WT_Ribo_1	ribo	WT	1	ribo/WT_Ribo_1.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi-tools	false	first replicate
+WT_Ribo_2	ribo	WT	2	ribo/WT_Ribo_2.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi-tools	false
+KO_Ribo_1	ribo	KO	1	ribo/KO_Ribo_1.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi-tools	false
+KO_Ribo_2	ribo	KO	2	ribo/KO_Ribo_2.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi-tools	true	failed library
+WT_RNA_1	rna	WT	1	rna/WT_R1.fq.gz	rna/WT_R2.fq.gz		true	0		forward	skip	false
+KO_RNA_1	rna	KO	1	rna/KO_R1.fq.gz	rna/KO_R2.fq.gz		true	0		forward	skip	false
 ```
+
+Note: starting in v0.7.1 the user-facing `kit_preset` column was removed
+in favour of the explicit `adapter` and `pretrimmed` columns. Internal
+kit names (`illumina_truseq`, `qiaseq_mirna`, …) are still reported in
+`kit_resolution.tsv` (`detected_kit` and `applied_kit`) so reviewers can
+see which adapter family the detector matched.
 
 ## Cross-references
 

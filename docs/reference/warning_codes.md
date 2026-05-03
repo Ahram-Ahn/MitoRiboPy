@@ -34,8 +34,8 @@ jq -r '.warnings[] | "\(.severity)\t\(.code)\t\(.message)"' \
 | Code | Severity | Stage | Summary | Remediation |
 | ---- | -------- | ----- | ------- | ----------- |
 | `E_FASTQ_MATE_PAIRING_FAILED` | error | align | Could not pair R1/R2 FASTQs from filename. | Rename to `<sample>_R1.fq.gz` / `<sample>_R2.fq.gz`, or list pairs explicitly. |
-| `E_ADAPTER_AMBIGUOUS` | error | align | Adapter auto-detection saw two candidate kits above the threshold. | Set `kit_preset:` (or per-sample override) explicitly. |
-| `E_UMI_DECLARED_BUT_NOT_FOUND` | error | align | Config declared a UMI but cutadapt extracted none. | Verify `umi_length` / `umi_position`; pre-trimmed reads need `kit_preset: pretrimmed`. |
+| `E_ADAPTER_AMBIGUOUS` | error | align | Adapter auto-detection saw two candidate kits above the threshold. | Pin the 3' adapter explicitly with `--adapter <SEQ>` (CLI) or `adapter: <SEQ>` (YAML / sample sheet). |
+| `E_UMI_DECLARED_BUT_NOT_FOUND` | error | align | Config declared a UMI but cutadapt extracted none. | Verify `umi_length` / `umi_position`; pre-trimmed reads need `--pretrimmed` (or `pretrimmed: true` in YAML). |
 | `W_UMI_SHORT_COLLISION_RISK` | warn | align | UMI shorter than 8 nt has a high collision rate. | Treat duplicate-fraction estimates as conservative; prefer ≥ 8 nt UMIs. |
 | `W_UMI_HIGH_DUPLICATE_FRACTION` | warn | align | Coordinate+UMI dedup removed > 80 % of reads. | Re-check library complexity before biological inference. |
 | `W_UMI_DEDUP_SKIPPED_WITH_UMI_PRESENT` | warn | align | UMI present but `dedup_strategy: skip` set. | Switch to `dedup_strategy: umi_coordinate` (or `auto`). |

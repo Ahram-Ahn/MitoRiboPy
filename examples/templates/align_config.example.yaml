@@ -1,5 +1,5 @@
 # MitoRiboPy align -- exhaustive config example for `mitoribopy align --config`.
-# Compatible with: MitoRiboPy 0.7.0+
+# Compatible with: MitoRiboPy 0.7.1+
 #
 # This is a FLAT YAML (no `align:` wrapper). Pass it to the standalone
 # align subcommand:

@@ -14,7 +14,7 @@ from mitoribopy.config import (
 class TestCanonicalizeConfig:
     def test_already_canonical_no_changes(self) -> None:
         cfg = {
-            "align": {"kit_preset": "auto", "fastq": "fq/"},
+            "align": {"adapter": "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA", "fastq": "fq/"},
             "rpf": {"strain": "h.sapiens"},
             "rnaseq": {"mode": "de_table"},
         }
@@ -36,13 +36,13 @@ class TestCanonicalizeConfig:
         assert "fastq_dir" not in result.config["align"]
         assert result.config["align"]["fastq"] == "/data/fq"
 
-    def test_legacy_kit_preset_rewritten_with_log(self) -> None:
+    def test_legacy_kit_preset_dropped_with_log(self) -> None:
+        """v0.7.1: kit_preset removed; the canonicaliser drops the key
+        and logs the removal so the user sees what changed."""
         result = canonicalize_config(
             {"align": {"kit_preset": "truseq_smallrna"}}
         )
-        assert (
-            result.config["align"]["kit_preset"] == "illumina_smallrna"
-        )
+        assert "kit_preset" not in result.config["align"]
         assert any(
             "kit_preset" in c.message for c in result.changes
         )

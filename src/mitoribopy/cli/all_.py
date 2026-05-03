@@ -545,7 +545,12 @@ def _apply_top_level_samples(config: dict, *, run_root: Path) -> int:
         print(f"[mitoribopy all] ERROR: {exc}", file=sys.stderr)
         return 2
 
-    align_cfg = config.setdefault("align", {})
+    # YAML stanzas like `align:` (no children) parse to None; treat
+    # that as an empty mapping so the orchestrator can layer keys onto
+    # it without a NoneType.get crash.
+    if config.get("align") is None:
+        config["align"] = {}
+    align_cfg = config["align"]
     # Only thread the sheet into rnaseq when the user explicitly opted
     # into the rnaseq stage. A bare `samples:` block must not silently
     # turn on rnaseq for align+rpf-only configs.

@@ -215,7 +215,7 @@ def test_print_canonical_config_records_resolved_mode(tmp_path, capsys) -> None:
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
         f"samples:\n  table: {sheet}\n"
-        "align:\n  # adapter auto-detection (default)\n"
+        "align:\n  dedup_strategy: auto\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n  gene_id_convention: bare\n"
         "  condition_a: WT\n  condition_b: KO\n"

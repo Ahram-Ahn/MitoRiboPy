@@ -1,5 +1,5 @@
 # MitoRiboPy rpf -- exhaustive config example for `mitoribopy rpf --config`.
-# Compatible with: MitoRiboPy 0.7.0+
+# Compatible with: MitoRiboPy 0.7.1+
 #
 # This is a FLAT YAML (no `rpf:` wrapper). Pass it to the standalone
 # rpf subcommand:

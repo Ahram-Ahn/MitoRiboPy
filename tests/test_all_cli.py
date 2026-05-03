@@ -17,7 +17,7 @@ from mitoribopy.cli import all_ as all_cli
 def test_dict_to_argv_handles_scalars_bools_and_lists() -> None:
     argv = all_cli._dict_to_argv(
         {
-            "kit_preset": "truseq_smallrna",
+            "adapter": "TGGAATTCTCGGGTGCCAAGG",
             "umi_length": 0,
             "resume": True,
             "skip_align": False,
@@ -26,7 +26,7 @@ def test_dict_to_argv_handles_scalars_bools_and_lists() -> None:
         }
     )
     # Flag-name transform: underscores -> dashes.
-    assert "--kit-preset" in argv and argv[argv.index("--kit-preset") + 1] == "truseq_smallrna"
+    assert "--adapter" in argv and argv[argv.index("--adapter") + 1] == "TGGAATTCTCGGGTGCCAAGG"
     assert "--umi-length" in argv and argv[argv.index("--umi-length") + 1] == "0"
     # Bool True -> bare flag
     assert "--resume" in argv
@@ -100,13 +100,20 @@ def test_dict_to_argv_repeats_append_style_flags() -> None:
 
 
 def test_normalize_align_inputs_promotes_string_to_fastq_dir() -> None:
-    cfg = {"fastq": "input_data/", "kit_preset": "auto"}
+    cfg = {"fastq": "input_data/", "dedup_strategy": "auto"}
     out = all_cli._normalize_align_inputs(cfg)
     assert out["fastq_dir"] == "input_data/"
     # Original `fastq` is rewritten to None so _dict_to_argv drops it.
     assert out["fastq"] is None
     # Caller's dict is not mutated.
     assert cfg["fastq"] == "input_data/"
+
+
+def test_normalize_align_inputs_rejects_legacy_kit_preset() -> None:
+    """v0.7.1: align.kit_preset is a hard error with a migration message."""
+    cfg = {"fastq": "input_data/", "kit_preset": "auto"}
+    with pytest.raises(ValueError, match="kit_preset"):
+        all_cli._normalize_align_inputs(cfg)
 
 
 def test_normalize_align_inputs_keeps_explicit_list() -> None:
@@ -127,7 +134,7 @@ def test_all_dry_run_polymorphic_fastq_string_becomes_fastq_dir(tmp_path, capsys
     cfg = tmp_path / "p.yaml"
     cfg.write_text(
         "align:\n"
-        "  # adapter auto-detection (default)\n"
+        "  dedup_strategy: auto\n"
         "  fastq: input_data/\n"
     )
     exit_code = cli.main([
@@ -197,7 +204,7 @@ def test_all_dry_run_with_config_lists_per_stage_argv(tmp_path, capsys) -> None:
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "align: " in out
-    assert "--kit-preset truseq_smallrna" in out
+    assert "--adapter TGGAATTCTCGGGTGCCAAGG" in out
     assert "rpf: " in out
     assert "rnaseq: " in out
     assert "--gene-id-convention hgnc" in out
@@ -756,7 +763,7 @@ def test_manifest_records_sample_sheet_sha256(tmp_path, monkeypatch) -> None:
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
         f"samples:\n  table: {sheet}\n"
-        "align:\n  # adapter auto-detection (default)\n"
+        "align:\n  dedup_strategy: auto\n"
         "rpf:\n  strain: h\n"
     )
     results = tmp_path / "results"
@@ -845,16 +852,16 @@ def test_all_top_level_samples_drives_align_and_rnaseq(
 
     sheet = tmp_path / "samples.tsv"
     sheet.write_text(
-        "sample_id\tassay\tcondition\tfastq_1\tkit_preset\tumi_length\n"
-        "WT_Ribo_1\tribo\tWT\tribo/WT.fq.gz\tilllumina_truseq_umi\t8\n"
-        "KO_Ribo_1\tribo\tKO\tribo/KO.fq.gz\tilllumina_truseq_umi\t8\n"
+        "sample_id\tassay\tcondition\tfastq_1\tadapter\tumi_length\n"
+        "WT_Ribo_1\tribo\tWT\tribo/WT.fq.gz\tAGATCGGAAGAGCACACGTCTGAACTCCAGTCA\t8\n"
+        "KO_Ribo_1\tribo\tKO\tribo/KO.fq.gz\tAGATCGGAAGAGCACACGTCTGAACTCCAGTCA\t8\n"
         "WT_RNA_1\trna\tWT\trna/WT.fq.gz\t\t\n"
         "KO_RNA_1\trna\tKO\trna/KO.fq.gz\t\t\n"
     )
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
         f"samples:\n  table: {sheet}\n"
-        "align:\n  # adapter auto-detection (default)\n"
+        "align:\n  dedup_strategy: auto\n"
         "rpf:\n  strain: h\n  fasta: /tmp/tx.fa\n"
         "rnaseq:\n  gene_id_convention: bare\n"
         "  condition_a: WT\n  condition_b: KO\n"
@@ -881,7 +888,7 @@ def test_all_top_level_samples_drives_align_and_rnaseq(
     )
     assert overrides_path.exists()
     body = overrides_path.read_text()
-    assert "WT_Ribo_1\tilllumina_truseq_umi\t" in body
+    assert "WT_Ribo_1\tAGATCGGAAGAGCACACGTCTGAACTCCAGTCA\t" in body
     assert "umi_length" in body.splitlines()[0]
 
     rnaseq_argv = captured["rnaseq"]
@@ -947,7 +954,7 @@ def test_all_top_level_samples_shorthand_string_form(tmp_path, monkeypatch) -> N
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
         f"samples: {sheet}\n"
-        "align:\n  # adapter auto-detection (default)\n"
+        "align:\n  dedup_strategy: auto\n"
         "rpf:\n  strain: h\n"
     )
     exit_code = cli.main([

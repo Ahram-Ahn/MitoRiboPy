@@ -96,7 +96,7 @@ def test_resolve_kit_both_accepts_consistent_explicit_umi_length() -> None:
 
 def test_resolve_kit_single_end_unaffected_by_per_end_defaults() -> None:
     # Single-end UMI presets must keep working without per-end fields.
-    resolved = resolve_kit_settings("nebnext_ultra_umi")
+    resolved = resolve_kit_settings("illumina_truseq_umi")
     assert resolved.umi_length == 8
     assert resolved.umi_position == "5p"
     assert resolved.umi_length_5p == 0

@@ -66,7 +66,8 @@ Selected highlights:
 
 | Key | Meaning |
 |---|---|
-| `kit_preset` | `auto` (default) / explicit kit / `pretrimmed` / `custom` |
+| `adapter` | 3' adapter sequence (string). Auto-detection runs by default; pin `adapter:` only when detection cannot identify the library. Mutually exclusive with `pretrimmed`. |
+| `pretrimmed` | `true` / `false` (default `false`). When `true`, declares already-trimmed FASTQs (cutadapt skips `-a`). Mutually exclusive with `adapter`. |
 | `adapter_detection` | `auto` / `off` / `strict` |
 | `umi_length`, `umi_position` | per-run defaults; per-sample overrides go in the sample sheet. `umi_position` accepts `5p`, `3p`, or `both` |
 | `umi_length_5p`, `umi_length_3p` | per-end UMI lengths for `umi_position: both` (e.g. xGen Duplex, Twist). Required when `umi_position=both`; `umi_length` MUST equal their sum and is auto-derived when omitted |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MitoRiboPy align -- exhaustive shell-script template (align stage only).
-# Compatible with: MitoRiboPy 0.7.0+
+# Compatible with: MitoRiboPy 0.7.1+
 #
 # Runs only the align stage:
 #

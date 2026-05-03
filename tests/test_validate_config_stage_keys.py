@@ -54,7 +54,8 @@ def test_known_rpf_keys_pass() -> None:
 
 def test_known_align_keys_pass() -> None:
     section = {
-        "kit_preset": "auto",
+        "adapter": "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA",
+        "pretrimmed": False,
         "adapter_detection": "auto",
         "dedup_strategy": "auto",
         "library_strandedness": "forward",

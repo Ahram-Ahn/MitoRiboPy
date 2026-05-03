@@ -92,16 +92,16 @@ Regenerate with `python docs/diagrams/render_diagrams.py` (matplotlib only; no N
 
 ## Installation
 
-The README and `examples/templates/` describe the current **v0.7.0** interface. Verify with `mitoribopy --version`. See [CHANGELOG.md](CHANGELOG.md) for the consolidated v0.7.0 release notes — this is the publication-readiness release: aggregate-then-DFT metagene Fourier QC with bootstrap CI + circular-shift permutation null, per-gene unit-mean metagene aggregation by default (legacy depth-weighted sum still available behind `normalize="none"`), nulled Wald p-values in the from-FASTQ rnaseq mode, JSON Schema for `run_manifest.json`, per-(sample, transcript) strand-sanity audit, and a "Periodicity statistical confidence" table in `SUMMARY.md`.
+The README and `examples/templates/` describe the current **v0.7.1** interface. Verify with `mitoribopy --version`. See [CHANGELOG.md](CHANGELOG.md) for the consolidated v0.7.0 release notes — this is the publication-readiness release: aggregate-then-DFT metagene Fourier QC with bootstrap CI + circular-shift permutation null, per-gene unit-mean metagene aggregation by default (legacy depth-weighted sum still available behind `normalize="none"`), nulled Wald p-values in the from-FASTQ rnaseq mode, JSON Schema for `run_manifest.json`, per-(sample, transcript) strand-sanity audit, and a "Periodicity statistical confidence" table in `SUMMARY.md`.
 
 ### From source (recommended)
 
 ```bash
 git clone https://github.com/Ahram-Ahn/MitoRiboPy.git
 cd MitoRiboPy
-git checkout v0.7.0          # current published version; omit for HEAD
+git checkout v0.7.1          # current published version; omit for HEAD
 python -m pip install -e .
-mitoribopy --version          # MUST print 0.7.0 or later
+mitoribopy --version          # MUST print 0.7.1 or later
 ```
 
 This pulls every Python dependency (`numpy`, `pandas`, `matplotlib`, `seaborn`, `biopython`, `scipy`, `PyYAML`, `pysam`) automatically. The external bioinformatics tools (`cutadapt`, `bowtie2`, `umi_tools`, …) still need to be on `$PATH` separately — see [External tool dependencies](#external-tool-dependencies) below.
@@ -115,10 +115,10 @@ python -m pip install -e ".[dev]"
 ### From PyPI
 
 ```bash
-python -m pip install 'mitoribopy>=0.7.0'
+python -m pip install 'mitoribopy>=0.7.1'
 ```
 
-The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). Pin the lower bound (`>=0.7.0`) so a stale PyPI cache cannot install a pre-publication-freeze build.
+The package is published on PyPI: [pypi.org/project/mitoribopy](https://pypi.org/project/mitoribopy/). Pin the lower bound (`>=0.7.1`) so a stale PyPI cache cannot install a pre-publication-freeze build.
 
 ### Verify the install
 
@@ -196,7 +196,7 @@ Use this recipe for any run that backs a manuscript, preprint, or shared dataset
 
 ```bash
 # 0. Pin the manuscript version
-python -m pip install 'mitoribopy>=0.7.0'
+python -m pip install 'mitoribopy>=0.7.1'
 mitoribopy --version
 
 # 1. Optional pre-flights (also run automatically by --strict below)
@@ -250,11 +250,13 @@ samples:
   table: samples.tsv
 
 align:
-  # Per-sample auto detection; an explicit kit_preset is the fallback
-  # when the per-sample column is empty.
-  kit_preset: auto                # auto | illumina_smallrna | illumina_truseq |
-                                  # illumina_truseq_umi | qiaseq_mirna |
-                                  # pretrimmed | custom
+  # Adapter handling. Auto-detection is the default since v0.7.1 — the
+  # pipeline scans the head of every FASTQ, picks the matching adapter
+  # family, and reports the result in kit_resolution.tsv. Pin `adapter:`
+  # only when detection cannot identify the library; set `pretrimmed:`
+  # for already-trimmed FASTQs.
+  # adapter: AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+  # pretrimmed: false
   adapter_detection: auto         # auto | off | strict
   library_strandedness: forward
   contam_index: input_data/indexes/rrna_contam
@@ -327,7 +329,8 @@ Each subcommand in the pipeline consumes its own slice of the inputs below. **Re
 | File | mt-transcriptome bowtie2 index prefix | **required** | Built once with `bowtie2-build`. Pass via `--mt-index <prefix>`. |
 | File | rRNA / tRNA contaminant bowtie2 index prefix | **required** | Used to subtract contaminants. Pass via `--contam-index <prefix>`. |
 | File | **Sample sheet** (`samples.tsv`) | optional | One row per Ribo-seq FASTQ; documents per-sample kit / UMI / strandedness. Strongly recommended for mixed-kit batches. See [Sample sheet](#sample-sheet-unified-per-project-tsv). |
-| Option | `--kit-preset` | optional (`auto` default) | Library-prep kit; `auto` detects per FASTQ. Override per sample in the sample sheet. |
+| Option | `--adapter <SEQ>` | optional | 3' adapter sequence. Auto-detection runs by default; pin this when detection cannot identify the library. Override per sample in the sample sheet. |
+| Option | `--pretrimmed` | optional (`false` default) | Declare already-trimmed FASTQs (cutadapt skips `-a`). Mutually exclusive with `--adapter`. |
 | Option | `--library-strandedness {forward,reverse,unstranded}` | optional (`forward` default) | dUTP-stranded libraries should set `reverse`. |
 
 #### `mitoribopy rpf` — BED + reference FASTA → P-site / A-site analysis
@@ -383,19 +386,21 @@ Use `mitoribopy all --print-config-template > pipeline_config.yaml` to drop a fu
 A single TSV declares every sample once, replacing the old pair of stage-specific tables (`--sample-overrides` and `--condition-map`). It is **the recommended way** to declare inputs for any non-trivial project: pairings between Ribo-seq and RNA-seq are by `sample_id` (never by index), per-sample kit / UMI overrides for mixed batches live in the same file, and an `exclude` column lets you drop a bad library without deleting rows.
 
 **Required columns:** `sample_id`, `assay` (`ribo` or `rna`), `condition`, `fastq_1`.
-**Optional columns:** `replicate`, `fastq_2`, `kit_preset`, `adapter`, `umi_length`, `umi_position` (`5p` / `3p` / `both`), `umi_length_5p`, `umi_length_3p` (per-end lengths for `umi_position=both`), `strandedness`, `dedup_strategy`, `exclude` (`true`/`false`/blank), `notes`.
+**Optional columns:** `replicate`, `fastq_2`, `adapter`, `pretrimmed`, `umi_length`, `umi_position` (`5p` / `3p` / `both`), `umi_length_5p`, `umi_length_3p` (per-end lengths for `umi_position=both`), `strandedness`, `dedup_strategy`, `exclude` (`true`/`false`/blank), `notes`.
 
 Empty cells (`""`, `NA`, `None`, `-`, `null`) read as "use the default". Lines starting with `#` and blank lines are ignored. Validation is strict: a single load pass reports every row error so you can fix the sheet without iterate-and-retry.
 
 ```tsv
-sample_id	assay	condition	replicate	fastq_1	fastq_2	kit_preset	umi_length	umi_position	strandedness	exclude	notes
-WT_Ribo_1	ribo	WT	1	fastq/WT_Ribo_1.fq.gz		illumina_truseq_umi	8	5p	forward	false	
-WT_Ribo_2	ribo	WT	2	fastq/WT_Ribo_2.fq.gz		illumina_truseq_umi	8	5p	forward	false	
-KO_Ribo_1	ribo	KO	1	fastq/KO_Ribo_1.fq.gz		illumina_truseq_umi	8	5p	forward	false	
-KO_Ribo_2	ribo	KO	2	fastq/KO_Ribo_2.fq.gz		illumina_truseq_umi	8	5p	forward	true	contaminated lane
-WT_RNA_1	rna	WT	1	fastq/WT_RNA_1_R1.fq.gz	fastq/WT_RNA_1_R2.fq.gz	pretrimmed	0	5p	forward	false	
-KO_RNA_1	rna	KO	1	fastq/KO_RNA_1_R1.fq.gz	fastq/KO_RNA_1_R2.fq.gz	pretrimmed	0	5p	forward	false	
+sample_id	assay	condition	replicate	fastq_1	fastq_2	adapter	pretrimmed	umi_length	umi_position	strandedness	exclude	notes
+WT_Ribo_1	ribo	WT	1	fastq/WT_Ribo_1.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	false	
+WT_Ribo_2	ribo	WT	2	fastq/WT_Ribo_2.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	false	
+KO_Ribo_1	ribo	KO	1	fastq/KO_Ribo_1.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	false	
+KO_Ribo_2	ribo	KO	2	fastq/KO_Ribo_2.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	true	contaminated lane
+WT_RNA_1	rna	WT	1	fastq/WT_RNA_1_R1.fq.gz	fastq/WT_RNA_1_R2.fq.gz		true	0		forward	false	
+KO_RNA_1	rna	KO	1	fastq/KO_RNA_1_R1.fq.gz	fastq/KO_RNA_1_R2.fq.gz		true	0		forward	false	
 ```
+
+> Auto-detection (the default) makes the `adapter` column optional in the common case. It still travels in `kit_resolution.tsv` after the run as `detected_kit` / `applied_kit` so reviewers can see which adapter family the detector matched.
 
 How it threads through the pipeline:
 
@@ -517,8 +522,10 @@ exit $RC
 You can run any single stage directly without going through `mitoribopy all`. This is useful when you only have BED inputs (skip `align`), or when you want to iterate on `rpf` parameters without re-running alignment.
 
 ```bash
-# Just align
-mitoribopy align --kit-preset auto --fastq-dir fastqs/ \
+# Just align (auto-detection picks the adapter; pass --adapter <SEQ>
+# only when detection cannot identify your library, or --pretrimmed
+# for already-trimmed FASTQs).
+mitoribopy align --fastq-dir fastqs/ \
   --contam-index idx/rrna --mt-index idx/mt --output results/align/
 
 # Just rpf, against an existing BED dir
@@ -589,9 +596,11 @@ FASTQ → BAM → BED6 per sample: adapter detection → cutadapt → bowtie2 (c
 
 **Required**: `--contam-index`, `--mt-index`, `--output`, plus FASTQ inputs (`--fastq-dir DIR` or repeated `--fastq PATH`). See `mitoribopy align --help` or [docs/reference/cli.md](docs/reference/cli.md) for the full flag list.
 
-**Kit presets** (`--kit-preset`): `auto` (per-sample detection, default), `pretrimmed` (skip `-a`), `illumina_smallrna`, `illumina_truseq`, `illumina_truseq_umi` (8 nt 5' UMI), `qiaseq_mirna` (12 nt 3' UMI), `custom` (`--adapter SEQ` required). Dual-end UMI libraries (xGen Duplex, Twist) use `custom` with `--umi-position both` plus `--umi-length-5p` / `--umi-length-3p`. The per-sample resolved kit is written to `<output>/kit_resolution.tsv`.
+**Adapter handling** (since v0.7.1): auto-detection of the 3' adapter is the default and the only kit-name input vector — there is no `--kit-preset` flag. Pass `--adapter <SEQ>` to pin the 3' sequence (e.g. when detection cannot identify the library), or `--pretrimmed` to declare already-trimmed FASTQs (cutadapt skips `-a`). The two are mutually exclusive. Dual-end UMI libraries (xGen Duplex, Twist) combine `--adapter` with `--umi-position both` plus `--umi-length-5p` / `--umi-length-3p`. The detector still names the matched adapter family in `<output>/kit_resolution.tsv` (`detected_kit` and `applied_kit` columns) for provenance — kit names are output, not input.
 
-**Adapter detection** (`--adapter-detection`): `auto` (scan + per-sample fallback to your `--kit-preset` or `pretrimmed`), `strict` (hard-fail on disagreement), `off` (trust `--kit-preset`).
+Known adapter families recognised by the detector: Illumina TruSeq Small RNA (`TGGAATTCTCGGGTGCCAAGG`), Illumina TruSeq R1 (`AGATCGGAAGAGCACACGTCTGAACTCCAGTCA`; with or without an 8 nt 5' UMI), and QIAseq miRNA (`AACTGTAGGCACCATCAAT` + 12 nt 3' UMI). Pass any of those sequences via `--adapter` to bypass detection while still surfacing the family name in the report; the detector's substring match resolves the family for you.
+
+**Adapter detection** (`--adapter-detection`): `auto` (scan + fall back to `--adapter` / `--pretrimmed` when the scan fails — default), `strict` (hard-fail when detection disagrees with `--adapter`), `off` (skip the scan; requires `--adapter` or `--pretrimmed`).
 
 **Dedup** (`--dedup-strategy`): `auto` (default; `umi-tools` for UMI samples, `skip` otherwise) | `umi-tools` | `skip`. Coordinate-only dedup (picard MarkDuplicates) was removed in v0.4.5 — it destroys codon-occupancy signal on low-complexity mt libraries (see [docs/validation/taco1_ko_regression.md](docs/validation/taco1_ko_regression.md)).
 
@@ -642,7 +651,7 @@ End-to-end orchestrator: align + rpf + (optional) rnaseq. Reads one YAML/JSON/TO
 
 **Auto-wiring**: when stages run together, `mitoribopy all` chains `rpf.directory` ← `<run_root>/align/bed`, `rpf.read_counts_file` ← `<run_root>/align/read_counts.tsv`, and `rnaseq.ribo_dir` ← `<run_root>/rpf`. Each stage's own `--output` defaults to `<run_root>/<stage>/`.
 
-**YAML config shape**: every key under a section maps to that subcommand's CLI flag, hyphens converted to underscores. `align:` and `rnaseq:` use hyphen style (`--kit-preset` → `kit_preset`); `rpf:` uses underscore style (`--offset_type` → `offset_type`). Booleans emit the bare flag (`true`) or are omitted (`false`); `null` is dropped.
+**YAML config shape**: every key under a section maps to that subcommand's CLI flag, hyphens converted to underscores. `align:` and `rnaseq:` use hyphen style (`--adapter-detection` → `adapter_detection`); `rpf:` uses underscore style (`--offset_type` → `offset_type`). Booleans emit the bare flag (`true`) or are omitted (`false`); `null` is dropped.
 
 ---
 
@@ -927,7 +936,9 @@ mitoribopy all --config mouse_pipeline.yaml --output mouse_results/
 ```yaml
 # mouse_pipeline.yaml
 align:
-  kit_preset: auto
+  # adapter auto-detection runs by default; add `adapter: <SEQ>` only
+  # when detection cannot identify the library, or `pretrimmed: true`
+  # for already-trimmed FASTQs.
   fastq: input_data/seq
   contam_index: indexes/rrna
   mt_index: indexes/mt

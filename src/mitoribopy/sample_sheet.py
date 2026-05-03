@@ -89,7 +89,7 @@ __all__ = [
 
 
 def check_sheet_conflicts(
-    stage_cfg: dict,
+    stage_cfg: dict | None,
     *,
     conflict_keys: Iterable[str],
 ) -> list[str]:
@@ -99,7 +99,12 @@ def check_sheet_conflicts(
     declared the unified sample sheet AND a per-stage input that the
     sheet supersedes (e.g. ``samples:`` + ``align.fastq_dir:``). The
     caller decides how to format the error.
+
+    Tolerates ``stage_cfg=None`` (an empty YAML stanza like ``align:``
+    parses to ``None``) by reporting no conflicts.
     """
+    if not stage_cfg:
+        return []
     return [k for k in conflict_keys if stage_cfg.get(k)]
 
 
