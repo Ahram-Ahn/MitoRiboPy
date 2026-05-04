@@ -164,15 +164,62 @@ twine upload dist/*
 * [ ] PyPI classifier reflects `Development Status :: 4 - Beta` (or
   later) — do NOT regress to `Alpha`
 
-## 9. Reproducibility / archival
+## 9. Documentation link check
+
+`README.md` and the docs under `docs/` link out heavily — the
+release-day check is that none of those links rot before the version
+is the latest on PyPI.
+
+```bash
+# Internal links: every relative .md / .yaml / .tsv / .png / .svg
+# / .csv link target must exist somewhere in the tree.
+python - <<'PY'
+import re, sys
+from pathlib import Path
+ROOT = Path.cwd()
+LINK = re.compile(
+    r"\[[^\]]+\]\("
+    r"([^)#]+\.(?:md|svg|png|yaml|yml|tsv|csv|py|json))"
+    r"\)"
+)
+broken: list[str] = []
+for md in ROOT.rglob("*.md"):
+    if any(p in md.parts for p in ("dist", "build", ".git", ".pytest_cache")):
+        continue
+    text = md.read_text(encoding="utf-8")
+    for target in LINK.findall(text):
+        if target.startswith(("http://", "https://", "mailto:")):
+            continue
+        candidate = (md.parent / target).resolve()
+        if not candidate.exists():
+            broken.append(f"{md.relative_to(ROOT)} -> {target}")
+sys.exit(
+    "Broken internal links:\n  " + "\n  ".join(broken)
+    if broken else 0
+)
+PY
+```
+
+* [ ] internal Markdown links resolve on a clean checkout (every
+  relative `*.md`, image, and example file referenced from any doc
+  exists at the path the link claims)
+* [ ] the README's CHANGELOG / docs / examples links land on the
+  same commit as the release tag (no `main`-pinned URLs that will
+  drift after the next merge)
+* [ ] `docs/release-notes/v<X.Y.Z>.md` links to the merged
+  `CHANGELOG.md` entry, not a draft
+
+## 10. Reproducibility / archival
 
 * [ ] Zenodo archive minted for the tag (or explicitly deferred with
   a comment in the release notes — do not ship a manuscript pinning
   a version that is not archived)
 * [ ] DOI / citation block in `README.md` updated, or the reason for
   not updating is in the release notes
+* [ ] `CITATION.cff` `version` and `date-released` fields match the
+  release tag
 
-## 10. Post-release sanity
+## 11. Post-release sanity
 
 ```bash
 python -m pip install --upgrade 'mitoribopy>=<X.Y.Z>'
@@ -183,6 +230,25 @@ mitoribopy --version
   on a clean env
 * [ ] one quick toy run succeeds against the freshly-installed copy
 * [ ] CHANGELOG entry's "Unreleased" section moved to the new version
+
+## 12. Manuscript version pin
+
+The PyPI release exists so a paper's Methods can pin a single,
+installable, archived version. Before the manuscript ships:
+
+* [ ] the Methods section names the exact PyPI version
+  (`mitoribopy==<X.Y.Z>`), not `>=` and not the GitHub `main` branch
+* [ ] every command in the Methods reproduces in a clean conda env
+  with that exact pin (the [docs/rnaseq_te.md](../rnaseq_te.md)
+  publication-boundary gates are honoured: `--strict`,
+  `rnaseq_mode: de_table` for any TE / ΔTE claim)
+* [ ] the Methods cites the Zenodo DOI minted in step 10
+* [ ] supplementary materials include the exact YAML configs used
+  (these validate cleanly under
+  `mitoribopy validate-config --strict`)
+* [ ] supplementary materials include `run_manifest.json`,
+  `canonical_config.yaml`, and `outputs_index.tsv` from the
+  publication run (the auditable provenance triplet)
 
 ---
 

@@ -38,7 +38,7 @@ The historical second arm of this regression — running with picard `mark-dupli
 ## Inputs required
 
 - Control + TACO1-KO FASTQs (typically ≥ 3 biological replicates each).
-- Published FASTQ identifiers (e.g. from GEO / SRA) plus kit chemistry metadata so per-sample auto-detection resolves correctly. With `kit_preset: auto` (the v0.4+ default) the only metadata you actually need is "is this raw or pre-trimmed?" — pre-trimmed SRA inputs are auto-resolved to the `pretrimmed` kit.
+- Published FASTQ identifiers (e.g. from GEO / SRA) plus kit chemistry metadata so per-sample auto-detection resolves correctly. Since v0.7.1 adapter auto-detection is the default and the only kit-name input vector — the only metadata you actually need is "is this raw or pre-trimmed?". Pre-trimmed SRA inputs are auto-resolved to the `pretrimmed` kit; raw libraries with a known adapter that the detector cannot recover get `--adapter <SEQ>` (or `adapter:` in YAML / sample sheet) explicitly.
 - Human mt-transcriptome FASTA + bowtie2 index.
 - DE table comparing control vs TACO1-KO mRNA levels (from paired RNA-seq or estimated from the RPF pre-offset counts; the rnaseq stage's SHA256 gate enforces reference consistency regardless).
 

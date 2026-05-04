@@ -4,13 +4,17 @@ Every record written to `<run_root>/warnings.tsv` carries a stable
 `code` value. The codes are owned by
 [`src/mitoribopy/io/warning_codes.py`](../../src/mitoribopy/io/warning_codes.py);
 this page is a human-readable mirror.
+[`tests/test_warning_codes_doc_parity.py`](../../tests/test_warning_codes_doc_parity.py)
+fails the suite when any registry entry is missing a documentation
+row, so this table cannot silently drift behind the runtime.
 
 The naming convention is:
 
-| Prefix | Severity | Behaviour |
-| ------ | -------- | --------- |
-| `E_`   | error    | Promoted to a non-zero exit under `mitoribopy all --strict`; otherwise the run finishes and the manifest carries the error. |
-| `W_`   | warn     | Surfaced in `SUMMARY.md` and `warnings.tsv`. The publication recipe expects `--strict` to gate on these. |
+| Prefix | Severity | Behaviour | Publication impact |
+| ------ | -------- | --------- | ------------------ |
+| `E_`   | error    | Promoted to a non-zero exit under `mitoribopy all --strict`; otherwise the run finishes and the manifest carries the error. | **Blocks publication.** A run with any `E_*` code in `warnings.tsv` is unsafe to cite — fix the underlying cause and re-run. |
+| `W_`   | warn     | Surfaced in `SUMMARY.md` and `warnings.tsv`. The publication recipe expects `--strict` to gate on these. | **Requires explanation.** A `W_*` code does not block citation but every code in this row asserts a constraint on what can be claimed (e.g. `W_RNASEQ_FROM_FASTQ_EXPLORATORY` invalidates p-value claims). The remediation column says how to remove or justify it. |
+| `info` | info     | Logged for audit only — does not appear in `SUMMARY.md`. | None. |
 
 Use the codes in CI / paper-figure scripts that grep the manifest:
 

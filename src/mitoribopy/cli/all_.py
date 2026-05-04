@@ -1053,10 +1053,11 @@ _CONFIG_TEMPLATE_PUBLICATION_OVERLAY = """\
 # already accepted by the orchestrator; the overlay just makes the
 # publication-grade defaults explicit so a reviewer reading the YAML can
 # see that the run was gated correctly.
-
-# Run mode — fail loudly on anything that would invalidate a manuscript run.
-strict: true                               # CLI: --strict; gates align,
-                                           # config, rnaseq, validate-figures.
+#
+# Strict mode itself is a CLI flag, not a YAML key — invoke as
+# `mitoribopy all --config <this file> --strict --output <dir>`. The
+# flag gates align, validate-config, rnaseq, and validate-figures
+# in one go.
 
 # rnaseq stage: external full-transcriptome DE table is the publication
 # path. The from_fastq mode (mt-mRNA-only pyDESeq2) is for tutorials only

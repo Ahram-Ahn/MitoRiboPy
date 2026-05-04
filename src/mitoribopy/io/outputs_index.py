@@ -292,6 +292,35 @@ _KNOWN_OUTPUTS: tuple[OutputDescriptor, ...] = (
         schema_key="rna_counts.tsv",
     ),
     OutputDescriptor(
+        output_type="ribo_counts_long",
+        stage="rnaseq",
+        relative_path="rnaseq/rpf_counts.tsv",
+        description=(
+            "Long-form RPF count table written by the rnaseq stage's "
+            "from-FASTQ flow when it re-aligned the Ribo FASTQs "
+            "itself (i.e. without the upstream rpf-counts reuse). "
+            "Mirror of `rpf/rpf_counts.tsv`'s shape: one row per "
+            "(sample, gene, count). The orchestrator points "
+            "`args.ribo_counts` at this path or at the upstream "
+            "rpf-stage file depending on the reuse decision."
+        ),
+        recommended_for="downstream-scripting",
+        schema_key="rpf_counts.tsv",
+    ),
+    OutputDescriptor(
+        output_type="ribo_counts_matrix",
+        stage="rnaseq",
+        relative_path="rnaseq/rpf_counts_matrix.tsv",
+        description=(
+            "Wide-form RPF count matrix companion to "
+            "`rnaseq/rpf_counts.tsv`. Same emission gate (rnaseq "
+            "from-FASTQ flow without upstream reuse). One row per "
+            "gene, one column per sample, integer counts."
+        ),
+        recommended_for="downstream-scripting",
+        schema_key="rpf_counts_matrix.tsv",
+    ),
+    OutputDescriptor(
         output_type="exploratory_sidecar",
         stage="rnaseq",
         relative_path="rnaseq/EXPLORATORY.md",

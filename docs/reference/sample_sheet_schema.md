@@ -33,7 +33,7 @@ error message that lists every problem found.
 | `umi_length_5p` | int ≥ 0 | Per-end 5' UMI length when `umi_position=both`. Required (must be > 0) for that mode; ignored otherwise. |
 | `umi_length_3p` | int ≥ 0 | Per-end 3' UMI length when `umi_position=both`. Required (must be > 0) for that mode; ignored otherwise. |
 | `strandedness` | `forward` \| `reverse` \| `unstranded` | Per-sample library strandedness. |
-| `dedup_strategy` | `auto` \| `umi-tools` \| `skip` | Per-sample dedup choice. `auto` resolves to `umi-tools` when `umi_length > 0`, else `skip`. |
+| `dedup_strategy` | `auto` \| `umi_coordinate` \| `skip` | Per-sample dedup choice. `auto` resolves to `umi_coordinate` (UMI-aware coordinate dedup via `umi_tools`) when `umi_length > 0`, else `skip`. The legacy aliases `umi-tools` and `umi_tools` are accepted and rewritten to canonical `umi_coordinate` at parse time so downstream `canonical_config.yaml` / `run_manifest.json` record one stable token. |
 | `exclude` | `true` \| `false` \| (empty) | When `true`, the row is dropped from `active()` views without deleting the row. Lets a bad library be quarantined without altering the sheet structure. |
 | `notes` | string | Free-form. Carried through to the manifest's `sample_sheet` entry but otherwise ignored. |
 
@@ -85,10 +85,10 @@ same for the per-flag equivalents.
 
 ```
 sample_id	assay	condition	replicate	fastq_1	fastq_2	adapter	pretrimmed	umi_length	umi_position	strandedness	dedup_strategy	exclude	notes
-WT_Ribo_1	ribo	WT	1	ribo/WT_Ribo_1.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi-tools	false	first replicate
-WT_Ribo_2	ribo	WT	2	ribo/WT_Ribo_2.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi-tools	false
-KO_Ribo_1	ribo	KO	1	ribo/KO_Ribo_1.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi-tools	false
-KO_Ribo_2	ribo	KO	2	ribo/KO_Ribo_2.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi-tools	true	failed library
+WT_Ribo_1	ribo	WT	1	ribo/WT_Ribo_1.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi_coordinate	false	first replicate
+WT_Ribo_2	ribo	WT	2	ribo/WT_Ribo_2.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi_coordinate	false
+KO_Ribo_1	ribo	KO	1	ribo/KO_Ribo_1.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi_coordinate	false
+KO_Ribo_2	ribo	KO	2	ribo/KO_Ribo_2.fq.gz		AGATCGGAAGAGCACACGTCTGAACTCCAGTCA	false	8	5p	forward	umi_coordinate	true	failed library
 WT_RNA_1	rna	WT	1	rna/WT_R1.fq.gz	rna/WT_R2.fq.gz		true	0		forward	skip	false
 KO_RNA_1	rna	KO	1	rna/KO_R1.fq.gz	rna/KO_R2.fq.gz		true	0		forward	skip	false
 ```

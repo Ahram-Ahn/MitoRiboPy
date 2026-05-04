@@ -8,7 +8,10 @@
 This document is the canonical machine reference for every flag in
 every `mitoribopy` subcommand. For prose, examples, and decision
 trees see [the README](../../README.md) and the tutorials under
-[`docs/tutorials/`](../tutorials/).
+[`docs/tutorials/`](../tutorials/). For the column-by-column output
+catalogue (every TSV, CSV, and JSON the package writes, with units
+and coordinate spaces) see
+[`docs/reference/output_schema.md`](output_schema.md).
 
 Generated against MitoRiboPy v0.7.1.
 
@@ -685,17 +688,20 @@ options:
 ## `mitoribopy validate-config`
 
 ```text
-usage: mitoribopy validate-config [-h] [--no-path-checks] [--strict] PATH
+usage: mitoribopy validate-config [-h] [--no-path-checks] [--strict]
+                                  [--stage {align,rpf,rnaseq}]
+                                  PATH
 
 Pre-flight a MitoRiboPy YAML / JSON / TOML config: parse, canonicalise legacy keys, check file paths and mutually-exclusive sections, and resolve rnaseq.mode against supplied inputs. Exit code is 0 on success, 2 when at least one error was found.
 
 positional arguments:
-  PATH              Path to the YAML / JSON / TOML config to validate.
+  PATH                        Path to the YAML / JSON / TOML config to validate.
 
 options:
-  -h, --help        show this help message and exit
-  --no-path-checks  Skip the on-disk existence checks for path-shaped values. Useful when validating a config on a different host than where the run will execute (e.g. CI-side validation).
-  --strict          Treat any legacy-key rewrite as a warning AND make the validator exit 2 when at least one warning fired. Use for publication-grade configs that should already be canonical.
+  -h, --help                  show this help message and exit
+  --no-path-checks            Skip the on-disk existence checks for path-shaped values. Useful when validating a config on a different host than where the run will execute (e.g. CI-side validation).
+  --strict                    Treat any legacy-key rewrite as a warning AND make the validator exit 2 when at least one warning fired. Use for publication-grade configs that should already be canonical.
+  --stage {align,rpf,rnaseq}  Pin the per-stage parser to validate against when the file is a flat per-stage config (no align: / rpf: / rnaseq: wrapper — the layout the standalone subcommands accept via `mitoribopy <stage> --config <file>`). Without this flag the validator infers the stage by matching keys against each per-stage parser's argparse dests; the flag exists so you can disambiguate when inference is ambiguous and so CI scripts can declare intent. Ignored for orchestrator-shape configs.
 ```
 
 ## `mitoribopy validate-reference`

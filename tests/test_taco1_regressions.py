@@ -166,7 +166,11 @@ def test_align_only_returns_short_circuit_sentinel(monkeypatch, tmp_path: Path) 
         organism="h.sapiens",
         gene_id_convention="bare",
         align_threads=1,
-        kit_preset="pretrimmed",
+        # v0.7.1 removed `kit_preset`; the new shape is the
+        # `pretrimmed: bool | None` flag plus an optional `adapter`
+        # sequence. This Namespace stands in for the args object that
+        # `_run_from_fastq` would receive; keep it shape-faithful.
+        pretrimmed=True,
         adapter=None,
         umi_length=0,
         umi_position="5p",

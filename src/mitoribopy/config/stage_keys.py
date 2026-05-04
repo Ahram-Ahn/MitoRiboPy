@@ -70,6 +70,18 @@ _STAGE_YAML_EXTRAS: dict[str, frozenset[str]] = {
             # path. Not consumed by the rnaseq subcommand itself; only
             # the orchestrator reads it.
             "allow_exploratory_from_fastq_in_strict",
+            # The CLI flag is
+            # ``--allow-pseudo-replicates-for-demo-not-publication``
+            # whose argparse ``dest`` is ``allow_pseudo_replicates``.
+            # Both spellings are accepted as YAML keys by the
+            # orchestrator (``cli.all_._run_from_fastq`` and
+            # ``cli.rnaseq._run_from_fastq`` both check the long name
+            # alongside the dest), and the flat-template ships the
+            # long name as the publication-canonical YAML form so the
+            # opt-in is visibly named in the config that produced the
+            # run. Whitelisting the long form here keeps the validator
+            # in lockstep with the orchestrator's accepted-keys set.
+            "allow_pseudo_replicates_for_demo_not_publication",
         }
     ),
     "execution": frozenset(),
@@ -91,9 +103,21 @@ _EXECUTION_KEYS: frozenset[str] = frozenset(
 
 _PERIODICITY_KEYS: frozenset[str] = frozenset(
     {
+        # Keep this set in lockstep with the orchestrator's
+        # ``_PERIODICITY_BLOCK_KEYS`` mapping in
+        # ``mitoribopy.cli.all_`` — every key the orchestrator
+        # cascades into ``rpf.periodicity_*`` must validate here, or
+        # the publication-profile template the package itself emits
+        # fails ``validate-config --strict``.
         "enabled",
         "fourier_window_nt",
         "metagene_nt",
+        "metagene_normalize",
+        "fourier_bootstrap_n",
+        "fourier_permutations_n",
+        "fourier_ci_alpha",
+        "fourier_random_seed",
+        "no_fourier_stats",
     }
 )
 

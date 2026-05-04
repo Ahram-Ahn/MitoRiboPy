@@ -123,7 +123,10 @@ HEADER = """\
 This document is the canonical machine reference for every flag in
 every `mitoribopy` subcommand. For prose, examples, and decision
 trees see [the README](../../README.md) and the tutorials under
-[`docs/tutorials/`](../tutorials/).
+[`docs/tutorials/`](../tutorials/). For the column-by-column output
+catalogue (every TSV, CSV, and JSON the package writes, with units
+and coordinate spaces) see
+[`docs/reference/output_schema.md`](output_schema.md).
 
 Generated against MitoRiboPy v{version}.
 

@@ -5,8 +5,11 @@ The v0.7.0 contract:
 * ``--profile minimal`` (default) — the curated short template; backwards-
   compatible with pre-v0.7.0 callers that did not pass a profile.
 * ``--profile publication`` — minimal + a publication-readiness overlay
-  declaring `strict: true`, the periodicity statistical-hardening
-  defaults, and a commented `rnaseq_mode: de_table` block.
+  documenting that ``--strict`` is the CLI gate (it is not a YAML
+  key — top-level ``strict: true`` was removed in v0.7.1 because the
+  orchestrator never read it), declaring the periodicity statistical-
+  hardening defaults, and exposing a commented ``rnaseq_mode: de_table``
+  block.
 * ``--profile exhaustive`` — the full annotated example from
   ``examples/templates/pipeline_config.example.yaml`` (every flag with
   its default and a one-line comment).
@@ -76,7 +79,12 @@ def test_publication_profile_includes_minimal_then_overlay() -> None:
     assert _CONFIG_TEMPLATE in out
     # Publication overlay markers.
     assert "publication-readiness profile" in out
-    assert "strict: true" in out
+    # ``strict`` is now documented as a CLI flag, not a YAML key —
+    # the overlay must NOT emit a top-level ``strict: true`` line
+    # (it was rejected by ``validate-config --strict`` because the
+    # orchestrator never read it).
+    assert "\nstrict: true" not in out
+    assert "mitoribopy all" in out and "--strict" in out
     # Statistical-hardening knobs surfaced explicitly.
     assert "fourier_bootstrap_n: 200" in out
     assert "fourier_permutations_n: 200" in out
@@ -127,3 +135,39 @@ def test_unknown_profile_falls_back_to_minimal_with_warning() -> None:
     assert out == _CONFIG_TEMPLATE
     assert "unknown --profile" in err
     assert "not_a_real_profile" in err
+
+
+# ---------------------------------------------------------------------------
+# Strict-validation regression
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("profile", ["minimal", "publication", "exhaustive"])
+def test_template_profile_passes_strict_validate_config(
+    profile: str, tmp_path: Path
+) -> None:
+    """Every emitted template must validate under ``validate-config
+    --strict --no-path-checks``.
+
+    This is the contract that publication-bound users rely on: if the
+    package's own ``--print-config-template`` emits a key the validator
+    rejects under strict, the publication-readiness checklist is
+    self-inconsistent. The audit that motivated extending
+    ``_PERIODICITY_KEYS`` and removing the dead top-level ``strict:``
+    line caught both of those before release; this test pins the
+    invariant so it cannot regress.
+    """
+    from mitoribopy.cli import validate_config as validate_cli
+
+    out, _ = _capture(profile)
+    template_path = tmp_path / f"template_{profile}.yaml"
+    template_path.write_text(out, encoding="utf-8")
+
+    rc = validate_cli.run(
+        ["--strict", "--no-path-checks", str(template_path)]
+    )
+    assert rc == 0, (
+        f"--profile {profile} emitted a template that fails "
+        f"`validate-config --strict --no-path-checks`. The first 60 lines:\n"
+        + "\n".join(out.splitlines()[:60])
+    )

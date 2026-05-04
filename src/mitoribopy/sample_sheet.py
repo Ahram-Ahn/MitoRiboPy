@@ -35,7 +35,10 @@ Optional columns (any subset; missing columns default to ``None``)::
     umi_length_3p          integer; per-end 3' UMI length when
                            ``umi_position='both'``
     strandedness           'forward' | 'reverse' | 'unstranded'
-    dedup_strategy         'auto' | 'umi-tools' | 'skip'
+    dedup_strategy         'auto' | 'umi_coordinate' | 'skip'
+                           ('umi-tools' / 'umi_tools' are accepted as
+                           legacy aliases and normalised to
+                           'umi_coordinate' at parse time)
     read_length_min        integer; per-sample minimum RPF length
     read_length_max        integer; per-sample maximum RPF length
     reference_id           logical reference identifier (e.g.
@@ -165,7 +168,35 @@ _VALID_ASSAYS: frozenset[str] = frozenset({"ribo", "rna"})
 _VALID_STRANDEDNESS: frozenset[str] = frozenset(
     {"forward", "reverse", "unstranded"}
 )
-_VALID_DEDUP: frozenset[str] = frozenset({"auto", "umi-tools", "skip"})
+_VALID_DEDUP: frozenset[str] = frozenset(
+    {
+        "auto",
+        # Canonical token (matches the align CLI's preferred form, see
+        # ``mitoribopy.cli.align.build_parser`` --dedup-strategy choices).
+        "umi_coordinate",
+        # Legacy aliases — accepted for back-compat and normalised to
+        # ``umi_coordinate`` by ``_normalise_dedup`` before the value
+        # reaches the SampleRow / canonical_config / run_manifest.
+        "umi-tools",
+        "umi_tools",
+        "skip",
+    }
+)
+
+
+def _normalise_dedup(value: str | None) -> str | None:
+    """Collapse legacy ``umi-tools`` / ``umi_tools`` to canonical ``umi_coordinate``.
+
+    Other recognised tokens (``auto``, ``umi_coordinate``, ``skip``) are
+    returned unchanged. Returning ``None`` for ``None`` keeps the
+    column-not-set semantic intact.
+    """
+    if value is None:
+        return None
+    lowered = value.strip().lower()
+    if lowered in {"umi-tools", "umi_tools"}:
+        return "umi_coordinate"
+    return lowered
 _VALID_UMI_POS: frozenset[str] = frozenset({"5p", "3p", "both"})
 _VALID_LIBRARY_TYPE: frozenset[str] = frozenset(
     {"single_end", "paired_end", "auto"}
@@ -419,6 +450,10 @@ def load_sample_sheet(path: str | Path) -> SampleSheet:
                 f"line {line_no}: dedup_strategy {dedup!r} must be one of "
                 f"{sorted(_VALID_DEDUP)}"
             )
+        # Collapse legacy ``umi-tools`` / ``umi_tools`` to the canonical
+        # ``umi_coordinate`` so the SampleRow + downstream
+        # canonical_config / run_manifest record one stable token.
+        dedup = _normalise_dedup(dedup)
 
         exclude_raw = get("exclude")
         include_raw = get("include")

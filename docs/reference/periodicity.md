@@ -24,6 +24,43 @@ The legacy frame-fraction QC bundle (`qc_summary.tsv`,
 `spectral_ratio_3nt` + `snr_call` columns now carry the headline QC
 story; the per-frame breakdown is no longer reported.
 
+## Why mt-Ribo-seq periodicity is noisier than cytosolic Ribo-seq
+
+The metagene Fourier QC was tuned specifically for the mt-mRNA case.
+Some constraints that drove the choices:
+
+* **Only ~13 transcripts to aggregate over.** Cytosolic libraries
+  metagene over thousands of ORFs; mt libraries get nine to thirteen
+  qualifying tracks before normalisation. The signal-to-noise hit
+  shows up in the bootstrap CI and is the reason
+  `MIN_GENES_FOR_BOOTSTRAP_CI = 3` is enforced explicitly (see
+  Statistical hardening below).
+* **High coverage variance across mt-mRNAs.** A handful of genes
+  (often `MT-ND6` in WT, `MT-CO1` under polyproline stalls in
+  `TACO1-KO`) carry orders-of-magnitude more reads than the rest.
+  Without the per-gene unit-mean normalisation that a DESeq2-style
+  cytosolic pipeline never bothers with, those genes would dominate
+  every metagene track.
+* **Two bicistronic overlaps (ATP8/ATP6, ND4L/ND4).** These are
+  invisible in cytosolic data and need their own panels because the
+  combined gene_set excludes them by construction.
+* **Noncanonical stop codons (AGA in `MT-CO1`, AGG in `MT-ND6`).**
+  These produce stop-region pile-ups that contaminate stop-anchored
+  windows; the convention drops the trinucleotide before the stop
+  to remove that impulse from the DFT input.
+* **Short transcripts.** `MT-ATP8` is 207 nt CDS; many libraries do
+  not have enough usable post-initiation, pre-termination signal in
+  the small mt-mRNAs to fit the default 99-nt window cleanly. The
+  per-transcript filter `mean(coverage) < 0.1 or sum(coverage) < 30`
+  drops those before they enter the metagene.
+
+These constraints are *cumulative*: a strong mt periodicity signal
+implies a much higher per-codon coverage than the equivalent claim
+for a cytosolic library. The `snr_call` thresholds were calibrated
+against TACO1-KO ribosome-profiling data — where polyproline stalls
+in `MT-CO1` had to remain detectable — and against published
+human-mt-Ribo-seq libraries with healthy phasing.
+
 ## Why aggregate-then-DFT instead of per-gene overlay
 
 The previous v0.7.x implementation overlaid one FFT trace per gene per
@@ -292,6 +329,47 @@ offset assignment for that read length is suspect — most often the
 5'-end-to-P-site offset is correct for elongation footprints but
 wrong for initiation footprints. Cross-check `metagene_start_p_site.svg`
 for the same length.
+
+## When NOT to overinterpret
+
+Even with a green `snr_call`, treat the headline number with caution
+in any of these cases:
+
+* **`ci_method == "skipped_too_few_genes"`** — fewer than three
+  qualifying per-gene tracks contributed to the metagene. The point
+  estimate is still emitted, but no bootstrap CI exists and a single
+  high-coverage gene can produce a misleadingly clean spectrum. Look
+  at the per-figure annotation listing which transcripts were
+  used, and judge the figure visually before citing.
+* **`n_genes < 5`** — typical when a sample has very low depth or
+  when many short mt-mRNAs were filtered by the per-transcript
+  `mean / sum` floor. The DFT works on whatever is left, but the
+  metagene's variance is dominated by the surviving genes' idiosyncrasies.
+* **`spectral_ratio_3nt` is high but `spectral_ratio_3nt_local` is
+  not** — the global ratio is being inflated by a long-period
+  artefact (typically a remaining DC component from incomplete
+  detrending, or sub-codon noise). The local ratio against the
+  immediate `[4, 6]`-nt neighbourhood is more robust to that and is
+  the right number to cite when the two disagree.
+* **`permutation_p > 0.05`** despite a high ratio — circular-shift
+  randomisation could not rule out that this peak comes from
+  per-gene phase coherence rather than codon-locked elongation. Most
+  often a sign that one or two high-coverage genes are carrying the
+  whole signal; revisit the per-gene QC.
+* **`orf_start` panel is healthy but `orf_stop` panel is broken
+  (or vice versa)** — strongly implies the offset assigned to that
+  read length is wrong for one boundary but right for the other.
+  Cross-check `metagene_start_p_site.svg` for that length.
+* **A single read length carries the entire periodicity** —
+  collapse-to-headline metrics (`snr_call`, `spectral_ratio_3nt`)
+  hide which read lengths actually phased; the per-(sample,
+  read_length) score table is the right view when the overall call
+  is `modest`.
+
+These caveats are encoded in the score table's audit columns
+(`ci_method`, `null_method`, `n_genes`, `n_sites_total`,
+`transcripts`); a downstream consumer should check them before
+asserting "this library is publication-grade by `snr_call`."
 
 ## Method summary
 

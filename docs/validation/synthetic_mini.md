@@ -42,8 +42,8 @@ so to make the package report a 5' offset of **12**, anchor reads are placed at 
 
 - The real `align` stage (cutadapt + bowtie2). The fixture starts from BED-equivalent in-memory dataframes; trim/align is verified separately in [`tests/test_align_*.py`](../../tests/).
 - The from-FASTQ rnaseq flow (pyDESeq2). The DE table is hand-built; the from-FASTQ flow is exercised by [`tests/test_rnaseq_cli_from_fastq.py`](../../tests/test_rnaseq_cli_from_fastq.py).
-- Plotting. `run_periodicity_qc` is invoked with `plot=False` so the test stays headless and fast; the plotting code path is exercised in [`tests/test_periodicity_qc.py::test_run_periodicity_qc_writes_all_artefacts`](../../tests/test_periodicity_qc.py).
-- Periodicity-bundle refinements (depth-aware best-length pick, codon-edge exclusion, overlap-pair annotation, dominant-fraction bug fix). Those have dedicated unit tests in [`tests/test_periodicity_refinements.py`](../../tests/test_periodicity_refinements.py).
+- Plotting. The metagene Fourier path is invoked with `plot=False` so the synthetic test stays headless and fast; the plotting code path is exercised by the dedicated suites in [`tests/test_periodicity_cli.py`](../../tests/test_periodicity_cli.py) and the figure-validation tests in [`tests/test_validate_figures_cli.py`](../../tests/test_validate_figures_cli.py).
+- Periodicity-bundle statistics (bootstrap CI over genes, circular-shift permutation null, `spectral_ratio_3nt_local`, `snr_call` tiering, dominant-fraction bug fix). Those have dedicated unit tests in [`tests/test_fourier_spectrum.py`](../../tests/test_fourier_spectrum.py), [`tests/test_fourier_stats.py`](../../tests/test_fourier_stats.py), and [`tests/test_fourier_edge_cases.py`](../../tests/test_fourier_edge_cases.py). The legacy `test_periodicity_qc.py` / `test_periodicity_refinements.py` modules were retired in v0.8.0 along with the frame-fraction QC bundle.
 
 ## Why this fixture is in the repo
 

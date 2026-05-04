@@ -16,6 +16,18 @@ runs every cheap structural check before any stage actually fires:
   is checked for existence on disk
 * ``rnaseq.mode`` is resolved and validated against supplied inputs
 
+The validator accepts both shapes that the package itself ships:
+
+* **Orchestrator shape** — top-level ``align:`` / ``rpf:`` / ``rnaseq:``
+  sections, consumed by ``mitoribopy all --config <file>``.
+* **Flat per-stage shape** — every key at the top, consumed by the
+  standalone ``mitoribopy {align,rpf,rnaseq} --config <file>`` entry
+  points (this is the layout shipped under
+  ``examples/templates/{align,rpf,rnaseq}_config.example.yaml``). Pass
+  ``--stage`` to pin which stage's parser to validate against; without
+  it the validator infers the stage by matching the file's keys against
+  each per-stage parser's argparse dests.
+
 Exit codes:
 * 0 — config is valid (or has only warnings)
 * 2 — at least one structural error (or any warning when ``--strict``)
@@ -86,6 +98,22 @@ def build_parser() -> argparse.ArgumentParser:
             "Treat any legacy-key rewrite as a warning AND make the "
             "validator exit 2 when at least one warning fired. Use for "
             "publication-grade configs that should already be canonical."
+        ),
+    )
+    parser.add_argument(
+        "--stage",
+        choices=("align", "rpf", "rnaseq"),
+        default=None,
+        help=(
+            "Pin the per-stage parser to validate against when the file "
+            "is a flat per-stage config (no align: / rpf: / rnaseq: "
+            "wrapper — the layout the standalone subcommands accept "
+            "via `mitoribopy <stage> --config <file>`). Without this "
+            "flag the validator infers the stage by matching keys "
+            "against each per-stage parser's argparse dests; the flag "
+            "exists so you can disambiguate when inference is "
+            "ambiguous and so CI scripts can declare intent. Ignored "
+            "for orchestrator-shape configs."
         ),
     )
     return parser
@@ -258,6 +286,65 @@ def _check_rnaseq_mode(cfg: dict, errors: list[str]) -> None:
         errors.append(f"rnaseq: {err}")
 
 
+def _check_strict_rnaseq_policies(rnaseq_section: dict, errors: list[str]) -> None:
+    """Strict-mode publication gates for the rnaseq stage.
+
+    Mirrors the orchestrator's strict checks
+    (``cli.all_.run`` around the ``--strict`` rnaseq branch) so the
+    same misconfigurations are rejected at validate-config preflight
+    rather than only later inside the orchestrator. Two policies:
+
+    * ``allow_pseudo_replicates`` truthy (any of the three accepted
+      spellings) is refused — pseudo-replicates produce p-values that
+      look real but are not.
+    * ``rnaseq_mode == from_fastq`` is refused unless
+      ``allow_exploratory_from_fastq_in_strict: true`` is also set —
+      the in-tree from-FASTQ path runs pyDESeq2 on the mt-mRNA subset
+      only and should not back a manuscript figure.
+
+    Surfacing both at validate-config means a CI script that runs
+    ``mitoribopy validate-config --strict`` catches publication-unsafe
+    configs without the orchestrator having to start, and means the
+    fail-fast rejection is independent of the path-checks pass (so
+    the same gate fires whether or not ``--no-path-checks`` is set).
+    """
+    if not isinstance(rnaseq_section, dict):
+        return
+    allow_pseudo = bool(
+        rnaseq_section.get("allow_pseudo_replicates")
+        or rnaseq_section.get("allow-pseudo-replicates")
+        or rnaseq_section.get("allow_pseudo_replicates_for_demo_not_publication")
+    )
+    if allow_pseudo:
+        errors.append(
+            "rnaseq: --strict refuses allow_pseudo_replicates=true (any "
+            "spelling). Pseudo-replicates are not valid biological "
+            "replicates; the resulting p-values are not publication-grade. "
+            "Re-run without --strict if you intentionally want "
+            "demo / exploratory output."
+        )
+    from .rnaseq import _normalize_mode
+
+    requested = _normalize_mode(
+        rnaseq_section.get("rnaseq_mode")
+        or rnaseq_section.get("rnaseq-mode")
+        or rnaseq_section.get("mode")
+    )
+    if requested == "from_fastq" and not rnaseq_section.get(
+        "allow_exploratory_from_fastq_in_strict"
+    ):
+        errors.append(
+            "rnaseq: --strict refuses rnaseq_mode=from_fastq. The "
+            "in-tree from-FASTQ path runs pyDESeq2 on the mt-mRNA "
+            "subset only — that is not a full-transcriptome DE result "
+            "and should not back a manuscript figure. Use "
+            "rnaseq_mode=de_table with an external full-transcriptome "
+            "DESeq2 / Xtail / Anota2Seq table instead. To override "
+            "(NOT for publication), set "
+            "rnaseq.allow_exploratory_from_fastq_in_strict: true."
+        )
+
+
 def _check_dual_end_umi(cfg: dict, errors: list[str]) -> None:
     """Validate dual-end UMI configuration in the align section.
 
@@ -315,6 +402,120 @@ def _check_dual_end_umi(cfg: dict, errors: list[str]) -> None:
                 _check_block(f"align.samples[{index}]", entry)
 
 
+def _is_orchestrator_shape(cfg: dict) -> bool:
+    """Detect an orchestrator config (vs a flat per-stage config).
+
+    Orchestrator shape is signalled by either:
+
+    * a nested ``align:`` / ``rpf:`` / ``rnaseq:`` mapping at the top
+      level (the same heuristic ``config.canonical`` uses), OR
+    * a top-level ``samples:`` block (the unified sample-sheet pointer
+      consumed exclusively by ``mitoribopy all``; it does not exist
+      on the per-stage subcommands' surfaces).
+
+    Flat per-stage configs carry neither — they are bag-of-keys at the
+    top level, ready to be passed to a single subcommand's parser.
+    """
+    if any(isinstance(cfg.get(k), dict) for k in ("align", "rpf", "rnaseq")):
+        return True
+    samples = cfg.get("samples")
+    if isinstance(samples, (str, dict)) and samples:
+        return True
+    return False
+
+
+def _infer_flat_stage(
+    cfg: dict,
+) -> tuple[str | None, dict[str, int], list[str]]:
+    """Score the flat config's keys against each per-stage allowed-keys set.
+
+    Returns ``(best_stage, per_stage_scores, candidates)``:
+
+    * ``best_stage`` is the stage with the strictly highest match
+      count, or ``None`` when no stage matches or several tie for
+      first place.
+    * ``per_stage_scores`` maps each stage name to the number of keys
+      shared with that stage's allowed-keys set; useful for diagnostic
+      output.
+    * ``candidates`` is the list of stages that achieved the top score
+      (one element on a clean win, several on a tie, empty when no
+      stage matched).
+    """
+    keys = set(cfg.keys())
+    scores: dict[str, int] = {}
+    for stage in ("align", "rpf", "rnaseq"):
+        try:
+            allowed = stage_keys.allowed_keys_for(stage)
+        except Exception:  # pragma: no cover - parser introspection
+            allowed = set()
+        scores[stage] = len(keys & allowed)
+    top = max(scores.values()) if scores else 0
+    if top == 0:
+        return None, scores, []
+    candidates = sorted(s for s, n in scores.items() if n == top)
+    if len(candidates) > 1:
+        return None, scores, candidates
+    return candidates[0], scores, candidates
+
+
+def _validate_flat_per_stage(
+    canonical: dict,
+    stage: str,
+    *,
+    strict: bool,
+    no_path_checks: bool,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    """Validate a flat per-stage config against the resolved stage's surface.
+
+    Mirrors the orchestrator-shape checks but reads keys at the top
+    level rather than under a ``stage:`` wrapper.
+    """
+    try:
+        unknown = stage_keys.find_unknown_keys(canonical, stage)
+    except Exception as exc:  # pragma: no cover - parser introspection
+        warnings.append(f"could not introspect {stage!r} parser: {exc!s}")
+        unknown = []
+    for key, suggestions in unknown:
+        message = stage_keys.format_unknown_key_message(stage, key, suggestions)
+        if strict:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
+    # Dual-end UMI sanity is align-only and reads the same keys whether
+    # they sit under ``align:`` or at the top of a flat align config.
+    # Wrap and reuse to keep behaviour bit-identical.
+    if stage == "align":
+        _check_dual_end_umi({"align": canonical}, errors)
+
+    # The rnaseq mode resolver only reads named keys off the dict —
+    # works against flat shape unchanged.
+    if stage == "rnaseq":
+        from .all_ import _resolve_rnaseq_mode_from_config
+
+        _, err = _resolve_rnaseq_mode_from_config(canonical)
+        if err is not None:
+            errors.append(f"rnaseq: {err}")
+        if strict:
+            _check_strict_rnaseq_policies(canonical, errors)
+
+    if not no_path_checks:
+        path_keys = {
+            "align": _ALIGN_PATH_KEYS,
+            "rpf": _RPF_PATH_KEYS,
+            "rnaseq": _RNASEQ_PATH_KEYS,
+        }[stage]
+        _check_paths(
+            canonical,
+            path_keys,
+            section_label=stage,
+            errors=errors,
+            warnings=warnings,
+        )
+
+
 def _check_sample_sheet_loads(cfg: dict, errors: list[str]) -> None:
     raw = cfg.get("samples")
     sheet_path: str | None = None
@@ -359,45 +560,89 @@ def run(argv: Iterable[str]) -> int:
         for line in change_log:
             warnings.append(f"legacy key (auto-canonicalised): {line}")
 
-    _check_unknown_top_level_keys(canonical, errors)
-    _check_unknown_stage_keys(
-        canonical, errors, warnings, strict=args.strict
-    )
-    _check_sheet_conflicts(canonical, errors)
-    _check_mutually_exclusive(canonical, errors)
-    _check_rnaseq_mode(canonical, errors)
-    _check_sample_sheet_loads(canonical, errors)
-    _check_dual_end_umi(canonical, errors)
+    if _is_orchestrator_shape(canonical) or args.stage is None and (
+        # An empty config (no stage signal at all) is treated as
+        # orchestrator-shape so the existing "unknown top-level key"
+        # message fires; flat-shape inference would otherwise return
+        # "no recognised align / rpf / rnaseq keys" which is less
+        # actionable for what's almost certainly an empty file.
+        not canonical
+    ):
+        _check_unknown_top_level_keys(canonical, errors)
+        _check_unknown_stage_keys(
+            canonical, errors, warnings, strict=args.strict
+        )
+        _check_sheet_conflicts(canonical, errors)
+        _check_mutually_exclusive(canonical, errors)
+        _check_rnaseq_mode(canonical, errors)
+        _check_sample_sheet_loads(canonical, errors)
+        _check_dual_end_umi(canonical, errors)
+        if args.strict:
+            _check_strict_rnaseq_policies(
+                canonical.get("rnaseq") or {}, errors
+            )
 
-    if not args.no_path_checks:
-        align = canonical.get("align") or {}
-        rpf = canonical.get("rpf") or {}
-        rnaseq = canonical.get("rnaseq") or {}
-        # Top-level samples sheet path.
-        samples = canonical.get("samples")
-        if isinstance(samples, str):
-            if not Path(samples).exists():
-                errors.append(
-                    f"samples: path {samples!r} does not exist."
+        if not args.no_path_checks:
+            align = canonical.get("align") or {}
+            rpf = canonical.get("rpf") or {}
+            rnaseq = canonical.get("rnaseq") or {}
+            # Top-level samples sheet path.
+            samples = canonical.get("samples")
+            if isinstance(samples, str):
+                if not Path(samples).exists():
+                    errors.append(
+                        f"samples: path {samples!r} does not exist."
+                    )
+            elif isinstance(samples, dict):
+                sheet = samples.get("table") or samples.get("path")
+                if sheet and not Path(sheet).exists():
+                    errors.append(f"samples.table: path {sheet!r} does not exist.")
+            if isinstance(align, dict):
+                _check_paths(
+                    align, _ALIGN_PATH_KEYS,
+                    section_label="align", errors=errors, warnings=warnings,
                 )
-        elif isinstance(samples, dict):
-            sheet = samples.get("table") or samples.get("path")
-            if sheet and not Path(sheet).exists():
-                errors.append(f"samples.table: path {sheet!r} does not exist.")
-        if isinstance(align, dict):
-            _check_paths(
-                align, _ALIGN_PATH_KEYS,
-                section_label="align", errors=errors, warnings=warnings,
-            )
-        if isinstance(rpf, dict):
-            _check_paths(
-                rpf, _RPF_PATH_KEYS,
-                section_label="rpf", errors=errors, warnings=warnings,
-            )
-        if isinstance(rnaseq, dict):
-            _check_paths(
-                rnaseq, _RNASEQ_PATH_KEYS,
-                section_label="rnaseq", errors=errors, warnings=warnings,
+            if isinstance(rpf, dict):
+                _check_paths(
+                    rpf, _RPF_PATH_KEYS,
+                    section_label="rpf", errors=errors, warnings=warnings,
+                )
+            if isinstance(rnaseq, dict):
+                _check_paths(
+                    rnaseq, _RNASEQ_PATH_KEYS,
+                    section_label="rnaseq", errors=errors, warnings=warnings,
+                )
+    else:
+        # Flat per-stage config: pivot to per-stage validation against
+        # the matching subcommand's argparse surface.
+        if args.stage is not None:
+            stage: str | None = args.stage
+        else:
+            stage, scores, candidates = _infer_flat_stage(canonical)
+            if stage is None:
+                top = max(scores.values()) if scores else 0
+                if top == 0:
+                    errors.append(
+                        "flat per-stage config has no recognised align / "
+                        "rpf / rnaseq keys; if this is an orchestrator "
+                        "config it must wrap its keys in `align:` / "
+                        "`rpf:` / `rnaseq:` sections."
+                    )
+                else:
+                    errors.append(
+                        "flat per-stage config matches multiple stages "
+                        f"({', '.join(candidates)}, score {top} each). "
+                        "Pass `--stage {align,rpf,rnaseq}` to declare "
+                        "which subcommand this file targets."
+                    )
+        if stage is not None:
+            _validate_flat_per_stage(
+                canonical,
+                stage,
+                strict=args.strict,
+                no_path_checks=args.no_path_checks,
+                errors=errors,
+                warnings=warnings,
             )
 
     for w in warnings:

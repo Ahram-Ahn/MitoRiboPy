@@ -194,6 +194,39 @@ def test_invalid_dedup_strategy_is_an_error(tmp_path: Path) -> None:
         load_sample_sheet(sheet)
 
 
+def test_dedup_strategy_accepts_canonical_umi_coordinate(tmp_path: Path) -> None:
+    """The unified sample sheet must accept the same canonical token
+    (``umi_coordinate``) that the align CLI promotes — otherwise users
+    copying the canonical value into the recommended sample-sheet
+    interface get rejected. Regression for the v0.7.1 publication
+    checklist (P0.3)."""
+    sheet = _write(
+        tmp_path / "samples.tsv",
+        "sample_id\tassay\tcondition\tfastq_1\tdedup_strategy\n"
+        "A\tribo\tWT\tA.fq.gz\tumi_coordinate\n",
+    )
+    s = load_sample_sheet(sheet)
+    assert s.rows[0].dedup_strategy == "umi_coordinate"
+
+
+@pytest.mark.parametrize("legacy_token", ["umi-tools", "umi_tools"])
+def test_dedup_strategy_legacy_aliases_normalise_to_umi_coordinate(
+    legacy_token: str, tmp_path: Path
+) -> None:
+    """Legacy ``umi-tools`` / ``umi_tools`` tokens load successfully and
+    are rewritten to the canonical ``umi_coordinate`` so downstream
+    artifacts (``canonical_config.yaml``, ``run_manifest.json``,
+    materialised ``align/sample_overrides.tsv``) record one stable
+    spelling."""
+    sheet = _write(
+        tmp_path / f"samples_{legacy_token.replace('-', '_')}.tsv",
+        "sample_id\tassay\tcondition\tfastq_1\tdedup_strategy\n"
+        f"A\tribo\tWT\tA.fq.gz\t{legacy_token}\n",
+    )
+    s = load_sample_sheet(sheet)
+    assert s.rows[0].dedup_strategy == "umi_coordinate"
+
+
 def test_all_errors_reported_in_one_pass(tmp_path: Path) -> None:
     """Multiple errors across rows should all be reported at once so the
     user does not have to fix-and-retry one row at a time."""
