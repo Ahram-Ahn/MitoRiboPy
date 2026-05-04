@@ -90,9 +90,10 @@ subsampling level in `notes`.
 
 ---
 
-## Reference Cases To Measure
+## Recommended Reference Cases
 
-The Methods section should include measured rows for:
+For reproducible resource reporting, measure representative runs rather than
+copying generic benchmark numbers. Useful reference cases are:
 
 1. `examples/smoke/` synthetic fixture.
 2. One public human mt-Ribo-seq sample subsampled to 1M reads.
@@ -101,8 +102,9 @@ The Methods section should include measured rows for:
 5. One realistic non-subsampled lab dataset, with RNA-seq included if
    that workflow is being claimed.
 
-Keep the committed docs number-free until those rows come from real
-run artifacts.
+Keep benchmark tables tied to real run artifacts (`benchmark.tsv`,
+`run_manifest.json`, and the original input inventory). Do not mix subsampled
+and non-subsampled rows without recording the subsampling level.
 
 ---
 
@@ -110,7 +112,5 @@ run artifacts.
 
 * [`reference/output_schema.md`](reference/output_schema.md) — output
   table schemas and provenance files.
-* [`developer/roadmap.md`](developer/roadmap.md) — remaining benchmark
-  documentation work.
 * [`tutorials/05_hpc_cluster_run.md`](tutorials/05_hpc_cluster_run.md)
   — scheduler and scratch-space guidance.

@@ -12,12 +12,10 @@ versioned release header. Long-running design notes live in
 [`docs/developer/roadmap.md`](docs/developer/roadmap.md).
 
 ### Planned
-- `mitoribopy all --print-config-template --profile {minimal,publication,exhaustive}`
-  as the single source of truth for example templates; the published
-  templates would be regenerated from this.
-- Bundled smoke fixture under `examples/smoke/` (tiny references + 1k
-  reads + expected-outputs manifest) so a fresh PyPI install can run a
-  30-second end-to-end sanity check.
+- Extend `examples/smoke/` with richer numerical assertions once the
+  synthetic reference and read simulator carry a stable biological
+  signal. The fixture itself is shipped as an opt-in wiring test in
+  v0.7.0+.
 
 ## [0.7.1] - 2026-05-02
 
@@ -738,4 +736,3 @@ Detailed entries for v0.4.4 → v0.1.0 are preserved in git history (`git log --
 - **v0.3.0** — `mitoribopy align` subcommand (cutadapt + bowtie2 + umi_tools wrappers); kit-preset registry; per-sample adapter detection.
 - **v0.2.0** — `mitoribopy rpf` and `mitoribopy rnaseq` subcommands; legacy `_legacy` modules removed.
 - **v0.1.0** — initial package release with `mitoribopy` CLI entry point and P/A-site offset selection.
-

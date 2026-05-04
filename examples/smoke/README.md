@@ -13,16 +13,13 @@ is the biology gate. The smoke fixture exists so a user installing
 MitoRiboPy can confirm in one command that the package is wired up
 end-to-end on their machine.
 
-> **Status (v0.7.1):** the smoke fixture is still listed under
-> "Planned" in `CHANGELOG.md`. It is **opt-in**: the pytest harness
-> deselects it from the default suite and only runs it when you
-> explicitly request it with `pytest -m smoke`. The synthetic FASTA
-> contigs do not yet carry a 5' UTR, so the offset-selection step has
-> nothing upstream of the start codon to fit against; the periodicity
-> QC bundle therefore is not produced under this fixture. Treat the
-> fixture as a wiring smoke test, not a numerical-output test, until
-> the FASTA + read simulator are extended (see CHANGELOG planned
-> entries).
+> **Current scope (v0.7.1):** this fixture is shipped as an opt-in
+> wiring test. The pytest harness deselects it from the default suite
+> and only runs it when explicitly requested with `pytest -m smoke`.
+> The test asserts that the files in `expected_outputs.txt` exist and
+> are non-empty, including the periodicity QC tables. It does not
+> assert biological correctness, signal strength, or stable numerical
+> values from the synthetic reads.
 
 ---
 
@@ -82,13 +79,13 @@ are available.
 | [`samples.tsv`](samples.tsv) | Two-row unified sample sheet (`WT_smoke_1`, `KO_smoke_1`), both `assay=ribo`, with `condition` carried inline (per the v0.7 sample-sheet schema). |
 | [`samples.condition_map.tsv`](samples.condition_map.tsv) | Legacy auxiliary file kept for reference; the unified sample sheet now carries `condition` inline, so this file is not consumed by the smoke run. |
 | [`pipeline_config.smoke.yaml`](pipeline_config.smoke.yaml) | Config drives `mitoribopy all`. No rnaseq section. |
-| [`expected_outputs.txt`](expected_outputs.txt) | List of files that must exist after a successful run (current expected list assumes a future fixture extension that produces the periodicity QC bundle). |
+| [`expected_outputs.txt`](expected_outputs.txt) | List of files that must exist and be non-empty after a successful run. |
 | `results/` | Run output (gitignored). |
 
 ---
 
 ## Why no UMIs?
 
-The smoke fixture sets `umi_position: none` so it does not depend on
-`umi_tools`. The UMI / dedup pipeline has its own dedicated tests
+The smoke fixture omits UMI fields and sets `dedup_strategy: skip`, so it does
+not depend on `umi_tools`. The UMI / dedup pipeline has its own dedicated tests
 under `tests/test_align_dedup.py` and `tests/test_align_dual_umi.py`.

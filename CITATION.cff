@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 title: "MitoRiboPy: Mitochondrial ribosome profiling analysis pipeline"
-message: "If you use this software, please cite both the GitHub release tag and the Zenodo DOI rather than the package name alone."
+message: "Cite the exact MitoRiboPy release for reproducible software attribution."
 type: software
 authors:
   - family-names: Ahn

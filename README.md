@@ -244,16 +244,16 @@ mitoribopy rpf \
   --strain h.sapiens \
   --fasta references/human-mt-mRNA.fasta \
   --directory results/align/bed/ \
-  --footprint_class monosome \
-  --offset_mode per_sample \
-  --analysis_sites both \
-  --read_counts_file results/align/read_counts.tsv \
+  --footprint-class monosome \
+  --offset-mode per_sample \
+  --analysis-sites both \
+  --read-counts-file results/align/read_counts.tsv \
   --output results/rpf/ \
-  --plot_format svg
+  --plot-format svg
 ```
 
-For disome libraries, use `--footprint_class disome`. For custom organisms,
-use `--strain custom` with `--annotation_file` and `--codon_table_name`.
+For disome libraries, use `--footprint-class disome`. For custom organisms,
+use `--strain custom` with `--annotation-file` and `--codon-table-name`.
 
 ### Translation efficiency with external DE results
 
@@ -358,19 +358,31 @@ For the full output tree and column definitions, see
 
 ## Documentation Map
 
-- [Documentation index](docs/README.md)
-- [End-to-end FASTQ tutorial](docs/tutorials/01_end_to_end_fastq.md)
-- [RNA-seq integration tutorial](docs/tutorials/02_rnaseq_integration.md)
-- [HPC / cluster tutorial](docs/tutorials/05_hpc_cluster_run.md)
-- [CLI reference](docs/reference/cli.md)
-- [Input reference](docs/inputs.md)
-- [Sample sheet schema](docs/reference/sample_sheet_schema.md)
-- [Output schema](docs/reference/output_schema.md)
-- [Warning and error codes](docs/reference/warning_codes.md)
-- [Custom organism workflow](docs/custom_organisms.md)
-- [Benchmarking](docs/benchmarking.md)
-- [Validation notes](docs/validation/)
-- [Release notes](docs/release-notes/)
+Start with the workflow guides when setting up a run:
+
+- [End-to-end FASTQ tutorial](docs/tutorials/01_end_to_end_fastq.md) - a complete `mitoribopy all` walk-through from FASTQs to RPF outputs.
+- [RNA-seq integration tutorial](docs/tutorials/02_rnaseq_integration.md) - TE / delta-TE workflows, including the external-DE publication route.
+- [HPC / cluster tutorial](docs/tutorials/05_hpc_cluster_run.md) - SLURM/LSF execution, thread accounting, scratch storage, and resume.
+- [Custom organism workflow](docs/custom_organisms.md) - non-human/non-yeast references, annotation CSVs, and codon tables.
+
+Use these references when preparing inputs or debugging outputs:
+
+- [Input reference](docs/inputs.md) - required files for each stage.
+- [Sample sheet schema](docs/reference/sample_sheet_schema.md) - canonical `samples.tsv` columns and validation rules.
+- [Config schema](docs/reference/config_schema.md) - orchestrator YAML sections and auto-wiring behavior.
+- [CLI reference](docs/reference/cli.md) - generated flag reference for every subcommand.
+- [Output schema](docs/reference/output_schema.md) - file inventory and column definitions.
+- [Warning and error codes](docs/reference/warning_codes.md) - stable `warnings.tsv` codes and remediations.
+
+Use these for interpretation, operations, and release context:
+
+- [RNA-seq TE boundaries](docs/rnaseq_te.md) - when `from_fastq` is exploratory and when `de_table` is publication-grade.
+- [TE numerics](docs/te_numerics.md) - equations behind `te.tsv` and `delta_te.tsv`.
+- [Periodicity QC](docs/reference/periodicity.md) - metagene Fourier method and `snr_call` interpretation.
+- [Benchmarking](docs/benchmarking.md) - `mitoribopy benchmark` outputs for runtime, memory, and disk sizing.
+- [Validation notes](docs/validation/) - regression and biological validation materials.
+- [Release notes](docs/release-notes/) - version-by-version upgrade notes.
+- [Documentation index](docs/README.md) - full docs tree.
 
 ## Development
 
@@ -396,22 +408,30 @@ PYTHONPATH=src python docs/generate_cli_reference.py --check
 
 ## Citation
 
-For reproducibility, cite the release tag and the Zenodo DOI for the exact
-version you used. The package name alone is not enough because PyPI can move
-forward while a tagged release remains fixed.
+Cite the released software version, not only the package name.
 
-Suggested manuscript block:
+Recommended citation for MitoRiboPy v0.7.1:
 
 ```text
-Software: MitoRiboPy v0.7.1
-DOI: <Zenodo DOI for the v0.7.1 release>
-Repository: https://github.com/Ahram-Ahn/MitoRiboPy/releases/tag/v0.7.1
-Python: <Python version recorded in run_manifest.json>
-External tools: versions recorded in <run_root>/run_manifest.json
+Ahn A. MitoRiboPy: Mitochondrial ribosome profiling analysis pipeline.
+Version 0.7.1. 2026. https://github.com/Ahram-Ahn/MitoRiboPy
+```
+
+BibTeX:
+
+```bibtex
+@software{ahn_mitoribopy_2026,
+  author = {Ahn, Ahram},
+  title = {MitoRiboPy: Mitochondrial ribosome profiling analysis pipeline},
+  version = {0.7.1},
+  date = {2026-05-02},
+  url = {https://github.com/Ahram-Ahn/MitoRiboPy}
+}
 ```
 
 A machine-readable [CITATION.cff](CITATION.cff) is included for tools that
-consume the Citation File Format.
+consume the Citation File Format. Runtime provenance, including Python and
+external-tool versions, is recorded in each run's `run_manifest.json`.
 
 ## Known Limitations
 

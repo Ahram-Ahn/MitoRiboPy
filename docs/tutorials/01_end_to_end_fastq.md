@@ -76,7 +76,7 @@ align:
   mapq: 10
   min_length: 15
   max_length: 45
-  dedup_strategy: auto            # umi-tools per sample if UMI, else skip
+  dedup_strategy: auto            # umi_coordinate per sample if UMI, else skip
 
 rpf:
   strain: h.sapiens               # h.sapiens | s.cerevisiae | custom
@@ -115,7 +115,7 @@ $ cp examples/templates/pipeline_config.example.yaml pipeline_config.yaml
 or get the curated minimal template from the CLI:
 
 ```bash
-$ mitoribopy all --print-config-template > pipeline_config.yaml
+$ mitoribopy all --print-config-template --profile minimal > pipeline_config.yaml
 ```
 
 ---
