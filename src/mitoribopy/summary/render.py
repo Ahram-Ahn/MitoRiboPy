@@ -191,7 +191,7 @@ def render_summary_md(
             _markdown_table(qc_columns, summary_qc_rows),
         )
 
-    # v0.9.0: Statistical confidence on the metagene Fourier QC.
+    # Statistical confidence on the metagene Fourier QC.
     # Pulls the headline (sample, gene_set=combined, region=orf_start,
     # max-sites read_length) row out of fourier_period3_score_combined.tsv
     # and renders the spectral ratio with its bootstrap CI and the

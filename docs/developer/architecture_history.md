@@ -73,9 +73,11 @@ Major user-facing changes that landed in v0.6.0:
   `<run_root>/resource_plan.json`.
 * Canonical `dedup_strategy: umi_coordinate`; legacy `umi-tools` is
   rewritten by `migrate-config`.
-* Periodicity QC bundle extended with `qc_summary.tsv`,
+* Historical periodicity QC bundle extended with `qc_summary.tsv`,
   `qc_summary.md`, gene-level frame fractions, optional phase score
-  and FFT period-3 power.
+  and FFT period-3 power. The current package has since replaced this
+  with the metagene Fourier bundle documented in
+  [`docs/reference/periodicity.md`](../reference/periodicity.md).
 * Stable warning / error code registry under
   `docs/reference/warning_codes.md`.
 * Release checklist under `docs/developer/release_checklist.md` is
@@ -94,18 +96,16 @@ during the cycle (no rewrites; no architecture changes):
    pool is restricted to rows clearing `min_reads_per_length` whenever
    any qualify, so a 5-read length with lucky frame-0 dominance can no
    longer crown a 5,000-read length at 0.75.
-3. `exclude_start_codons` / `exclude_stop_codons` are now first-class
+3. `exclude_start_codons` / `exclude_stop_codons` became first-class
    parameters of `compute_frame_summary`,
    `compute_frame_summary_by_length`, `build_gene_periodicity`,
    `run_periodicity_qc`, and `run_periodicity_qc_bundle`. Defaults
    stay at 0 in the pipeline path to preserve historical numbers; the
    standalone CLI applies the spec defaults of 6 / 3 uniformly.
-4. `gene_periodicity.tsv` now ships an `is_overlap_pair` column
-   flagging known human mt-mRNA overlap regions. Overlap set covers
-   both the canonical HGNC names (`MT-ATP8`, `MT-ATP6`, `MT-ND4L`,
-   `MT-ND4`) and the fused-ORF spellings used by some FASTAs
-   (`ATP86`, `ND4L4` — including the bundled
-   `input_data/human-mt-mRNA.fasta`).
+4. `gene_periodicity.tsv` shipped an `is_overlap_pair` column in that
+   historical bundle, flagging known human mt-mRNA overlap regions.
+   The current Fourier path handles ATP8/ATP6 and ND4L/ND4 through the
+   dedicated `ATP86` and `ND4L4` gene sets instead.
 
 ### Per-frame split coverage plot
 

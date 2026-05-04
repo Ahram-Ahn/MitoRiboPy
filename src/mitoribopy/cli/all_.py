@@ -733,7 +733,7 @@ _PERIODICITY_BLOCK_KEYS: dict[str, str] = {
     "enabled": "periodicity_enabled",
     "fourier_window_nt": "periodicity_fourier_window_nt",
     "metagene_nt": "periodicity_metagene_nt",
-    # v0.9.0 — metagene aggregation policy + Fourier statistical knobs.
+    # Metagene aggregation policy + Fourier statistical knobs.
     "metagene_normalize": "periodicity_metagene_normalize",
     "fourier_bootstrap_n": "periodicity_fourier_bootstrap_n",
     "fourier_permutations_n": "periodicity_fourier_permutations_n",

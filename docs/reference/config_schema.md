@@ -6,10 +6,16 @@ detected from the suffix: `.yaml` / `.yml` (PyYAML), `.json`, or
 `.toml` (Python 3.11+ stdlib `tomllib`, or the `tomli` fallback).
 
 This document is the canonical reference for the **orchestrator**
-config, which has up to four top-level sections:
+config, which has these top-level sections:
 
 ```yaml
 samples: { table: samples.tsv }     # RECOMMENDED single source of truth
+
+execution:
+  ...
+
+periodicity:
+  ...
 
 align:
   ...
@@ -44,8 +50,8 @@ When set, the orchestrator:
 * loads and validates the sheet via :func:`mitoribopy.sample_sheet.load_sample_sheet`;
 * derives `align.fastq` (one entry per `assay='ribo'` row) and
   `align.sample_overrides` (a materialised TSV under
-  `<output>/align/sample_overrides.tsv`) when any per-sample kit /
-  UMI override is set;
+  `<output>/align/sample_overrides.tsv`) when any per-sample adapter,
+  UMI, pretrimmed, strandedness, or dedup override is set;
 * threads the sheet path through to `rnaseq.sample_sheet` when the
   rnaseq section is also set.
 
@@ -73,7 +79,7 @@ Selected highlights:
 | `umi_length_5p`, `umi_length_3p` | per-end UMI lengths for `umi_position: both` (e.g. xGen Duplex, Twist). Required when `umi_position=both`; `umi_length` MUST equal their sum and is auto-derived when omitted |
 | `contam_index`, `mt_index` | bowtie2 index prefixes (sidecar `.1.bt2` must exist) |
 | `min_length`, `max_length`, `quality`, `mapq` | length / quality / MAPQ filters |
-| `dedup_strategy` | `auto` / `umi-tools` / `skip` |
+| `dedup_strategy` | `auto` / `umi_coordinate` / `skip` (`umi-tools` and `umi_tools` are accepted as legacy aliases and rewritten) |
 | `max_parallel_samples` | per-stage worker count (see HPC docs) |
 
 Inputs (FASTQs) come from either `align.fastq:` (string = directory
@@ -110,6 +116,40 @@ Selected highlights:
 | `codon_density_window` | smooth codon density with ±1 nt window (legacy `merge_density`) |
 
 ---
+
+## `execution:` section
+
+The optional top-level `execution:` block defines the run-level
+resource budget. The orchestrator cascades these values into stage
+flags unless a stage pins its own value.
+
+| Key | Meaning |
+|---|---|
+| `threads` | total CPU-thread budget; also set by `mitoribopy all --threads` when YAML does not pin it |
+| `memory_gb` | memory budget used by the resource planner |
+| `parallel_samples` | align-stage sample workers; `auto` lets the planner choose |
+| `single_sample_mode` | force serial per-sample align work |
+| `min_threads_per_sample` | floor used by the automatic parallel-sample calculation |
+| `estimated_memory_per_sample_gb` | memory estimate used by the automatic parallel-sample calculation |
+| `scheduler` | free-form scheduler label recorded in `resource_plan.json` |
+
+## `periodicity:` section
+
+The optional top-level `periodicity:` block tunes the Fourier
+periodicity QC emitted by `mitoribopy rpf`. Explicit
+`rpf.periodicity_*` keys win when both are set.
+
+| Key | Meaning |
+|---|---|
+| `enabled` | `true` / `false`; disable only for debugging or very fast smoke runs |
+| `fourier_window_nt` | Fourier metagene window size in nt; default 99 |
+| `metagene_nt` | start/stop metagene plot window in nt; default 300 |
+| `metagene_normalize` | `per_gene_unit_mean` (default) / `none` |
+| `fourier_bootstrap_n` | bootstrap iterations for period-3 CI; default 200 |
+| `fourier_permutations_n` | circular-shift permutations for the empirical null; default 200 |
+| `fourier_ci_alpha` | two-sided CI alpha; default 0.10 |
+| `fourier_random_seed` | RNG seed recorded in `periodicity.metadata.json`; default 42 |
+| `no_fourier_stats` | `true` skips CI and permutation p-values |
 
 ### Standalone `mitoribopy periodicity` flags
 
@@ -149,11 +189,11 @@ Required columns in the input site table: `sample`, `gene`,
 `count` column is honoured for weighted counting (defaults to 1 per
 row when absent).
 
-The frame-fraction QC bundle (`qc_summary.tsv`,
-`frame_counts_*.tsv`, `gene_periodicity.tsv`, the four named frame-
-heatmap plots, `--phase-score` and the threshold flags) was retired
-in v0.8.0; see [periodicity.md](periodicity.md) for the migration
-recipe.
+The older frame-fraction QC bundle (`qc_summary.tsv`,
+`frame_counts_*.tsv`, `gene_periodicity.tsv`, the frame heatmaps,
+`--phase-score`, and the threshold flags) is not emitted by the
+current package; see [periodicity.md](periodicity.md) for the current
+Fourier contract.
 
 ---
 
@@ -198,7 +238,7 @@ doesn't have to repeat paths. Visible via
 | `rpf.directory` | `<output>/align/bed/` (when align is in the run) |
 | `rpf.read_counts_file` | `<output>/align/read_counts.tsv` |
 | `rnaseq.output` | `<output>/rnaseq/` |
-| `rnaseq.ribo-dir` | `<output>/rpf/` (de_table flow) |
+| `rnaseq.ribo_dir` | `<output>/rpf/` (de_table flow) |
 | `rnaseq.reference_fasta` | `rpf.fasta` (from-FASTQ flow, when not set explicitly) |
 | `rnaseq.upstream_rpf_counts` | `<output>/rpf/rpf_counts.tsv` (from-FASTQ flow with rpf stage in the run, unless `recount_ribo_fastq: true`) |
 

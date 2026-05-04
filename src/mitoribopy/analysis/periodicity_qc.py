@@ -150,7 +150,7 @@ def run_periodicity_qc_bundle(
         "period_grid_first": float(DEFAULT_PERIOD_GRID[0]),
         "period_grid_last": float(DEFAULT_PERIOD_GRID[-1]),
         "method": "metagene_dft",
-        # Statistical hardening (v0.9.0+): record exactly what produced
+        # Statistical hardening: record exactly what produced
         # the CI / p columns so a downstream reviewer can reproduce
         # them by name.
         "compute_stats": bool(compute_stats),

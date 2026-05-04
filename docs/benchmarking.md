@@ -1,136 +1,116 @@
-# Benchmarking protocol
+# Benchmarking Protocol
 
-Reproducible runtime / memory / disk numbers for `mitoribopy all`.
-The numbers in this page back the "Benchmark" table in the
-manuscript Methods; CI does not maintain them, but the benchmarking
-*command* below is how to regenerate them on a comparable machine.
+`mitoribopy benchmark` wraps a real `mitoribopy all` run, records
+runtime and resource totals, and writes benchmark artifacts into the
+same run root. Use it for local cluster sizing and for producing
+manuscript runtime tables from measured runs.
 
-> **Status (v0.7.1).** Numbers below are placeholders pending the
-> publication-grade dataset run on the maintainer's reference HPC
-> tier. The benchmarking *protocol* (commands, table schema,
-> required artefacts) is finalised; only the row entries are TBD.
-> See P1.4 in
-> [`docs/developer/release_checklist.md`](developer/release_checklist.md)
-> for the readiness gate this page closes.
+This page documents the implemented command and output schema. It does
+not contain placeholder benchmark numbers.
 
 ---
 
 ## Command
-
-`mitoribopy benchmark` is a thin wrapper around `mitoribopy all`
-that records wall time, peak RSS, and disk footprint per stage:
 
 ```bash
 mitoribopy benchmark \
   --config <pipeline_config.yaml> \
   --output <run_root> \
   --threads <N> \
-  --subsample <K>     # optional: reservoir-sample every Ribo / RNA FASTQ to K reads
+  --subsample <K>     # optional
 ```
 
-The wrapper writes two artefacts at the run root:
+The wrapper:
 
-* `benchmark.tsv` — one row per stage with `wall_seconds`,
-  `peak_rss_gb`, `disk_delta_gb`, `threads`, `parallel_samples`,
-  `cpu_user_seconds`, `cpu_system_seconds`.
-* `benchmark_summary.md` — human-readable rollup with the totals
-  and a recommended thread / parallel-samples plan for the same
-  hardware.
+* optionally reservoir-samples explicit FASTQ inputs to `K` reads;
+* writes the rewritten config to `<run_root>/benchmark_config.yaml`;
+* runs `mitoribopy all --config <run_root>/benchmark_config.yaml`;
+* reads stage runtimes back from `run_manifest.json`;
+* writes `<run_root>/benchmark.tsv` and
+  `<run_root>/benchmark_summary.md`.
 
-For tuning runs, the `--subsample N` flag pre-reservoir-samples
-every Ribo / RNA FASTQ to N reads (default seed 42; configurable
-via `--seed`). Subsampled FASTQs land under
-`<output>/.benchmark_subsamples/` and the canonical config is
-rewritten to point at them, so re-runs of `mitoribopy all` against
-the same `--output` reproduce the subsampled run.
-
-Subsampled rows are tagged in the benchmark table — never compare a
-subsampled wall-time to a full-data wall-time except as an upper /
-lower bound.
+`--subsample` currently rewrites explicit FASTQ paths in `align.fastq`,
+`align.fastq_dir`, `rnaseq.rna_fastq`, and `rnaseq.ribo_fastq`.
+Top-level `samples:` sheets are not rewritten yet; use an explicit
+FASTQ config for subsampled tuning runs.
 
 ---
 
-## Required table schema (manuscript-grade)
+## `benchmark.tsv`
 
-The published Methods table follows this exact column order so a
-reviewer can compare runs across labs / hardware:
+The file starts with `# schema_version: 1.0`, followed by these columns:
 
-| Column | Units | Source | Notes |
-|---|---|---|---|
-| `dataset` | — | hand-filled | Free-form name (e.g. "TACO1-KO biological", "GSE############ subset") |
-| `organism` | — | hand-filled | `h.sapiens` / `s.cerevisiae` / custom strain label |
-| `assay` | — | hand-filled | `ribo` / `rna` / `ribo+rna` |
-| `n_samples` | int | sample sheet | Active rows after `exclude=true` filter |
-| `reads_per_sample` | reads | `align/read_counts.tsv` | Median `total_reads` across active samples |
-| `input_size_gb` | GB | `du -sh <fastq_dir>` | Sum of compressed FASTQ sizes |
-| `threads` | int | `--threads` arg | Total worker threads |
-| `parallel_samples` | int | resolved plan | From `resource_plan.json` |
-| `wall_time_min` | minutes | `benchmark.tsv` | Sum across stages |
-| `peak_rss_gb` | GB | `benchmark.tsv` | Maximum observed across stages |
-| `disk_peak_gb` | GB | `benchmark.tsv` | Peak `disk_delta_gb` (excludes subsamples) |
-| `mitoribopy_version` | — | `mitoribopy --version` | Must be the PyPI / Zenodo-archived version |
-| `commit_sha` | — | `git rev-parse HEAD` | Captured into `run_manifest.json` automatically |
-| `cutadapt_version` | — | `cutadapt --version` | Mirrored in `run_manifest.json` `tool_versions` |
-| `bowtie2_version` | — | `bowtie2 --version` | Same |
-| `umi_tools_version` | — | `umi_tools --version` | Same; empty when no sample needs it |
-| `pysam_version` | — | `pysam.__version__` | Same |
-| `notes` | — | hand-filled | "subsampled to N reads", "rerun from cache", etc. |
+| Column | Source | Notes |
+|---|---|---|
+| `stage` | benchmark wrapper | `align`, `rpf`, `rnaseq`, then `total` |
+| `status` | `run_manifest.json` for stage rows; wrapper exit for `total` | `not_configured` when a stage did not run |
+| `wall_time_sec` | stage manifest or wrapper timer | stage rows use `manifest.stages.<stage>.runtime_seconds`; total row uses wall-clock wrapper time |
+| `cumulative_wall_sec` | benchmark wrapper | running sum for stage rows; total wall for `total` |
+| `max_rss_mb_total` | `resource.getrusage` | populated on the `total` row only |
+| `disk_mb` | output directory walk | populated on the `total` row only |
+| `threads` | CLI argument | empty when `--threads` was omitted |
+| `subsample_reads` | CLI argument | empty when `--subsample` was omitted |
 
-The first 11 columns are objective; the last 6 lock in
-reproducibility. The `notes` column is the only place to mention
-caveats — anything that should change how a reader interprets the
-runtime (subsampling, filesystem class, background load) goes there.
+`benchmark_summary.md` mirrors the same information in a short
+human-readable report.
 
 ---
 
-## Required benchmark cases
+## Manuscript Table
 
-The Methods section lists at minimum these five cases:
+For a publication table, derive one row per measured run from
+`benchmark.tsv`, `run_manifest.json`, `resource_plan.json`,
+`align/read_counts.tsv`, and the original input-file inventory.
 
-1. **Synthetic smoke dataset** — `examples/smoke/` with the
-   default 6 k reads × 2 samples. The "lower bound on wall time"
-   reference.
-2. **Small human public mt-Ribo-seq subset** — a single sample
-   from a public GEO library, subsampled to 1 M reads. Calibrates
-   the per-million-reads rate.
-3. **Small yeast public mt-Ribo-seq subset** — same as above for
-   `s.cerevisiae`. Confirms strain alignment / annotation paths.
-4. **TACO1 WT/KO biological** — three biological replicates per
-   condition, full reads, full TE / ΔTE pipeline. The
-   "publication-realistic" reference.
-5. **One full realistic non-subsampled dataset** — a current-lab
-   library at typical sequencing depth, no subsample. The
-   "what does a real run cost" anchor.
+Suggested columns:
 
-Subsampled and non-subsampled rows are clearly separated in the
-table (the `notes` column).
+| Column | Units | Source |
+|---|---|---|
+| `dataset` | text | hand-filled dataset label |
+| `organism` | text | config / methods |
+| `assay` | text | `ribo`, `rna`, or `ribo+rna` |
+| `n_samples` | count | sample sheet or active FASTQ list |
+| `reads_per_sample` | reads | median `total_reads` from `align/read_counts.tsv` |
+| `input_size_gb` | GB | compressed input FASTQ inventory |
+| `threads` | count | `benchmark.tsv` |
+| `parallel_samples` | count | `resource_plan.json` |
+| `wall_time_min` | minutes | `benchmark.tsv` total `wall_time_sec` / 60 |
+| `peak_rss_gb` | GB | `benchmark.tsv` total `max_rss_mb_total` / 1024 |
+| `disk_gb` | GB | `benchmark.tsv` total `disk_mb` / 1024 |
+| `mitoribopy_version` | version | `run_manifest.json` / `mitoribopy --version` |
+| `commit_sha` | SHA | `run_manifest.json` |
+| `cutadapt_version` | version | `run_manifest.json` `tool_versions` |
+| `bowtie2_version` | version | `run_manifest.json` `tool_versions` |
+| `umi_tools_version` | version | `run_manifest.json` `tool_versions`, empty when unused |
+| `pysam_version` | version | `run_manifest.json` `tool_versions` |
+| `notes` | text | subsampling, filesystem class, rerun/cache caveats |
 
----
-
-## Reference numbers (TBD)
-
-| dataset | organism | assay | n_samples | reads_per_sample | input_size_gb | threads | parallel_samples | wall_time_min | peak_rss_gb | disk_peak_gb | mitoribopy_version | commit_sha | cutadapt_version | bowtie2_version | umi_tools_version | pysam_version | notes |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| smoke synthetic | h.sapiens (synthetic) | ribo | 2 | 3 000 | 0.001 | 2 | 1 | TBD | TBD | TBD | 0.7.1 | TBD | TBD | TBD | n/a | TBD | smoke fixture; opt-in via `pytest -m smoke` |
-| public-human-1M | h.sapiens | ribo | 1 | 1 000 000 | TBD | 8 | 1 | TBD | TBD | TBD | 0.7.1 | TBD | TBD | TBD | TBD | TBD | subsampled (`--subsample 1000000`) |
-| public-yeast-1M | s.cerevisiae | ribo | 1 | 1 000 000 | TBD | 8 | 1 | TBD | TBD | TBD | 0.7.1 | TBD | TBD | TBD | TBD | TBD | subsampled |
-| TACO1 WT/KO | h.sapiens | ribo | 6 | TBD | TBD | 16 | 4 | TBD | TBD | TBD | 0.7.1 | TBD | TBD | TBD | TBD | TBD | full reads, biological replicates |
-| current-lab-realistic | h.sapiens | ribo+rna | TBD | TBD | TBD | 16 | 4 | TBD | TBD | TBD | 0.7.1 | TBD | TBD | TBD | TBD | TBD | non-subsampled, end-to-end |
-
-> Numbers will land in this table when the maintainer's HPC
-> benchmark batch completes. The protocol above is what reviewers
-> need to know **how** they were produced; the numbers themselves
-> are the publication artefact.
+Do not mix subsampled and non-subsampled rows without stating the
+subsampling level in `notes`.
 
 ---
 
-## See also
+## Reference Cases To Measure
 
-* [`docs/reference/output_schema.md`](reference/output_schema.md)
-  — what every benchmarked output file actually contains.
-* [`docs/developer/release_checklist.md`](developer/release_checklist.md)
-  — release-day gates including the link-check and manuscript
-  version-pin sections.
-* [`docs/tutorials/05_hpc_cluster_run.md`](tutorials/05_hpc_cluster_run.md)
-  — HPC scheduler integration; the same recipe drives the
-  benchmark cases.
+The Methods section should include measured rows for:
+
+1. `examples/smoke/` synthetic fixture.
+2. One public human mt-Ribo-seq sample subsampled to 1M reads.
+3. One public yeast mt-Ribo-seq sample subsampled to 1M reads.
+4. TACO1 WT/KO biological replicates at full depth.
+5. One realistic non-subsampled lab dataset, with RNA-seq included if
+   that workflow is being claimed.
+
+Keep the committed docs number-free until those rows come from real
+run artifacts.
+
+---
+
+## See Also
+
+* [`reference/output_schema.md`](reference/output_schema.md) — output
+  table schemas and provenance files.
+* [`developer/roadmap.md`](developer/roadmap.md) — remaining benchmark
+  documentation work.
+* [`tutorials/05_hpc_cluster_run.md`](tutorials/05_hpc_cluster_run.md)
+  — scheduler and scratch-space guidance.

@@ -220,17 +220,18 @@ sidecar alone is the contract.
 ### `rpf/qc/strand_sanity.tsv`
 
 Per-sample minus-strand fraction averaged across mt-transcripts.
-Columns: `sample`, `n_reads`, `minus_fraction`. The mt-transcriptome
+Columns: `sample`, `n_total`, `n_minus`, `minus_fraction`. The mt-transcriptome
 FASTA is sense-oriented, so a non-zero `minus_fraction` signals a
 wrong `--library-strandedness` upstream (most often `forward` set when
 the library is `reverse`, or vice versa).
 
 ### `rpf/qc/strand_sanity_per_transcript.tsv` (schema 1.0)
 
-Per-(sample, transcript) minus-strand fraction. New in v0.9.0 to
-catch a localised antisense bleed-through on one mt-mRNA — typically
-an unmasked NUMT or a misannotated reference contig — that the
-all-transcripts mean in `strand_sanity.tsv` would hide.
+Per-(sample, transcript) minus-strand fraction. Catches a localised
+antisense bleed-through on one mt-mRNA — typically an unmasked NUMT or
+a misannotated reference contig — that the all-transcripts mean in
+`strand_sanity.tsv` would hide. Columns: `sample`, `transcript`,
+`n_total`, `n_minus`, `minus_fraction`.
 
 ### `rpf/codon_correlation/{p_site,a_site}/codon_correlation_metrics.tsv`
 

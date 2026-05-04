@@ -153,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the per-(sample, read_length) figures; TSVs still written.",
     )
 
-    # Statistical hardening (v0.9.0+).
+    # Statistical hardening.
     stats = parser.add_argument_group(
         "statistical hardening (bootstrap CI + permutation null)",
     )

@@ -139,7 +139,7 @@ def _plot_one_panel(
         snr_tier_local = str(score_row.get("snr_call_local", "no_signal"))
         n_genes = int(score_row.get("n_genes", 0))
         n_sites = int(score_row.get("n_sites_total", 0))
-        # v0.9.0: bootstrap CI + permutation_p when available.
+        # Bootstrap CI + permutation_p when available.
         ci_lo = score_row.get("spectral_ratio_3nt_ci_low")
         ci_hi = score_row.get("spectral_ratio_3nt_ci_high")
         ci_local_lo = score_row.get("spectral_ratio_3nt_local_ci_low")
@@ -237,7 +237,7 @@ def _render_two_panel_figure(
             "n_sites_total": int(score_row["n_sites_total"]) if score_row is not None else 0,
             "spectral_ratio_3nt": _opt_float("spectral_ratio_3nt"),
             "spectral_ratio_3nt_local": _opt_float("spectral_ratio_3nt_local"),
-            # v0.9.0 statistical hardening — embed CI bounds + p-value
+            # Statistical hardening — embed CI bounds + p-value
             # in the sidecar so validate-figures can reason about them
             # without re-reading the score TSV.
             "spectral_ratio_3nt_ci_low": _opt_float("spectral_ratio_3nt_ci_low"),

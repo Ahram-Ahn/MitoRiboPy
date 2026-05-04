@@ -85,13 +85,13 @@ class MetageneProfile:
     The ``normalize`` field records how per-transcript signals were
     aggregated into ``density``:
 
-    * ``"per_gene_unit_mean"`` (the v0.9.0+ default) — each transcript's
+    * ``"per_gene_unit_mean"`` (the default) — each transcript's
       per-position density is divided by its own mean before being
       averaged with the others. Removes the depth-weighting bias where
       one high-expression transcript dominates the metagene shape.
     * ``"none"`` — raw per-position counts summed across transcripts;
       proportional to depth × expression. Kept as an opt-in for
-      reproducing the < v0.9.0 behaviour.
+      preserving older depth-weighted metagene semantics.
 
     ``n_transcripts`` is the number of transcripts that contributed
     (the qualifying-tracks count after any zero-mean filter under
@@ -306,7 +306,7 @@ def compute_metagene(
 
     Aggregation modes (``normalize``):
 
-    * ``"per_gene_unit_mean"`` (default in v0.9.0+) — each contributing
+    * ``"per_gene_unit_mean"`` (default) — each contributing
       transcript's per-position density is divided by its own mean
       across the window before being averaged with the others. The
       resulting metagene reflects the *shape* shared across transcripts,
@@ -317,8 +317,7 @@ def compute_metagene(
       keeps the headline TSV / plot consistent with the QC story.
     * ``"none"`` — raw per-position counts summed across transcripts;
       proportional to depth × expression. Kept as an opt-in for
-      reproducing the < v0.9.0 behaviour. The legacy depth-weighted
-      interpretation is preserved verbatim.
+      preserving the older depth-weighted interpretation verbatim.
 
     Migration note: scripts that parsed ``metagene_*.tsv`` and assumed
     integer-count semantics now see fractional means. Pass
@@ -486,11 +485,10 @@ def _write_metagene_tsv(
     comment line that's still safe to skip.
 
     The legacy ``periodicity_{start,stop}.tsv`` filenames are still
-    written verbatim for backwards compatibility but are deprecated as
-    of v0.9.0 and scheduled for removal in v1.0.0; consumers should
-    switch to the spec-compliant ``metagene_{start,stop}.tsv`` filenames
-    that carry identical data. A ``# DEPRECATED`` comment is added to
-    the legacy paths so a human reading the file sees the warning.
+    written verbatim for backwards compatibility and carry identical
+    data to the spec-compliant ``metagene_{start,stop}.tsv`` filenames.
+    A ``# DEPRECATED`` comment is added to the legacy paths so a human
+    reading the file sees the warning.
     """
     profiles_list = list(profiles)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -541,11 +539,9 @@ def _write_per_transcript_strand_tsv(
 def _metagene_y_label(profile: MetageneProfile | None, *, site_letter: str) -> str:
     """Pick the right y-axis label given the profile's normalisation mode.
 
-    Pre-v0.9.0 the metagene was a depth-weighted sum and "P-site reads"
-    was a fair description. The v0.9.0 default is per-gene unit-mean,
-    so the y-axis carries fractional density values that are NOT raw
-    counts; mislabelling them as "reads" would mislead a reviewer about
-    the scale.
+    With per-gene unit-mean normalisation, the y-axis carries
+    fractional density values that are NOT raw counts; mislabelling
+    them as "reads" would mislead a reviewer about the scale.
     """
     site_label = "P-site" if str(site_letter).lower() == "p" else "A-site"
     if profile is None:
@@ -735,10 +731,10 @@ def run_periodicity_qc(
     fourier_window_nt: int | None = None,
     fourier_render_plots: bool = True,
     metagene_nt: int | None = None,
-    # v0.9.0: how the per-transcript signals are aggregated into the
+    # How the per-transcript signals are aggregated into the
     # start- / stop-anchored metagene density. See compute_metagene().
     metagene_normalize: str = "per_gene_unit_mean",
-    # Statistical hardening (v0.9.0). All have library defaults; pass
+    # Statistical hardening. All have library defaults; pass
     # `compute_stats=False` to skip bootstrap + permutation entirely.
     fourier_n_bootstrap: int | None = None,
     fourier_n_permutations: int | None = None,
@@ -776,8 +772,8 @@ def run_periodicity_qc(
     The frame-fraction QC outputs (``frame_counts_*.tsv``, ``qc_summary.tsv``,
     ``gene_periodicity.tsv``, ``frame_fraction_heatmap.svg``,
     ``read_length_periodicity_barplot.svg``, ``gene_phase_score_dotplot.svg``)
-    were removed in v0.8.0 — the Fourier ``spectral_ratio_3nt`` +
-    ``snr_call`` columns now carry the headline QC story.
+    are not emitted by the current package; the Fourier ``spectral_ratio_3nt``
+    + ``snr_call`` columns now carry the headline QC story.
     """
     output_dir = Path(output_dir)
     effective_window_nt = int(metagene_nt) if metagene_nt is not None else int(window_nt)

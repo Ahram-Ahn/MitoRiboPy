@@ -1030,7 +1030,7 @@ _SCORE_COMBINED_COLS: tuple[str, ...] = (
     "amp_at_3nt", "background_amp_median", "spectral_ratio_3nt",
     "local_background_amp_median", "spectral_ratio_3nt_local",
     "snr_call", "snr_call_local",
-    # v0.9.0: statistical hardening — bootstrap CI + permutation null.
+    # Statistical hardening — bootstrap CI + permutation null.
     "amp_3nt_ci_low", "amp_3nt_ci_high",
     "spectral_ratio_3nt_ci_low", "spectral_ratio_3nt_ci_high",
     "spectral_ratio_3nt_local_ci_low", "spectral_ratio_3nt_local_ci_high",
@@ -1125,7 +1125,7 @@ def build_fourier_period3_score_combined_table(
     ({"excellent", "healthy", "modest", "broken", "no_signal"}) per
     the thresholds in :func:`snr_call_for_ratio`.
 
-    Statistical hardening (v0.9.0+): when ``compute_stats=True`` (the
+    Statistical hardening: when ``compute_stats=True`` (the
     default) every row also carries
 
     * ``amp_3nt_ci_{low,high}``, ``spectral_ratio_3nt_ci_{low,high}``,

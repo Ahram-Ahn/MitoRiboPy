@@ -795,7 +795,8 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=None,
         help=(
             "Window (nt) up/downstream of start/stop codons for the "
-            "metagene_start.tsv / metagene_stop.tsv plots. Default: 90."
+            "metagene_start.tsv / metagene_stop.tsv plots. Default: 300 "
+            "(100 codons)."
         ),
     )
     optional_group.add_argument(
@@ -805,12 +806,12 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default="per_gene_unit_mean",
         help=(
             "How metagene_{start,stop}.tsv aggregates per-transcript "
-            "signals. 'per_gene_unit_mean' (v0.9.0+ default) divides "
-            "each transcript's per-position density by its own mean "
-            "before averaging — removes the depth-weighting bias where "
-            "one high-expression transcript dominates the metagene "
-            "shape. 'none' reproduces the < v0.9.0 raw-position-count "
-            "sum for users that pinned to those numbers."
+            "signals. 'per_gene_unit_mean' (default) divides each "
+            "transcript's per-position density by its own mean before "
+            "averaging, which removes the depth-weighting bias where one "
+            "high-expression transcript dominates the metagene shape. "
+            "'none' preserves the older raw-position-count sum for users "
+            "that need depth-weighted metagene values."
         ),
     )
     optional_group.add_argument(

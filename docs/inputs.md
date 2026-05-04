@@ -86,8 +86,9 @@ required inputs. The config has these top-level sections:
 | `rpf:` | required for rpf | Strain, RPF window, FASTA, offset bounds. Auto-wires `--directory`, `--read_counts_file`, `--fasta`. |
 | `rnaseq:` | required for rnaseq | Either flow's keys (the two are mutually exclusive). The sheet auto-wires `rnaseq.sample_sheet` so you do not repeat it. |
 
-Use `mitoribopy all --print-config-template > pipeline_config.yaml`
-to drop a fully-commented starter into your project.
+Use `mitoribopy all --print-config-template --profile minimal` to
+print a short starter, or `--profile exhaustive` for the long
+annotated template.
 
 ---
 

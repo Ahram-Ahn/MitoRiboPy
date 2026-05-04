@@ -20,7 +20,7 @@ The bundle consists of:
 The legacy frame-fraction QC bundle (`qc_summary.tsv`,
 `frame_counts_*.tsv`, `gene_periodicity.tsv`,
 `frame_fraction_heatmap.svg`, `read_length_periodicity_barplot.svg`,
-`gene_phase_score_dotplot.svg`) was retired in v0.8.0. The
+`gene_phase_score_dotplot.svg`) is not emitted by the current package. The
 `spectral_ratio_3nt` + `snr_call` columns now carry the headline QC
 story; the per-frame breakdown is no longer reported.
 
@@ -63,8 +63,8 @@ human-mt-Ribo-seq libraries with healthy phasing.
 
 ## Why aggregate-then-DFT instead of per-gene overlay
 
-The previous v0.7.x implementation overlaid one FFT trace per gene per
-panel, which produced a noisy, hard-to-read plot. Per-gene DFT is
+Older implementations overlaid one FFT trace per gene per panel,
+which produced a noisy, hard-to-read plot. Per-gene DFT is
 structurally underpowered for several reasons:
 
 * **Initiation pile-ups create flat broadband spectra.** The first
@@ -230,11 +230,11 @@ One row per `(sample, read_length, gene_set, region)`.
 | `spectral_ratio_3nt_local` | float | `amp_at_3nt / local_background_amp_median` — robust to long-period structure |
 | `snr_call` | string | Tier (see table above) for the global ratio |
 | `snr_call_local` | string | Tier for the local-background ratio |
-| `amp_3nt_ci_low`, `amp_3nt_ci_high` | float | Bootstrap-over-genes percentile CI on `amp_at_3nt` (v0.9.0+) |
-| `spectral_ratio_3nt_ci_low`, `spectral_ratio_3nt_ci_high` | float | Bootstrap CI on `spectral_ratio_3nt` (v0.9.0+) |
-| `spectral_ratio_3nt_local_ci_low`, `spectral_ratio_3nt_local_ci_high` | float | Bootstrap CI on the local ratio (v0.9.0+) |
-| `permutation_p` | float | Laplace-smoothed empirical p-value from a per-gene circular-shift null on the global ratio (v0.9.0+) |
-| `permutation_p_local` | float | Same for the local ratio (v0.9.0+) |
+| `amp_3nt_ci_low`, `amp_3nt_ci_high` | float | Bootstrap-over-genes percentile CI on `amp_at_3nt` |
+| `spectral_ratio_3nt_ci_low`, `spectral_ratio_3nt_ci_high` | float | Bootstrap CI on `spectral_ratio_3nt` |
+| `spectral_ratio_3nt_local_ci_low`, `spectral_ratio_3nt_local_ci_high` | float | Bootstrap CI on the local ratio |
+| `permutation_p` | float | Laplace-smoothed empirical p-value from a per-gene circular-shift null on the global ratio |
+| `permutation_p_local` | float | Same for the local ratio |
 | `n_bootstrap`, `n_permutations`, `ci_alpha` | int / float | Audit fields recording the exact procedure (defaults: 200 / 200 / 0.10) |
 | `ci_method` | string | `percentile_over_genes` (live), `skipped_too_few_genes` (< 3 qualifying tracks), `disabled` (stats turned off via `--no-stats`) |
 | `null_method` | string | `circular_shift_per_gene` (live) or `disabled` |
@@ -268,7 +268,7 @@ In-figure annotations on each panel show the `spectral_ratio_3nt`
 value and the `snr_call` tier so a reviewer can read the headline
 number off the plot.
 
-## Statistical hardening (shipped in v0.9.0)
+## Statistical hardening
 
 Two companion estimates are computed alongside `spectral_ratio_3nt`
 and live in the score table (see the column list above):

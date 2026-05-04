@@ -450,9 +450,9 @@ Optional Modules:
   --periodicity-fourier-window-nt PERIODICITY_FOURIER_WINDOW_NT, --periodicity_fourier_window_nt PERIODICITY_FOURIER_WINDOW_NT
                                       Window (nt) for the Fourier metagene per region (orf_start, orf_stop). Default: 99 (33 codons; multiple of 3 for clean period-3 bin alignment).
   --periodicity-metagene-nt PERIODICITY_METAGENE_NT, --periodicity_metagene_nt PERIODICITY_METAGENE_NT
-                                      Window (nt) up/downstream of start/stop codons for the metagene_start.tsv / metagene_stop.tsv plots. Default: 90.
+                                      Window (nt) up/downstream of start/stop codons for the metagene_start.tsv / metagene_stop.tsv plots. Default: 300 (100 codons).
   --periodicity-metagene-normalize {per_gene_unit_mean,none}, --periodicity_metagene_normalize {per_gene_unit_mean,none}
-                                      How metagene_{start,stop}.tsv aggregates per-transcript signals. 'per_gene_unit_mean' (v0.9.0+ default) divides each transcript's per-position density by its own mean before averaging — removes the depth-weighting bias where one high-expression transcript dominates the metagene shape. 'none' reproduces the < v0.9.0 raw-position-count sum for users that pinned to those numbers. [default: per_gene_unit_mean]
+                                      How metagene_{start,stop}.tsv aggregates per-transcript signals. 'per_gene_unit_mean' (default) divides each transcript's per-position density by its own mean before averaging, which removes the depth-weighting bias where one high-expression transcript dominates the metagene shape. 'none' preserves the older raw-position-count sum for users that need depth-weighted metagene values. [default: per_gene_unit_mean]
   --periodicity-fourier-bootstrap-n PERIODICITY_FOURIER_BOOTSTRAP_N, --periodicity_fourier_bootstrap_n PERIODICITY_FOURIER_BOOTSTRAP_N
                                       Bootstrap iterations for the percentile CI on the metagene Fourier ratio. Default: 200. Set to 0 to disable the CI without disabling the permutation null.
   --periodicity-fourier-permutations-n PERIODICITY_FOURIER_PERMUTATIONS_N, --periodicity_fourier_permutations_n PERIODICITY_FOURIER_PERMUTATIONS_N

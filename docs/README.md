@@ -1,6 +1,6 @@
 # Documentation
 
-The repo's top-level [`README.md`](../README.md) is the canonical, standalone reference: pipeline overview, every CLI flag, input formats, custom-organism workflow, and example invocations. The files under `docs/` are the deeper material — tutorials, an at-a-glance CLI reference, environment recipes, and the diagram set.
+The repo's top-level [`README.md`](../README.md) is the canonical, standalone overview: pipeline shape, common workflows, input formats, custom-organism workflow, and example invocations. The files under `docs/` are the deeper material — tutorials, generated CLI reference, output schemas, environment recipes, and the diagram set.
 
 ## For users
 

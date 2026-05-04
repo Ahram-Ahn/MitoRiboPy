@@ -166,7 +166,8 @@ The shortest path from raw FASTQ to translation-profile + coverage outputs is on
 #       available flag with its default value and a 1-line comment:
 cp examples/templates/pipeline_config.example.yaml pipeline_config.yaml
 #    -- OR get the curated MINIMAL template from the CLI:
-mitoribopy all --print-config-template > pipeline_config.yaml
+mitoribopy all --print-config-template --profile minimal > pipeline_config.yaml
+#       Other profiles: --profile publication, --profile exhaustive
 
 $EDITOR pipeline_config.yaml
 
@@ -683,9 +684,9 @@ Reviewers tend to trust tools more when their boundaries are stated up front. Mi
 - **`rnaseq_mode: from_fastq` is exploratory.** The in-tree pyDESeq2 path runs on the **mt-mRNA subset only** (typically 13 transcripts) — not a full-transcriptome DE result. `mitoribopy all --strict` refuses this mode by default; the publication-safe route is `rnaseq_mode: de_table` with an external full-transcriptome DESeq2 / Xtail / Anota2Seq table.
 - **Pseudo-replicates are not biological replicates.** `allow_pseudo_replicates_for_demo_not_publication: true` exists for demo / smoke runs only. Strict mode rejects it; do not report p-values from a pseudo-replicate run as biological evidence.
 - **Offset selection reliability scales with depth and periodicity.** Per-sample offsets need both healthy 3-nt periodicity and enough reads per (sample, length). Below ~1 000 reads per length the per-sample pick is noisy — use the combined-sample offsets or pool replicates first.
-- **Bicistronic mt-mRNAs need careful interpretation.** ATP8/ATP6 and ND4L/ND4 share nucleotides in different reading frames. The Fourier bundle ships dedicated `*_ATP86.png` / `*_ND4L4.png` panels for this, and `gene_periodicity.tsv` carries an `is_overlap_pair` flag — but reviewers should still inspect those panels rather than collapsing them into the combined metagene.
+- **Bicistronic mt-mRNAs need careful interpretation.** ATP8/ATP6 and ND4L/ND4 share nucleotides in different reading frames. The Fourier bundle ships dedicated `*_ATP86.png` / `*_ND4L4.png` panels for this; reviewers should inspect those panels rather than collapsing them into the combined metagene.
 - **NUMT suppression depends on reference design and MAPQ.** Nuclear-mitochondrial transfers can recruit reads from real mt-RNA away from the mt reference. The default `mapq: 10` filter helps, but custom references should be built to suppress NUMTs explicitly (mask known NUMT regions, or use an mt-only transcriptome + contam index).
-- **Statistical hardening of the metagene Fourier QC is shipped in v0.7.0.** The score table now carries `spectral_ratio_3nt(_local)_ci_{low,high}` (200-iteration bootstrap CI over genes, 90 % percentile by default) and `permutation_p` / `permutation_p_local` (200-iteration circular-shift null, Laplace-smoothed). The CI is skipped (NaN columns + `ci_method == "skipped_too_few_genes"`) when fewer than 3 qualifying per-gene tracks are available — a CI from < 3 genes would be misleadingly tight. The `snr_call` four-tier verdict is preserved as the human-readable headline; cite the CI bounds + permutation p in any publication-facing context.
+- **Metagene Fourier confidence depends on enough genes.** The score table carries `spectral_ratio_3nt(_local)_ci_{low,high}` (200-iteration bootstrap CI over genes, 90 % percentile by default) and `permutation_p` / `permutation_p_local` (200-iteration circular-shift null, Laplace-smoothed). The CI is skipped (NaN columns + `ci_method == "skipped_too_few_genes"`) when fewer than 3 qualifying per-gene tracks are available — a CI from < 3 genes would be misleadingly tight. The `snr_call` four-tier verdict is the human-readable headline; cite the CI bounds + permutation p in any publication-facing context.
 
 For pipeline-level provenance and what survives a refactor, see [`docs/validation/`](docs/validation/) — in particular the TACO1-KO regression dataset, which is the biological signal that any periodicity refactor has to preserve.
 
