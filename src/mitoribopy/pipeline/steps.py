@@ -21,6 +21,7 @@ from ..data.reference_data import BUILTIN_ANNOTATION_PRESETS
 from ..io import (
     compute_total_counts,
     compute_unfiltered_read_length_summary,
+    prepare_bam_inputs,
     process_bed_files,
 )
 from ..plotting import (
@@ -149,11 +150,18 @@ def run_unfiltered_read_length_qc(
         context.csv_dir
         / f"unfiltered_read_length_summary_{min_len}_{max_len}.csv"
     )
+    converted_bed_paths = prepare_bam_inputs(
+        input_dir=Path(context.args.directory),
+        converted_dir=context.plot_output_dir / "bam_converted",
+        mapq_threshold=int(getattr(context.args, "bam_mapq", 0) or 0),
+    )
+    context.extra["converted_bed_paths"] = [str(p) for p in converted_bed_paths]
     compute_unfiltered_read_length_summary(
         input_dir=context.args.directory,
         output_csv=str(unfiltered_summary_csv),
         total_counts_map=context.total_counts_map,
         read_length_range=context.unfiltered_read_length_range,
+        converted_bed_paths=converted_bed_paths,
     )
 
     heatmap_base = context.plot_subdir / f"unfiltered_heatmap_{min_len}_{max_len}"
@@ -263,6 +271,9 @@ def filter_bed_inputs(context: PipelineContext, emit_status: StatusWriter) -> bo
         bam_mapq=int(getattr(context.args, "bam_mapq", 0) or 0),
         plot_dir=str(context.plot_subdir),
         csv_dir=str(context.csv_dir),
+        converted_bed_paths=[
+            Path(p) for p in context.extra.get("converted_bed_paths", [])
+        ] or None,
     )
     context.filtered_bed_df = filtered_bed_df
 

@@ -17,7 +17,7 @@ from . import common
 
 
 RPF_SUBCOMMAND_HELP = (
-    "Run the Ribo-seq analysis pipeline from BED inputs. "
+    "Run the Ribo-seq analysis pipeline from BED or BAM inputs. "
     "See 'mitoribopy rpf --help' for the full flag list."
 )
 
@@ -47,7 +47,7 @@ def run(argv: Iterable[str]) -> int:
             [
                 "load --config (if given) via mitoribopy.config.load_user_config",
                 "initialize outputs, annotations, and RPF range",
-                "run unfiltered read-length QC and filter BED inputs",
+                "run unfiltered read-length QC and filter BED/BAM inputs",
                 "compute offset enrichment and select P-site/A-site offsets",
                 "run translation-profile analysis, coverage plots, and "
                 "optional structure-density / codon-correlation modules",

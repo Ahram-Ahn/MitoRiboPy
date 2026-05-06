@@ -112,7 +112,7 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help=(
             "Directory containing Ribo-seq input files.\n"
             "Both .bed and .bam are accepted; BAM files are auto-converted\n"
-            "to BED6 under <output>/bam_converted/ via pysam."
+            "to BED6 under <output>/<plot_dir>/bam_converted/ via pysam."
         ),
     )
     directory_action.default_display = "current working directory"

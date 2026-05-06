@@ -43,11 +43,12 @@ from ..rnaseq import (
     detect_de_format,
     load_de_table,
     load_ribo_counts,
+    match_de_to_ribo_genes,
     match_mt_mrnas,
     verify_reference_consistency,
     ReferenceMismatchError,
 )
-from ..rnaseq._types import DTeRow, TeRow
+from ..rnaseq._types import DTeRow, DeTable, TeRow
 from ..rnaseq.plots import (
     plot_de_volcano,
     plot_delta_te_volcano,
@@ -1616,6 +1617,51 @@ def run(argv: Iterable[str]) -> int:
         print(f"[mitoribopy rnaseq] ERROR: {exc}", file=sys.stderr)
         return 2
 
+    gene_match = match_de_to_ribo_genes(
+        de_gene_ids,
+        sorted(ribo_counts),
+        args.gene_id_convention,
+        organism=organism,
+    )
+    if gene_match["missing_ribo"]:
+        sys.stderr.write(
+            "[mitoribopy rnaseq] WARNING: "
+            f"{len(gene_match['missing_ribo'])} expected mt-mRNA(s) not found "
+            "in Ribo-seq counts after alias matching: "
+            + ", ".join(str(x) for x in gene_match["missing_ribo"])
+            + "\n"
+        )
+
+    de_to_ribo = dict(gene_match["de_to_ribo"])
+    if not de_to_ribo:
+        sys.stderr.write(
+            "[mitoribopy rnaseq] WARNING: no DE-table gene IDs matched "
+            "Ribo-seq count gene names. Check --gene-id-convention and "
+            "the reference FASTA transcript names.\n"
+        )
+    else:
+        remapped_rows: list[dict] = []
+        changed: list[str] = []
+        for row in de_table.rows:
+            new_row = dict(row)
+            mapped = de_to_ribo.get(str(row["gene_id"]))
+            if mapped and mapped != row["gene_id"]:
+                new_row["gene_id"] = mapped
+                changed.append(f"{row['gene_id']}->{mapped}")
+            remapped_rows.append(new_row)
+        if changed:
+            de_table = DeTable(
+                format=de_table.format,
+                column_map=de_table.column_map,
+                rows=remapped_rows,
+            )
+            preview = ", ".join(changed[:8])
+            suffix = "" if len(changed) <= 8 else f", ... (+{len(changed) - 8})"
+            sys.stderr.write(
+                "[mitoribopy rnaseq] NOTE: matched DE gene IDs to "
+                f"Ribo-seq gene names: {preview}{suffix}\n"
+            )
+
     # --- TE + delta-TE --------------------------------------------------
     mrna_abundances = {
         row["gene_id"]: row["basemean"]
@@ -1762,6 +1808,7 @@ def run(argv: Iterable[str]) -> int:
         "ribo_counts": str(ribo_counts_path),
         "reference_checksum": verified_checksum,
         "mt_mrna_match": match,
+        "de_to_ribo_gene_map": gene_match,
         "condition_map_path": args.condition_map,
         "condition_a": args.condition_a,
         "condition_b": args.condition_b,

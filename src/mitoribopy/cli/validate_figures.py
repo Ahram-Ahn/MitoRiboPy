@@ -1,10 +1,10 @@
 """``mitoribopy validate-figures`` — mechanical QC for plot outputs.
 
-Walks a finished run root, scores every PNG / SVG plot against the
-contract recorded in its ``.metadata.json`` sidecar (point counts,
-label overlap, label outside axes, min font size, SVG text editability,
-PNG dpi, source-data link), and writes ``figure_qc.tsv``. Each plot
-gets a ``status`` of ``pass``, ``warn``, or ``fail``; failures are
+Walks a finished run root, scores every PNG / SVG plot against image-file
+checks plus any checks available from a ``.metadata.json`` sidecar
+(point counts, label overlap, label outside axes, min font size,
+source-data link), and writes ``figure_qc.tsv``. Each plot gets a
+``status`` of ``pass``, ``warn``, or ``fail``; failures are
 mirrored into ``warnings.tsv`` so they show up in the manifest's
 warnings array as well.
 
@@ -28,8 +28,8 @@ from . import common
 VALIDATE_FIGURES_HELP = (
     "Mechanically validate every plot under a finished MitoRiboPy run "
     "root: check label / legend / stat-box overlap, label clipping, "
-    "point counts vs source TSV, SVG text editability, PNG dpi, and "
-    "metadata sidecar coverage. Writes <RUN_DIR>/figure_qc.tsv. Exit "
+    "point counts vs source TSV, SVG text editability, and PNG dpi. "
+    "Writes <RUN_DIR>/figure_qc.tsv. Exit "
     "0 / 1 / 2 (all pass / warn-only / fail; --strict upgrades warn → fail)."
 )
 

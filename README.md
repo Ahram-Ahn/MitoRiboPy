@@ -55,7 +55,8 @@ Utility commands are also included:
 For every flag, see the generated [CLI reference](docs/reference/cli.md) or run:
 
 ```bash
-mitoribopy <command> --help
+mitoribopy rpf --help
+mitoribopy all --help
 ```
 
 ## Install
@@ -293,9 +294,10 @@ mitoribopy rnaseq \
   --align-threads 8
 ```
 
-## Publication Mode
+## Strict Mode
 
-For manuscript, preprint, or shared-dataset runs, use strict mode:
+Use Strict Mode when you want the package to check the config, validate
+inputs, and run figure validation around the full pipeline:
 
 ```bash
 mitoribopy validate-config pipeline_config.yaml --strict
@@ -308,10 +310,10 @@ mitoribopy all \
   --progress-file results/full_run/progress.jsonl
 ```
 
-Strict mode:
+Strict Mode:
 
 - validates the config before running,
-- rejects ambiguous or non-publication-safe align choices,
+- rejects ambiguous align metadata choices,
 - writes the resolved `canonical_config.yaml`,
 - runs figure validation after the pipeline finishes,
 - promotes warning-level figure QC issues to failures,

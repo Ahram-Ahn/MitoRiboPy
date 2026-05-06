@@ -58,8 +58,15 @@ class TestValidateFiguresCli:
     def test_warn_only_exits_one(self, tmp_path: Path) -> None:
         plot = tmp_path / "rnaseq" / "v.png"
         plot.parent.mkdir(parents=True, exist_ok=True)
-        # No sidecar at all → warn.
-        _make_png(plot, dpi=300)
+        # Low DPI is a warn in default mode.
+        _make_png(plot, dpi=100)
+        write_plot_metadata(
+            plot,
+            plot_type="de_volcano",
+            stage="rnaseq",
+            n_points_expected=3,
+            n_points_drawn=3,
+        )
         rc = cli_vf.run([str(tmp_path)])
         assert rc == 1
 

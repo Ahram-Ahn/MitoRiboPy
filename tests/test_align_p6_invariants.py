@@ -249,3 +249,47 @@ class TestStrictPublicationMode:
         )
         errs = _strict_publication_mode_errors([r])
         assert errs and "UMI" in errs[0]
+
+    def test_adapter_detection_summary_reports_detected_adapter(self, monkeypatch) -> None:
+        from mitoribopy.cli import align as align_cli
+
+        seen: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            align_cli,
+            "log_warning",
+            lambda component, message: seen.append((component, message)),
+        )
+
+        align_cli._warn_adapter_detection_summary([self._resolution()])
+
+        assert seen
+        assert seen[0][0] == "ADAPTER"
+        assert "adapter detected: illumina_truseq" in seen[0][1]
+        assert "AGATCGGAAGAG" in seen[0][1]
+
+    def test_adapter_detection_summary_reports_no_known_adapter(self, monkeypatch) -> None:
+        from mitoribopy.cli import align as align_cli
+
+        seen: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            align_cli,
+            "log_warning",
+            lambda component, message: seen.append((component, message)),
+        )
+        res = self._resolution(
+            kit=ResolvedKit(
+                kit="pretrimmed",
+                adapter=None,
+                umi_length=0,
+                umi_position="5p",
+            ),
+            detected_kit=None,
+            detection_match_rate=0.0,
+            source="inferred_pretrimmed",
+        )
+
+        align_cli._warn_adapter_detection_summary([res])
+
+        assert seen
+        assert "no known adapter was detected" in seen[0][1]
+        assert "already be adapter-filtered/trimmed" in seen[0][1]

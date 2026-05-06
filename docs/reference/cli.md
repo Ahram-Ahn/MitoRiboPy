@@ -27,7 +27,7 @@ Generated against MitoRiboPy v0.7.1.
 | [`mitoribopy migrate-config`](#mitoribopy-migrateconfig) | Rewrite legacy MitoRiboPy YAML keys to their canonical names. Input is read from a path; output is written to stdout (the change log goes to stderr). Use to upgrade old pipeline configs without manually hunting down every renamed key. |
 | [`mitoribopy validate-config`](#mitoribopy-validateconfig) | Pre-flight a MitoRiboPy YAML / JSON / TOML config: parse, canonicalise legacy keys, check file paths and mutually-exclusive sections, and resolve rnaseq.mode against supplied inputs. Exit code is 0 on success, 2 when at least one error was found. |
 | [`mitoribopy validate-reference`](#mitoribopy-validatereference) | Pre-flight a custom mitochondrial reference: check that the FASTA and annotation CSV are consistent (matching transcript IDs, matching lengths, CDS divisible by 3, valid start / stop codons under the selected codon table). |
-| [`mitoribopy validate-figures`](#mitoribopy-validatefigures) | Mechanically validate every plot under a finished MitoRiboPy run root: check label / legend / stat-box overlap, label clipping, point counts vs source TSV, SVG text editability, PNG dpi, and metadata sidecar coverage. Writes <RUN_DIR>/figure_qc.tsv. Exit 0 / 1 / 2 (all pass / warn-only / fail; --strict upgrades warn → fail). |
+| [`mitoribopy validate-figures`](#mitoribopy-validatefigures) | Mechanically validate every plot under a finished MitoRiboPy run root: check label / legend / stat-box overlap, label clipping, point counts vs source TSV, SVG text editability, and PNG dpi. Writes <RUN_DIR>/figure_qc.tsv. Exit 0 / 1 / 2 (all pass / warn-only / fail; --strict upgrades warn → fail). |
 | [`mitoribopy summarize`](#mitoribopy-summarize) | Regenerate SUMMARY.md and summary_qc.tsv from a finished MitoRiboPy run by reading the run_manifest.json and per-stage TSV outputs. Useful for re-rendering summaries on archival runs without re-executing any pipeline stage. |
 | [`mitoribopy benchmark`](#mitoribopy-benchmark) | Time and disk-measure a full `mitoribopy all` run, optionally after pre-subsampling each FASTQ to N reads. Produces benchmark.tsv and benchmark_summary.md at the run root for tuning thread counts, disk budgets, and per-stage wall time. |
 
@@ -89,7 +89,7 @@ Library prep:
   --keep-intermediates                Keep the per-step intermediate files (trimmed FASTQ, contam-filtered FASTQ, pre-MAPQ BAM). By default these are deleted as soon as the next step has consumed them, since they are large, regenerable, and not needed by any downstream stage. Pass this flag when debugging a sample or comparing per-step intermediate counts.
   --tmpdir TMPDIR                     Optional override for the directory used for per-step scratch files (trimmed FASTQ, contam-filtered FASTQ, intermediate BAMs). Defaults to a subdirectory of --output. Set this to a fast local SSD when running on a cluster with slow shared storage, or to a pre-mounted tmpfs to avoid hitting disk altogether for short runs.
   --allow-count-invariant-warning     DEVELOPER / DEBUG ONLY. Demote read_counts.tsv invariant violations from errors to warnings. The default is to fail the run on any violation, since a real violation indicates a bug somewhere upstream. NEVER use for a publication run (`mitoribopy all --strict` will reject this flag too).
-  --strict-publication-mode           Reject runs that rely on inferred-rather-than-declared metadata: inferred-pretrimmed kits and ambiguous adapter detection (confidence margin < 0.10). Use when preparing a publication run so the strict checks fail loud rather than a single sample silently picking the wrong defaults.
+  --strict-publication-mode           Strict Mode for align. Reject runs that rely on inferred-rather-than-declared metadata: inferred-pretrimmed kits and ambiguous adapter detection (confidence margin < 0.10). Use this to make metadata/config problems fail loudly.
   --resume                            Skip samples that have already completed in a previous invocation against this --output directory. Each completed sample writes a small JSON file under <output>/.sample_done/; on resume, samples whose JSON is present and parses are reloaded instead of re-run. Use this after a crash or kill mid-batch to avoid redoing the samples that already finished. The orchestrator ('mitoribopy all --resume') sets this automatically when the align stage's read_counts.tsv is missing.
   --adapter-detection MODE            Per-sample adapter detection policy. 'auto' (default) scans every input FASTQ and picks the matching adapter family per sample; samples whose scan fails fall back to --adapter when supplied, or to 'pretrimmed' when no fallback is set and the data looks already-trimmed. 'strict' scans and HARD-FAILS on any sample whose detected adapter conflicts with an explicit --adapter or where no adapter can be identified. 'off' skips the scan and trusts --adapter / --pretrimmed for every sample (one of those is required). [default: auto]
   --adapter-detect-reads N            Number of FASTQ reads to scan per sample during adapter auto-detection. Increase for noisy libraries where the first 5000 reads have unusual adapter distributions; decrease for a faster pre-flight pass on cleaner data. [default: 5000]
@@ -208,7 +208,7 @@ Core Inputs:
                                                       s.cerevisiae; still accepted for one cycle. [default: h.sapiens]
   -d BED_DIR, --directory BED_DIR     Directory containing Ribo-seq input files.
                                       Both .bed and .bam are accepted; BAM files are auto-converted
-                                      to BED6 under <output>/bam_converted/ via pysam. [default: current working directory]
+                                      to BED6 under <output>/<plot_dir>/bam_converted/ via pysam. [default: current working directory]
   --bam-mapq Q, --bam_mapq Q          MAPQ threshold applied to BAM inputs before BAM->BED6 conversion.
                                       Set to 0 to disable. Default 10 is the same NUMT-suppression
                                       default used by 'mitoribopy align'. [default: 10]
@@ -598,8 +598,8 @@ options:
   --profile {minimal,publication,exhaustive}
                                       Template profile for --print-config-template. 'minimal' (default): the curated 80-line template with the most-edited keys. 'publication': adds publication-readiness defaults (--strict, rnaseq_mode=de_table, fourier_bootstrap_n=200) so a methods-paper run uses the right gates. 'exhaustive': prints the full annotated example from examples/templates/pipeline_config.example.yaml — every single flag with its default and a one-line comment. [default: minimal]
   --print-canonical-config            Load --config, apply every auto-wiring + sample-sheet expansion that 'mitoribopy all' would normally apply, then print the resulting canonical config to stdout (YAML if PyYAML is available, JSON otherwise) and exit. Useful for diffing your input config against what was actually executed: 'mitoribopy all --print-canonical-config --config pipeline_config.yaml --output results/'. The same blob is embedded in run_manifest.json under 'config_canonical' on real runs.
-  --strict                            Publication-safe mode. A single switch that forwards strictness to every stage and post-run validation:
-                                        * align: --strict-publication-mode (fail on non-default policies that would invalidate a publication run);
+  --strict                            Strict Mode. A single switch that checks and validates configs, forwards strictness to every stage, and runs figure validation after the pipeline finishes:
+                                        * align: strict metadata checks (fail on inferred pretrimmed inputs, ambiguous adapter detection, and undeclared inferred UMI handling);
                                         * config: --strict on the up-front validate-config pass (treat any deprecated-key rewrite or unknown stage key as a hard error);
                                         * rnaseq: refuse 'allow_pseudo_replicates_for_demo_not_publication: true' and refuse 'rnaseq_mode: from_fastq' (the mt-mRNA-only DE path) unless the user explicitly opts back in via 'allow_exploratory_from_fastq_in_strict: true';
                                         * figures: --strict on the post-run validate-figures pass (promote warn-only QC findings to fail);
@@ -728,7 +728,7 @@ usage: mitoribopy validate-figures [-h] [--strict] [--require-png-dpi DPI]
                                    [--out PATH]
                                    RUN_DIR
 
-Mechanically validate every plot under a finished MitoRiboPy run root: check label / legend / stat-box overlap, label clipping, point counts vs source TSV, SVG text editability, PNG dpi, and metadata sidecar coverage. Writes <RUN_DIR>/figure_qc.tsv. Exit 0 / 1 / 2 (all pass / warn-only / fail; --strict upgrades warn → fail).
+Mechanically validate every plot under a finished MitoRiboPy run root: check label / legend / stat-box overlap, label clipping, point counts vs source TSV, SVG text editability, and PNG dpi. Writes <RUN_DIR>/figure_qc.tsv. Exit 0 / 1 / 2 (all pass / warn-only / fail; --strict upgrades warn → fail).
 
 positional arguments:
   RUN_DIR                The output directory of a finished `mitoribopy all` run.
@@ -771,4 +771,3 @@ options:
   --threads N    Forwarded to `mitoribopy all --threads`. Recorded in the benchmark.tsv `threads` column.
   --seed SEED    Random seed for the FASTQ subsampler (no effect when --subsample is omitted). [default: 42]
 ```
-

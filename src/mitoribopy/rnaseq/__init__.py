@@ -27,6 +27,8 @@ from .gene_ids import (
     HUMAN_MT_MRNAS,
     YEAST_MT_MRNAS,
     MtGene,
+    map_de_gene_ids_to_ribo_ids,
+    match_de_to_ribo_genes,
     match_mt_mrnas,
     normalize_gene_id,
 )
@@ -64,6 +66,8 @@ __all__ = [
     "enumerate_fastqs",
     "load_de_table",
     "load_ribo_counts",
+    "map_de_gene_ids_to_ribo_ids",
+    "match_de_to_ribo_genes",
     "match_mt_mrnas",
     "normalize_gene_id",
     "verify_reference_consistency",

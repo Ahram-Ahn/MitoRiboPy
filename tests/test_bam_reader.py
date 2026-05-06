@@ -15,7 +15,10 @@ import pytest
 
 from mitoribopy.data import load_annotation_table
 from mitoribopy.io.bam_reader import convert_bam_to_bed, prepare_bam_inputs
-from mitoribopy.io.bed_reader import process_bed_files
+from mitoribopy.io.bed_reader import (
+    compute_unfiltered_read_length_summary,
+    process_bed_files,
+)
 
 
 # ---------- helpers ---------------------------------------------------------
@@ -277,6 +280,31 @@ def test_process_bed_files_bam_mapq_filter_drops_low_quality_reads(tmp_path) -> 
 
     assert len(df) == 1
     assert df.iloc[0]["name"] == "keep"
+
+
+def test_unfiltered_read_length_qc_can_use_bam_converted_beds(tmp_path) -> None:
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    _make_bam(
+        in_dir / "sampleA.bam",
+        [{"name": f"r{i}", "ref": "MT-ND1", "start": 0, "end": 29 + i}
+         for i in range(3)],
+        references=[("MT-ND1", 1000)],
+    )
+    converted = prepare_bam_inputs(in_dir, tmp_path / "converted")
+    out_csv = tmp_path / "unfiltered.csv"
+
+    compute_unfiltered_read_length_summary(
+        input_dir=str(in_dir),
+        output_csv=str(out_csv),
+        total_counts_map={},
+        read_length_range=(15, 50),
+        converted_bed_paths=converted,
+    )
+
+    df = pd.read_csv(out_csv)
+    assert sorted(df["sample_name"].unique()) == ["sampleA"]
+    assert set(df["read_length"]) == {29, 30, 31}
 
 
 def test_process_bed_files_empty_dir_returns_empty_frame(tmp_path) -> None:

@@ -1,10 +1,9 @@
-"""Per-plot ``.metadata.json`` sidecar coverage for the three plot families
-that previously triggered ``FIGURE_QC_WARN`` because no sidecar was
-written next to the rendered PNG.
+"""Per-plot ``.metadata.json`` sidecar coverage for plot families with
+metadata-backed mechanical checks.
 
 The contract is tied to :mod:`mitoribopy.plotting.figure_validator`:
 ``mitoribopy validate-figures`` looks up ``<plot>.metadata.json`` via
-:func:`metadata_sidecar_path`, so each rendered plot must produce one.
+:func:`metadata_sidecar_path` when a plot has metadata-backed checks.
 """
 
 from __future__ import annotations

@@ -217,10 +217,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Publication-safe mode. A single switch that forwards "
-            "strictness to every stage and post-run validation:\n"
-            "  * align: --strict-publication-mode (fail on non-default "
-            "policies that would invalidate a publication run);\n"
+            "Strict Mode. A single switch that checks and validates "
+            "configs, forwards strictness to every stage, and runs "
+            "figure validation after the pipeline finishes:\n"
+            "  * align: strict metadata checks (fail on inferred "
+            "pretrimmed inputs, ambiguous adapter detection, and "
+            "undeclared inferred UMI handling);\n"
             "  * config: --strict on the up-front validate-config pass "
             "(treat any deprecated-key rewrite or unknown stage key as "
             "a hard error);\n"
@@ -231,8 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  * figures: --strict on the post-run validate-figures pass "
             "(promote warn-only QC findings to fail);\n"
             "  * summary: warning rows in warnings.tsv are mirrored as "
-            "WARN bullets in SUMMARY.md.\n"
-            "Recommended for any run that backs a manuscript figure."
+            "WARN bullets in SUMMARY.md."
         ),
     )
     parser.add_argument(

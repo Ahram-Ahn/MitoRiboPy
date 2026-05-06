@@ -16,6 +16,8 @@ from mitoribopy.rnaseq import (
     detect_de_format,
     load_de_table,
     load_ribo_counts,
+    map_de_gene_ids_to_ribo_ids,
+    match_de_to_ribo_genes,
     match_mt_mrnas,
     normalize_gene_id,
     verify_reference_consistency,
@@ -42,6 +44,40 @@ def test_match_mt_mrnas_bare_case_insensitive() -> None:
     assert "ND1" in out["matched"]
     assert "ND2" in out["matched"]
     assert "CO1" in out["matched"]
+
+
+def test_match_mt_mrnas_accepts_common_human_rpf_aliases() -> None:
+    de_ids = ["COX1", "COX2", "COX3", "CYTB"]
+    out = match_mt_mrnas(de_ids, "hgnc", "h")
+    assert "MT-CO1" in out["matched"]
+    assert "MT-CO2" in out["matched"]
+    assert "MT-CO3" in out["matched"]
+    assert "MT-CYB" in out["matched"]
+
+
+def test_map_de_gene_ids_to_ribo_ids_bridges_human_aliases() -> None:
+    mapping = map_de_gene_ids_to_ribo_ids(
+        ["MT-ND1", "MT-CO1", "MT-CYB"],
+        ["ND1", "COX1", "CYTB"],
+        "hgnc",
+        "h",
+    )
+    assert mapping == {
+        "MT-ND1": "ND1",
+        "MT-CO1": "COX1",
+        "MT-CYB": "CYTB",
+    }
+
+
+def test_match_de_to_ribo_genes_reports_missing_rpf_aliases() -> None:
+    report = match_de_to_ribo_genes(
+        ["MT-ND1", "MT-CO1"],
+        ["ND1"],
+        "hgnc",
+        "h",
+    )
+    assert report["de_to_ribo"] == {"MT-ND1": "ND1"}
+    assert "MT-CO1" in report["missing_ribo"]
 
 
 def test_match_mt_mrnas_reports_missing() -> None:

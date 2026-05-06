@@ -167,6 +167,51 @@ def test_rnaseq_end_to_end_produces_te_and_delta_te(tmp_path) -> None:
     assert abs(float(nd1["delta_te_log2"]) - (float(nd1["rpf_log2fc"]) - 0.5)) < 1e-6
 
 
+def test_rnaseq_de_table_aliases_are_remapped_to_rpf_gene_names(tmp_path, capsys) -> None:
+    ref = tmp_path / "ref.fa"
+    ref.write_bytes(b">ND1\nACGT\n>COX1\nACGT\n>CYTB\nACGT\n")
+    ref_hash = compute_reference_checksum(ref)
+
+    ribo_dir = tmp_path / "rpf_out"
+    ribo_dir.mkdir()
+    (ribo_dir / "run_settings.json").write_text(
+        json.dumps({"subcommand": "rpf", "reference_checksum": ref_hash})
+    )
+    (ribo_dir / "rpf_counts.tsv").write_text(
+        "sample\tgene\tcount\n"
+        "A\tND1\t100\n"
+        "A\tCOX1\t200\n"
+        "A\tCYTB\t300\n"
+    )
+    de_table = tmp_path / "de.tsv"
+    de_table.write_text(
+        "gene_id\tbaseMean\tlog2FoldChange\tpadj\n"
+        "MT-ND1\t1000\t0.1\t0.5\n"
+        "MT-CO1\t2000\t0.2\t0.4\n"
+        "MT-CYB\t3000\t0.3\t0.3\n"
+    )
+    out_dir = tmp_path / "rnaseq_out"
+
+    exit_code = cli.main([
+        "rnaseq",
+        "--de-table", str(de_table),
+        "--gene-id-convention", "hgnc",
+        "--ribo-dir", str(ribo_dir),
+        "--reference-gtf", str(ref),
+        "--output", str(out_dir),
+    ])
+
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "MT-CO1->COX1" in err
+    te_text = (out_dir / "te.tsv").read_text()
+    assert "\tCOX1\t" in te_text
+    assert "\tCYTB\t" in te_text
+    assert "\tMT-CO1\t" not in te_text
+    settings = json.loads((out_dir / "run_settings.json").read_text())
+    assert settings["de_to_ribo_gene_map"]["de_to_ribo"]["MT-CYB"] == "CYTB"
+
+
 def test_rnaseq_reference_mismatch_hard_fails(tmp_path, capsys) -> None:
     ref = tmp_path / "ref.fa"
     ref.write_bytes(b">MT-ND1\nACGTACGT\n")

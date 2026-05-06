@@ -209,13 +209,13 @@ class TestValidateFigures:
         assert records[0].status == "warn"
         assert records[0].svg_text_editable is False
 
-    def test_missing_sidecar_is_warn(self, tmp_path: Path) -> None:
+    def test_missing_sidecar_is_not_a_warning_by_itself(self, tmp_path: Path) -> None:
         plot = tmp_path / "rpf" / "no_sidecar.png"
         plot.parent.mkdir(parents=True, exist_ok=True)
         _make_png(plot, dpi=300)
         records = validate_figures(tmp_path)
-        assert records[0].status == "warn"
-        assert any("sidecar" in w for w in records[0].warnings)
+        assert records[0].status == "pass"
+        assert records[0].warnings == []
 
 
 # ---------------------------------------------------------------------------

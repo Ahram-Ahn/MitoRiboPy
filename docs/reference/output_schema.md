@@ -417,10 +417,14 @@ This output_schema doc is the human mirror of the same registry.
 ### `figure_qc.tsv` (schema 1.0)
 
 Per-plot mechanical QC produced by `mitoribopy validate-figures`.
-Columns: `path`, `format` (`png` / `svg`), `point_count`,
-`label_overlap_pct`, `svg_editable`, `png_dpi`,
-`sidecar_present`, `verdict` (`pass` / `warn` / `fail`),
-`notes`. Under `validate-figures --strict`, any `warn` row is
+Columns: `plot_path`, `stage`, `plot_type`, `status` (`pass` / `warn` /
+`fail`), `n_points_expected`, `n_points_drawn`, `n_labels`,
+`label_overlap_count`, `label_outside_axes_count`, `legend_overlap`,
+`stat_box_overlap`, `clipped_text`, `min_font_size`,
+`svg_text_editable`, `png_dpi`, `has_source_data`, `warnings`.
+Missing metadata sidecars are not warnings by themselves; sidecar-backed
+columns remain empty when no sidecar exists. Under
+`validate-figures --strict`, any `warn` row is
 promoted to `fail` and the subcommand exits non-zero.
 
 ### `progress.jsonl`

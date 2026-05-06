@@ -267,11 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Reject runs that rely on inferred-rather-than-declared "
-            "metadata: inferred-pretrimmed kits and ambiguous adapter "
-            "detection (confidence margin < 0.10). Use when preparing "
-            "a publication run so the strict checks fail loud rather "
-            "than a single sample silently picking the wrong defaults."
+            "Strict Mode for align. Reject runs that rely on inferred-"
+            "rather-than-declared metadata: inferred-pretrimmed kits and "
+            "ambiguous adapter detection (confidence margin < 0.10). "
+            "Use this to make metadata/config problems fail loudly."
         ),
     )
     library.add_argument(
@@ -657,13 +656,54 @@ def _format_execution_table(
     return lines
 
 
+def _resolution_base_source(resolution: SampleResolution) -> str:
+    """Return the resolver source without the per-sample override prefix."""
+    return resolution.source.split(":", 1)[-1]
+
+
+def _warn_adapter_detection_summary(
+    resolutions: list[SampleResolution],
+) -> None:
+    """Emit explicit adapter-detection warnings for each scanned sample."""
+    for resolution in resolutions:
+        source = _resolution_base_source(resolution)
+        if resolution.detected_kit:
+            adapter = resolution.kit.adapter or ""
+            detail = (
+                f"{resolution.sample}: adapter detected: "
+                f"{resolution.detected_kit} "
+                f"({resolution.detection_match_rate * 100:.1f}% match)"
+            )
+            if adapter:
+                detail += f"; resolved adapter={adapter}"
+            if source == "user_adapter":
+                detail += "; using the user-supplied adapter sequence"
+            log_warning("ADAPTER", detail + ".")
+            continue
+
+        if source in {"inferred_pretrimmed", "user_adapter"}:
+            if source == "user_adapter":
+                suffix = " Using the user-supplied adapter sequence."
+            else:
+                suffix = (
+                    " Input may already be adapter-filtered/trimmed; "
+                    "if this is raw data with an unlisted adapter, pass "
+                    "--adapter <SEQ> or set a per-sample adapter."
+                )
+            log_warning(
+                "ADAPTER",
+                f"{resolution.sample}: no known adapter was detected."
+                + suffix,
+            )
+
+
 def _strict_publication_mode_errors(
     resolutions: list[SampleResolution],
 ) -> list[str]:
-    """Return the list of strict-publication-mode rejection reasons.
+    """Return the list of align Strict Mode rejection reasons.
 
-    Empty list means the resolutions are clean enough to be claimed as
-    publication-grade. The CLI exits 2 when this list is non-empty.
+    Empty list means the resolutions passed the strict metadata checks.
+    The CLI exits 2 when this list is non-empty.
 
     Rules:
 
@@ -679,7 +719,7 @@ def _strict_publication_mode_errors(
     for r in resolutions:
         if r.source.startswith("inferred_pretrimmed"):
             errors.append(
-                f"--strict-publication-mode: sample {r.sample!r} picked "
+                f"Strict Mode: sample {r.sample!r} picked "
                 "kit=pretrimmed by inference (no known adapter signature). "
                 "Declare --pretrimmed explicitly or supply --adapter."
             )
@@ -688,7 +728,7 @@ def _strict_publication_mode_errors(
             and getattr(r, "confidence_margin", 0.0) < 0.10
         ):
             errors.append(
-                f"--strict-publication-mode: sample {r.sample!r} adapter "
+                f"Strict Mode: sample {r.sample!r} adapter "
                 f"detection is ambiguous "
                 f"(margin={getattr(r, 'confidence_margin', 0.0):.2f}, "
                 f"second_best={getattr(r, 'second_best_kit', None)!r}). "
@@ -697,7 +737,7 @@ def _strict_publication_mode_errors(
         umi_src = getattr(r, "umi_source", "preset_default")
         if r.kit.umi_length > 0 and umi_src not in ("declared", "none"):
             errors.append(
-                f"--strict-publication-mode: sample {r.sample!r} resolved "
+                f"Strict Mode: sample {r.sample!r} resolved "
                 f"to a UMI-bearing kit (umi_length={r.kit.umi_length}) "
                 f"with umi_source={umi_src!r}. Declare umi_length and "
                 "umi_position in the sample sheet."
@@ -1160,6 +1200,7 @@ def run(argv: Iterable[str]) -> int:
         except SampleResolutionError as exc:
             print(f"[mitoribopy align] ERROR: {exc}", file=sys.stderr)
             return 2
+        _warn_adapter_detection_summary(resolutions)
         # Surface ambiguous detections (NEB family) so the user reviews
         # whether their kit really has UMIs.
         for resolution in resolutions:
@@ -1335,7 +1376,7 @@ def run(argv: Iterable[str]) -> int:
     for line in _format_execution_table(resolutions):
         log_info("ALIGN", line)
 
-    # P5.6: --strict-publication-mode gate.
+    # P5.6: align Strict Mode gate.
     if getattr(args, "strict_publication_mode", False):
         strict_errors = _strict_publication_mode_errors(resolutions)
         # Refactor-4 (report §3.2.E): a publication run must never demote
@@ -1343,8 +1384,7 @@ def run(argv: Iterable[str]) -> int:
         if getattr(args, "allow_count_invariant_warning", False):
             strict_errors.append(
                 "--allow-count-invariant-warning is incompatible with "
-                "--strict-publication-mode (it is a developer / debug "
-                "escape hatch, not a publication switch)."
+                "Strict Mode (it is a developer / debug escape hatch)."
             )
         if strict_errors:
             for line in strict_errors:

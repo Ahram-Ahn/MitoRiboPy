@@ -61,7 +61,7 @@ Major user-facing changes that landed in v0.6.0:
 
 * `mitoribopy run` / `mitoribopy <bare flags>` removed.
 * `mitoribopy rpf --help` reports as `mitoribopy rpf`.
-* `mitoribopy all --strict` is the single publication-mode switch.
+* `mitoribopy all --strict` is the single Strict Mode switch.
 * Unified top-level `samples:` sample sheet.
 * `from_fastq` / `de_table` / `rna_only` / `none` modes for rnaseq.
 * Pseudo-replicate fallback is opt-in only via the

@@ -19,6 +19,7 @@ def process_bed_files(
     bam_mapq: int = 0,
     plot_dir: str | None = None,
     csv_dir: str | None = None,
+    converted_bed_paths: list[Path] | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Filter BED / BAM inputs by read length and return in-memory per-sample data.
 
@@ -46,11 +47,12 @@ def process_bed_files(
     Path(plot_target).mkdir(parents=True, exist_ok=True)
     Path(csv_target).mkdir(parents=True, exist_ok=True)
 
-    converted_bed_paths = prepare_bam_inputs(
-        input_dir=Path(input_dir),
-        converted_dir=Path(output_dir) / "bam_converted",
-        mapq_threshold=bam_mapq,
-    )
+    if converted_bed_paths is None:
+        converted_bed_paths = prepare_bam_inputs(
+            input_dir=Path(input_dir),
+            converted_dir=Path(output_dir) / "bam_converted",
+            mapq_threshold=bam_mapq,
+        )
 
     native_bed_files = sorted(
         file_name for file_name in os.listdir(input_dir) if file_name.endswith(".bed")
@@ -180,25 +182,33 @@ def compute_unfiltered_read_length_summary(
     output_csv: str,
     total_counts_map: dict[str, int],
     read_length_range: tuple[int, int] = (15, 40),
+    converted_bed_paths: list[Path] | None = None,
 ) -> None:
     """Build unfiltered per-sample read-length summary table with optional RPM."""
-    bed_files = sorted(
+    native_bed_files = sorted(
         file_name for file_name in os.listdir(input_dir) if file_name.endswith(".bed")
     )
-    if not bed_files:
-        log_warning("QC", f"No .bed files found in {input_dir}.")
+    bed_sources: list[tuple[str, str]] = [
+        (bed_file, os.path.join(input_dir, bed_file))
+        for bed_file in native_bed_files
+    ]
+    for bed_path in converted_bed_paths or []:
+        bed_sources.append((bed_path.name, str(bed_path)))
+    bed_sources.sort(key=lambda item: item[0])
+
+    if not bed_sources:
+        log_warning("QC", f"No .bed or .bam files found in {input_dir}.")
         return
 
     all_rows: list[dict[str, int | float | str]] = []
     missing_norm_samples: set[str] = set()
 
-    for bed_file in iter_with_progress(
-        bed_files,
+    for bed_file, bed_path in iter_with_progress(
+        bed_sources,
         component="QC",
         noun="BED file",
-        labeler=str,
+        labeler=lambda item: item[0],
     ):
-        bed_path = os.path.join(input_dir, bed_file)
         sample_name = os.path.splitext(bed_file)[0]
 
         try:

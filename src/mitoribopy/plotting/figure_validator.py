@@ -8,9 +8,7 @@ stages; each plot is scored for a small set of objective failure modes:
   source TSV that fed it (off-by-one, accidentally dropped genes);
 * SVG text editability (the publication promise of editable Illustrator
   outputs is null if ``svg.fonttype`` regressed to ``path``);
-* PNG dpi ≥ 300 (hard publication requirement);
-* presence of a metadata sidecar at all (the contract for label policy
-  / palette / source-data link).
+* PNG dpi ≥ 300 (hard publication requirement).
 
 The validator is intentionally conservative — it only flags conditions
 that *can* be checked from disk without re-running matplotlib. Things
@@ -334,12 +332,10 @@ def _check_one_plot(
     record = FigureRecord(plot_path=plot_path)
     record.stage = _stage_from_path(plot_path, run_root)
 
-    # Sidecar — every plot SHOULD have one.
+    # Sidecar - optional. Older RPF plot families do not write per-plot
+    # metadata yet; missing sidecars should not swamp warnings.tsv.
     metadata = load_plot_metadata(plot_path)
-    if metadata is None:
-        record.add_warning("plot has no .metadata.json sidecar")
-        record.downgrade("warn")
-    else:
+    if metadata is not None:
         record.plot_type = str(metadata.get("plot_type") or "")
         record.stage = record.stage or str(metadata.get("stage") or "")
         record.n_points_expected = metadata.get("n_points_expected")
