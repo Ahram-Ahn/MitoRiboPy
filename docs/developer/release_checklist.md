@@ -26,14 +26,15 @@ Every place the version is recorded MUST read the same string.
 ```bash
 grep -n 'version = ' pyproject.toml
 grep -n '__version__' src/mitoribopy/__init__.py
-grep -n 'Version:'    src/MitoRiboPy.egg-info/PKG-INFO   # rebuilt in step 5
-grep -n 'Manuscript-target version' README.md
+grep -n 'Version:'    src/MitoRiboPy.egg-info/PKG-INFO   # rebuilt in step 5, if present
+grep -n 'current documented interface is' README.md
 grep -n '^## \['                       CHANGELOG.md | head -3
 ```
 
 * [ ] `pyproject.toml` `[project] version`
 * [ ] `src/mitoribopy/__init__.py` `__version__` fallback
-* [ ] `README.md` "Manuscript-target version" + `pip install` lower bound
+* [ ] `README.md` current-version prose, citation block, and `pip install`
+  lower bound
 * [ ] `CHANGELOG.md` has a dated entry for the new version
 * [ ] `docs/release-notes/v<X.Y.Z>.md` exists
 * [ ] CLI quick-start examples mention the right version
@@ -67,40 +68,43 @@ done
 
 ```bash
 python -m pytest -q
+python -m ruff check src
 python -m pytest -q -m requires_tools   # only when external tools are on PATH
 ```
 
 * [ ] full unit-test suite green on the local machine
+* [ ] `ruff check src` passes
 * [ ] CI green on Python 3.10 / 3.11 / 3.12
 * [ ] no new `FutureWarning`/`DeprecationWarning` from numpy / pandas /
   matplotlib in the captured stderr
 
-## 4. Toy data smoke test
+## 4. Synthetic smoke test
 
-The toy bundle under `examples/toy_data/` (when present) MUST run end
-to end on a laptop in under ~10 minutes.
+The synthetic bundle under `examples/smoke/` MUST run end to end on a
+laptop in under ~10 minutes when `cutadapt`, `bowtie2`, and `samtools`
+are on `PATH`.
 
 ```bash
 mitoribopy all \
-  --config examples/toy_data/pipeline_config.yaml \
-  --output /tmp/mitoribopy_toy_release_test \
+  --config examples/smoke/pipeline_config.smoke.yaml \
+  --output /tmp/mitoribopy_smoke_release_test \
   --strict
 ```
 
-* [ ] `run_manifest.json` written, `schema_version` ≥ 1.3.0
+* [ ] `run_manifest.json` written and validates against the packaged schema
 * [ ] `canonical_config.yaml` written
 * [ ] `resource_plan.json` written
 * [ ] `warnings.tsv` written (header-only is OK)
 * [ ] `outputs_index.tsv` written
 * [ ] `SUMMARY.md` written
 * [ ] `align/umi_qc.tsv` written
-* [ ] `rpf/rpf_counts.tsv` matches `examples/toy_data/expected/expected_rpf_counts.tsv` (when published)
+* [ ] the output set matches `examples/smoke/expected_outputs.txt`
 
 ## 5. Build artifacts
 
 ```bash
 rm -rf dist/ build/ src/MitoRiboPy.egg-info
-python -m pip install --upgrade build twine
+python -m pip install -e ".[release]"
 python -m build
 twine check dist/*
 ```

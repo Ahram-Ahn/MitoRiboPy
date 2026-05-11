@@ -41,7 +41,6 @@ from ..analysis.fourier_spectrum import (
     REGIONS,
     _ATP86_PANEL_TRANSCRIPT,
     _ND4L4_PANEL_TRANSCRIPT,
-    snr_call_for_ratio,
 )
 from .figure_validator import write_plot_metadata
 from .style import apply_publication_style
@@ -157,7 +156,7 @@ def _plot_one_panel(
             if p is None or pd.isna(p):
                 return ""
             p_val = float(p)
-            return f"  p={p_val:.3f}" if p_val >= 0.001 else f"  p<0.001"
+            return f"  p={p_val:.3f}" if p_val >= 0.001 else "  p<0.001"
 
         line_global = (
             f"3-nt ratio (global, p=2-10): {ratio:.2f}x  ({snr_tier})"

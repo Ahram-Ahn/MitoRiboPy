@@ -464,11 +464,17 @@ def plot_delta_te_volcano(
             is_dn = is_sig and x <= -log2fc_threshold
 
             if is_up:
-                xs_up.append(x); ys_up.append(y); labels_up.append(r.gene)
+                xs_up.append(x)
+                ys_up.append(y)
+                labels_up.append(r.gene)
             elif is_dn:
-                xs_dn.append(x); ys_dn.append(y); labels_dn.append(r.gene)
+                xs_dn.append(x)
+                ys_dn.append(y)
+                labels_dn.append(r.gene)
             else:
-                xs_ns.append(x); ys_ns.append(y); labels_ns.append(r.gene)
+                xs_ns.append(x)
+                ys_ns.append(y)
+                labels_ns.append(r.gene)
 
         finite_ys = [y for y in ys_up + ys_dn + ys_ns if math.isfinite(y)]
         y_cap = (max(finite_ys) if finite_ys else 1.0) * 1.10
@@ -476,7 +482,9 @@ def plot_delta_te_volcano(
         def _cap(ys: list[float]) -> list[float]:
             return [y if math.isfinite(y) else y_cap for y in ys]
 
-        ys_up = _cap(ys_up); ys_dn = _cap(ys_dn); ys_ns = _cap(ys_ns)
+        ys_up = _cap(ys_up)
+        ys_dn = _cap(ys_dn)
+        ys_ns = _cap(ys_ns)
 
         # Threshold guides — drawn first so points sit on top.
         if any(math.isfinite(y) and y > 0 for y in finite_ys):
@@ -600,9 +608,12 @@ def plot_de_volcano(
             ax.set_axis_off()
             return _save_figure(fig, output_path)
 
-        xs_up: list[float] = []; ys_up: list[float] = []
-        xs_dn: list[float] = []; ys_dn: list[float] = []
-        xs_ns: list[float] = []; ys_ns: list[float] = []
+        xs_up: list[float] = []
+        ys_up: list[float] = []
+        xs_dn: list[float] = []
+        ys_dn: list[float] = []
+        xs_ns: list[float] = []
+        ys_ns: list[float] = []
         labels: list[tuple[float, float, str]] = []
         n_no_padj = 0
         for row in rows:
@@ -622,11 +633,14 @@ def plot_de_volcano(
             is_up = is_sig and l2 >= log2fc_threshold
             is_dn = is_sig and l2 <= -log2fc_threshold
             if is_up:
-                xs_up.append(l2); ys_up.append(y)
+                xs_up.append(l2)
+                ys_up.append(y)
             elif is_dn:
-                xs_dn.append(l2); ys_dn.append(y)
+                xs_dn.append(l2)
+                ys_dn.append(y)
             else:
-                xs_ns.append(l2); ys_ns.append(y)
+                xs_ns.append(l2)
+                ys_ns.append(y)
             labels.append((l2, y, gene))
 
         finite_ys = [y for y in ys_up + ys_dn + ys_ns if math.isfinite(y)]
@@ -635,7 +649,9 @@ def plot_de_volcano(
         def _cap(ys: list[float]) -> list[float]:
             return [y if math.isfinite(y) else y_cap for y in ys]
 
-        ys_up = _cap(ys_up); ys_dn = _cap(ys_dn); ys_ns = _cap(ys_ns)
+        ys_up = _cap(ys_up)
+        ys_dn = _cap(ys_dn)
+        ys_ns = _cap(ys_ns)
         labels = [(x, y_cap if not math.isfinite(y) else y, g)
                   for x, y, g in labels]
 
@@ -794,8 +810,10 @@ def plot_te_compare_scatter(
         # Square axes covering both samples + replicates.
         all_pts = list(xs) + list(ys)
         for _, _, _, b_vals, c_vals in genes_xy:
-            all_pts.extend(b_vals); all_pts.extend(c_vals)
-        lo = min(all_pts); hi = max(all_pts)
+            all_pts.extend(b_vals)
+            all_pts.extend(c_vals)
+        lo = min(all_pts)
+        hi = max(all_pts)
         span = hi - lo
         margin = max(0.15, 0.06 * span)
         bound_lo, bound_hi = lo - margin, hi + margin
@@ -995,9 +1013,12 @@ def plot_ma(
             ax.set_axis_off()
             return _save_figure(fig, output_path)
 
-        xs_up: list[float] = []; ys_up: list[float] = []
-        xs_dn: list[float] = []; ys_dn: list[float] = []
-        xs_ns: list[float] = []; ys_ns: list[float] = []
+        xs_up: list[float] = []
+        ys_up: list[float] = []
+        xs_dn: list[float] = []
+        ys_dn: list[float] = []
+        xs_ns: list[float] = []
+        ys_ns: list[float] = []
         sig_labels: list[tuple[float, float, str]] = []
         for r in rows:
             x = math.log10(r["basemean"])
@@ -1005,13 +1026,16 @@ def plot_ma(
             padj = r.get("padj")
             is_sig = padj is not None and padj < padj_threshold
             if is_sig and l2 > 0:
-                xs_up.append(x); ys_up.append(l2)
+                xs_up.append(x)
+                ys_up.append(l2)
                 sig_labels.append((x, l2, str(r.get("gene_id", ""))))
             elif is_sig and l2 < 0:
-                xs_dn.append(x); ys_dn.append(l2)
+                xs_dn.append(x)
+                ys_dn.append(l2)
                 sig_labels.append((x, l2, str(r.get("gene_id", ""))))
             else:
-                xs_ns.append(x); ys_ns.append(l2)
+                xs_ns.append(x)
+                ys_ns.append(l2)
 
         ax.axhline(0, color=_C_GUIDE, linewidth=0.7, zorder=1)
         if xs_ns:

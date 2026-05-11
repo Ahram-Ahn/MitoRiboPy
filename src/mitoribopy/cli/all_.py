@@ -27,10 +27,6 @@ reconstructs a flag list from the section and calls the subcommand's
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
-import platform
-import subprocess
 import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -53,11 +49,7 @@ from ._resume_guard import (
 # this module (the original location) keeps working.
 from ..pipeline.manifest import MANIFEST_SCHEMA_VERSION  # noqa: F401, E402
 from ..pipeline.manifest import (  # noqa: E402
-    build_stages_block as _build_stages_block,
-    git_commit as _git_commit,
-    lift_tool_versions as _lift_tool_versions,
     read_stage_settings as _read_stage_settings,
-    sha256_of as _sha256_of,
     write_manifest as _write_manifest,
     yaml_dump as _yaml_dump,
 )
@@ -233,7 +225,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  * figures: --strict on the post-run validate-figures pass "
             "(promote warn-only QC findings to fail);\n"
             "  * summary: warning rows in warnings.tsv are mirrored as "
-            "WARN bullets in SUMMARY.md."
+            "WARN bullets in SUMMARY.md.\n"
+            "Recommended for any run that backs a manuscript figure."
         ),
     )
     parser.add_argument(

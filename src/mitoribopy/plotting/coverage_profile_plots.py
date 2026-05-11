@@ -478,8 +478,8 @@ def run_coverage_profile_plots(
     # E) Convert coverage → RPM (reads per million mRNA‑aligned)
     # ------------------------------------------------------------------
     # Prefer the explicit kwarg. Fall back to args.total_mrna_map with a
-    # one-time deprecation warning, since it mutates the parsed argparse
-    # namespace (Task 5c). When both are absent, fail loudly.
+    # one-time deprecation warning for older direct callers. When both
+    # are absent, fail loudly.
     resolved_totals: dict[str, int | float]
     if total_mrna_map is not None:
         resolved_totals = total_mrna_map
@@ -488,7 +488,8 @@ def run_coverage_profile_plots(
             "COVERAGE",
             "Reading total_mrna_map from args is deprecated; pass "
             "total_mrna_map=... as a keyword argument instead. "
-            "The args fallback will be removed in v0.7.0.",
+            "The args fallback is kept only for backward compatibility "
+            "and is planned for removal at the v1.0 API freeze.",
         )
         resolved_totals = args.total_mrna_map
     else:
@@ -771,7 +772,8 @@ def run_coverage_profile_plots(
                     0.5, 0.5, f"No data for {sample}", ha="center", va="center",
                     transform=ax.transAxes,
                 )
-                ax.set_xticks([]); ax.set_yticks([])
+                ax.set_xticks([])
+                ax.set_yticks([])
                 continue
             arr, _cds_start = entry
             n = len(arr)
@@ -858,7 +860,8 @@ def run_coverage_profile_plots(
                         0.5, 0.5, f"No data for {sample}",
                         ha="center", va="center", transform=ax.transAxes,
                     )
-                    ax.set_xticks([]); ax.set_yticks([])
+                    ax.set_xticks([])
+                    ax.set_yticks([])
                     continue
                 arr, _cds_start = entry
                 n = len(arr)

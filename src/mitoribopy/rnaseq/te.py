@@ -24,7 +24,6 @@ can filter by ``publication_grade`` / ``exploratory_mt_only`` /
 from __future__ import annotations
 
 import math
-from typing import Iterable
 
 from ._types import (
     DTeRow,

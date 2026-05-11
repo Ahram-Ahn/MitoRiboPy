@@ -48,10 +48,15 @@ Changelog = "https://github.com/Ahram-Ahn/MitoRiboPy/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 dev = [
   "pytest>=7.4",
+  "ruff>=0.4",
   # Optional but installed in dev so the run_manifest.json schema test
   # exercises the full draft 2020-12 validator instead of the minimal
   # required-key fallback.
   "jsonschema>=4.21",
+]
+release = [
+  "build>=1.2",
+  "twine>=5.0",
 ]
 toml-py310 = [
   "tomli>=2.0;python_version<'3.11'",

@@ -134,7 +134,7 @@ def run_deseq2(
     is the verbatim ``DeseqStats.results_df`` (DESeq2 column names:
     ``baseMean``, ``log2FoldChange``, ``padj``, ...).
     """
-    pd = _import_pandas()
+    _import_pandas()
 
     try:
         from pydeseq2.dds import DeseqDataSet  # type: ignore

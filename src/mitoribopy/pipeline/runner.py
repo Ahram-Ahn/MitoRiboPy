@@ -941,7 +941,6 @@ def parse_pipeline_args(argv: Iterable[str] | None = None) -> argparse.Namespace
     from ..data.reference_data import (
         BUILTIN_STRAIN_PRESETS,
         STRAIN_ALIASES,
-        canonical_strain,
     )
 
     if args.strain in STRAIN_ALIASES:

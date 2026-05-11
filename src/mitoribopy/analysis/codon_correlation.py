@@ -574,7 +574,6 @@ def run_codon_correlation(
                     kendall_tau = float("nan")
             else:
                 r_value = spearman_r = kendall_tau = float("nan")
-            r_squared = r_value * r_value if not math.isnan(r_value) else float("nan")
 
             out_csv = os.path.join(output_dir, f"{base_sample}_vs_{sample_name}_{version}.csv")
             merged_current.to_csv(out_csv, index=False)

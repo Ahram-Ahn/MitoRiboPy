@@ -13,7 +13,6 @@ errors.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Iterable
 
 
 __all__ = [

@@ -1155,7 +1155,6 @@ def build_fourier_period3_score_combined_table(
 
     rows: list[dict] = []
     grouped = _group_tracks(tracks)
-    rng = np.random.default_rng(int(random_seed))
     boot_rng = np.random.default_rng(int(random_seed))
     perm_rng = np.random.default_rng(int(random_seed) + 1)
     # Pre-compute a basis matrix once per window-size — every track in

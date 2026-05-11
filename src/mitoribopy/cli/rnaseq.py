@@ -40,7 +40,6 @@ from ..rnaseq import (
     compute_delta_te,
     compute_reference_checksum,
     compute_te,
-    detect_de_format,
     load_de_table,
     load_ribo_counts,
     match_de_to_ribo_genes,

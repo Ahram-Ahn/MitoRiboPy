@@ -251,7 +251,7 @@ def validate_reference(
     orphan = sorted(set(fasta.keys()) - seen_seq_names)
     if orphan:
         warnings.append(
-            f"FASTA records present but not referenced by annotation: "
+            "FASTA records present but not referenced by annotation: "
             + ", ".join(orphan)
         )
 

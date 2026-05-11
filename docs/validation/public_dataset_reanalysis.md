@@ -59,8 +59,8 @@ bowtie2-build human-mt-mRNA.fasta mt_tx
 bowtie2-build rRNA_tRNA.fasta rrna_contam
 ```
 
-For a non-human / non-yeast organism, use the custom-organism path
-documented in `docs/tutorials/04_custom_organism.md`: pass
+For a non-human / non-yeast organism, use the
+[custom-organism path](../custom_organisms.md): pass
 `--annotation_file` and `--codon_tables_file` to `mitoribopy rpf`.
 
 ---

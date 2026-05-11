@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import json
 import resource
-import shutil
 import sys
 import time
 from copy import deepcopy
@@ -222,7 +221,6 @@ def _yaml_dump(payload: dict) -> str:
 def _write_benchmark_tsv(
     rows: list[dict], path: Path
 ) -> Path:
-    from ..io.schema_versions import OUTPUT_SCHEMA_VERSIONS
 
     columns = (
         "stage", "status", "wall_time_sec", "cumulative_wall_sec",
@@ -257,7 +255,7 @@ def _write_benchmark_summary_md(
         "",
         f"- config: `{config_source}`",
         f"- threads: `{threads if threads is not None else 'default'}`",
-        f"- subsample: "
+        "- subsample: "
         + (f"`{subsample}` reads/FASTQ" if subsample else "(off)"),
         "",
         "## Per-stage timing",

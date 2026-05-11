@@ -33,7 +33,6 @@ from ..align import (
     contam as contam_step,
     dedup as dedup_step,
     read_counts as counts_step,
-    sample_resolve,
     tool_check,
     trim as trim_step,
 )

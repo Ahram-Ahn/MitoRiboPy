@@ -24,7 +24,6 @@ only; it must not break a real run.
 
 from __future__ import annotations
 
-import io
 import json
 import sys
 from contextlib import suppress
@@ -32,19 +31,10 @@ from pathlib import Path
 from typing import Protocol, TextIO
 
 from .events import (
-    ErrorEvent,
-    OutputEvent,
     ProgressEvent,
-    ResumeSkipEvent,
-    RunEnd,
-    RunStart,
     SampleEnd,
-    SampleStart,
-    SampleStepEnd,
-    SampleStepStart,
     StageEnd,
     StageStart,
-    WarningEvent,
 )
 from .timing import HAS_TQDM, format_duration
 

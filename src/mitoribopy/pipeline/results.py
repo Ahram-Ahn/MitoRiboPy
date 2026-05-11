@@ -19,7 +19,7 @@ so they can be embedded in ``run_manifest.json`` if needed.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
