@@ -211,6 +211,8 @@ def _place_residual_labels(
     label_col: str,
     axis_min: float,
     axis_max: float,
+    y_axis_min: float | None = None,
+    y_axis_max: float | None = None,
 ) -> None:
     """Greedy label placement that avoids overlap without adjustText.
 
@@ -219,12 +221,27 @@ def _place_residual_labels(
     each by its distance to every already-placed label and to every
     point cluster, and keep the best candidate. A leader line connects
     the label to its point so the reader can match them up unambiguously.
+
+    The scatter caller uses square axes (x bounds == y bounds), so
+    ``axis_min`` / ``axis_max`` apply to both. The MA caller passes
+    separate ``y_axis_min`` / ``y_axis_max`` because the M and A axes
+    have unrelated ranges; nudges scale with the per-axis span and the
+    in-bounds check uses each axis independently.
     """
     if labels_df.empty:
         return
 
-    span = max(axis_max - axis_min, 1e-9)
-    nudge = span * 0.04
+    x_min = float(axis_min)
+    x_max = float(axis_max)
+    y_min = float(axis_min if y_axis_min is None else y_axis_min)
+    y_max = float(axis_max if y_axis_max is None else y_axis_max)
+    x_span = max(x_max - x_min, 1e-9)
+    y_span = max(y_max - y_min, 1e-9)
+    # Per-axis nudge so the label offset looks proportional regardless
+    # of axis aspect ratio (the scatter is square; the MA plot is not).
+    nudge_x = x_span * 0.04
+    nudge_y = y_span * 0.04
+    diag = math.hypot(x_span, y_span)
     placed_xy: list[tuple[float, float]] = []
     point_xy = list(zip(labels_df[x_col].astype(float), labels_df[y_col].astype(float)))
     bbox = dict(
@@ -235,28 +252,41 @@ def _place_residual_labels(
         alpha=0.85,
     )
 
+    # Edge buffer: labels whose anchor is within ``edge_frac`` of the
+    # axis bound get a placement bonus if their text extends INTO the
+    # plot. Keeps "CCG (P)" near the right edge from running under an
+    # outside-the-axes legend.
+    edge_frac = 0.15
     for x, y, label in zip(
         labels_df[x_col].astype(float),
         labels_df[y_col].astype(float),
         labels_df[label_col],
     ):
         candidates = [
-            (x + nudge, y + nudge, "left", "bottom"),
-            (x - nudge, y + nudge, "right", "bottom"),
-            (x + nudge, y - nudge, "left", "top"),
-            (x - nudge, y - nudge, "right", "top"),
+            (x + nudge_x, y + nudge_y, "left", "bottom"),
+            (x - nudge_x, y + nudge_y, "right", "bottom"),
+            (x + nudge_x, y - nudge_y, "left", "top"),
+            (x - nudge_x, y - nudge_y, "right", "top"),
         ]
+        # Which sides is this point hugging? When near x_max, "left"
+        # anchors push text outside the axes; when near y_max, "bottom"
+        # anchors push text upward where a top-of-axes legend often
+        # sits. Bias the score toward the opposite anchor.
+        near_right = (x_max - x) <= edge_frac * x_span
+        near_left = (x - x_min) <= edge_frac * x_span
+        near_top = (y_max - y) <= edge_frac * y_span
+        near_bottom = (y - y_min) <= edge_frac * y_span
         best = None
         best_score = -math.inf
         for cx, cy, ha, va in candidates:
-            if not (axis_min <= cx <= axis_max and axis_min <= cy <= axis_max):
+            if not (x_min <= cx <= x_max and y_min <= cy <= y_max):
                 continue
             # Repulsion score: distance to nearest other label + distance
             # to nearest other point. Higher is better.
             label_d = (
                 min(math.hypot(cx - lx, cy - ly) for lx, ly in placed_xy)
                 if placed_xy
-                else span
+                else diag
             )
             other_distances = [
                 math.hypot(cx - px, cy - py)
@@ -264,14 +294,26 @@ def _place_residual_labels(
                 if (px, py) != (x, y)
             ]
             # Single-label case: the "exclude self" filter empties the
-            # iterable, so fall back to the axis span as a neutral score.
-            point_d = min(other_distances) if other_distances else span
+            # iterable, so fall back to the axis diagonal as a neutral score.
+            point_d = min(other_distances) if other_distances else diag
             score = min(label_d, point_d)
+            # Edge bias: penalise text that runs out of the axes toward
+            # an edge the point is already hugging.
+            edge_penalty = 0.0
+            if near_right and ha == "left":
+                edge_penalty += 0.5 * diag
+            if near_left and ha == "right":
+                edge_penalty += 0.5 * diag
+            if near_top and va == "bottom":
+                edge_penalty += 0.5 * diag
+            if near_bottom and va == "top":
+                edge_penalty += 0.5 * diag
+            score -= edge_penalty
             if score > best_score:
                 best = (cx, cy, ha, va)
                 best_score = score
         if best is None:
-            best = (x + nudge, y + nudge, "left", "bottom")
+            best = (x + nudge_x, y + nudge_y, "left", "bottom")
 
         cx, cy, ha, va = best
         placed_xy.append((cx, cy))
@@ -791,6 +833,35 @@ def run_codon_correlation(
             ax_ma.axhline(
                 -1.0, color="#D55E00", linestyle="--", linewidth=0.8, alpha=0.7,
             )
+
+            # Label the same outlier set the scatter highlights, so a
+            # reviewer can cross-reference the two figures by codon.
+            # ``top10["label"]`` is already "CODON (AA)"; we reuse it
+            # against the MA coordinates rather than computing a new
+            # ranking, which would make the figures inconsistent.
+            ma_x_min = float(merged_current["mean_log2_density"].min())
+            ma_x_max = float(merged_current["mean_log2_density"].max())
+            ma_y_min = float(merged_current["log2_fold_change"].min())
+            ma_y_max = float(merged_current["log2_fold_change"].max())
+            ma_x_pad = max((ma_x_max - ma_x_min) * 0.05, 1e-6)
+            ma_y_pad = max((ma_y_max - ma_y_min) * 0.10, 1e-6)
+            ma_x_min -= ma_x_pad
+            ma_x_max += ma_x_pad
+            ma_y_min -= ma_y_pad
+            ma_y_max += ma_y_pad
+            ax_ma.set_xlim(ma_x_min, ma_x_max)
+            ax_ma.set_ylim(ma_y_min, ma_y_max)
+            _place_residual_labels(
+                ax_ma, top10,
+                x_col="mean_log2_density",
+                y_col="log2_fold_change",
+                label_col="label",
+                axis_min=ma_x_min,
+                axis_max=ma_x_max,
+                y_axis_min=ma_y_min,
+                y_axis_max=ma_y_max,
+            )
+
             ax_ma.set_xlabel(
                 f"Mean log2 density (A) = ½·(log2 {base_sample} + log2 {sample_name})",
                 fontsize=11,
