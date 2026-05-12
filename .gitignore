@@ -24,6 +24,9 @@ dist/
 *.fai
 *.bai
 
+# Intentional tiny publication smoke fixture.
+!examples/smoke/human_mt_tiny.fa
+
 # Local read count/data tables
 human_read_counts.txt
 read_counts_summary.txt

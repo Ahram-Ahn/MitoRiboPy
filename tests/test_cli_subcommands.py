@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -21,6 +23,23 @@ def test_top_level_help_lists_all_subcommands(capsys) -> None:
     assert exit_code == 0
     for subcommand in ("align", "rpf", "rnaseq", "all"):
         assert subcommand in captured.out
+
+
+def test_top_level_help_does_not_import_matplotlib() -> None:
+    probe = (
+        "import sys; "
+        "from mitoribopy import cli; "
+        "rc = cli.main(['--help']); "
+        "raise SystemExit(0 if rc == 0 and 'matplotlib' not in sys.modules "
+        "and 'matplotlib.pyplot' not in sys.modules else 1)"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_top_level_no_args_prints_help(capsys) -> None:

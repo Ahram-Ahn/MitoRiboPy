@@ -48,17 +48,6 @@ from ..rnaseq import (
     ReferenceMismatchError,
 )
 from ..rnaseq._types import DTeRow, DeTable, TeRow
-from ..rnaseq.plots import (
-    plot_de_volcano,
-    plot_delta_te_volcano,
-    plot_ma,
-    plot_mrna_vs_rpf_scatter,
-    plot_pca,
-    plot_te_bar_grouped,
-    plot_te_compare_scatter,
-    plot_te_heatmap,
-    plot_te_log2fc_bar,
-)
 from . import common
 
 
@@ -81,6 +70,60 @@ RNASEQ_SUBCOMMAND_HELP = (
 # inputs were supplied — typically used by `mitoribopy all` to record
 # "stage section present, intentionally inert".
 RNASEQ_MODES: tuple[str, ...] = ("de_table", "from_fastq", "rna_only", "none")
+
+
+def plot_de_volcano(*args, **kwargs):
+    from ..rnaseq.plots import plot_de_volcano as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def plot_delta_te_volcano(*args, **kwargs):
+    from ..rnaseq.plots import plot_delta_te_volcano as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def plot_ma(*args, **kwargs):
+    from ..rnaseq.plots import plot_ma as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def plot_mrna_vs_rpf_scatter(*args, **kwargs):
+    from ..rnaseq.plots import plot_mrna_vs_rpf_scatter as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def plot_pca(*args, **kwargs):
+    from ..rnaseq.plots import plot_pca as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def plot_te_bar_grouped(*args, **kwargs):
+    from ..rnaseq.plots import plot_te_bar_grouped as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def plot_te_compare_scatter(*args, **kwargs):
+    from ..rnaseq.plots import plot_te_compare_scatter as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def plot_te_heatmap(*args, **kwargs):
+    from ..rnaseq.plots import plot_te_heatmap as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def plot_te_log2fc_bar(*args, **kwargs):
+    from ..rnaseq.plots import plot_te_log2fc_bar as _impl
+
+    return _impl(*args, **kwargs)
 
 
 def _normalize_mode(value: str | None) -> str | None:

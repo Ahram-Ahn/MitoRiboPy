@@ -771,3 +771,4 @@ options:
   --threads N    Forwarded to `mitoribopy all --threads`. Recorded in the benchmark.tsv `threads` column.
   --seed SEED    Random seed for the FASTQ subsampler (no effect when --subsample is omitted). [default: 42]
 ```
+

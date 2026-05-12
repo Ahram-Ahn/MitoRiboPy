@@ -1,0 +1,26 @@
+include README.md
+include LICENSE
+include CITATION.cff
+include CHANGELOG.md
+include pyproject.toml
+
+recursive-include src/mitoribopy/data *.csv *.json
+recursive-include docs *
+recursive-include tests *.py
+recursive-include .github/workflows *.yml
+
+recursive-include examples/custom_reference *.csv *.json *.md
+recursive-include examples/templates *.sh *.yaml
+include examples/mock_mixed_umi/.gitignore
+include examples/mock_mixed_umi/build_indexes.sh
+include examples/mock_mixed_umi/make_mock.py
+include examples/mock_mixed_umi/mock_config.yaml
+include examples/smoke/.gitignore
+include examples/smoke/README.md
+include examples/smoke/annotation.csv
+include examples/smoke/expected_outputs.txt
+include examples/smoke/generate_smoke_fastqs.py
+include examples/smoke/human_mt_tiny.fa
+include examples/smoke/pipeline_config.smoke.yaml
+include examples/smoke/samples.condition_map.tsv
+include examples/smoke/samples.tsv
