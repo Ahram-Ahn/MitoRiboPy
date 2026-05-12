@@ -174,14 +174,26 @@ def test_codon_correlation_writes_per_plot_sidecar(tmp_path: Path) -> None:
     folder_metadata = out_dir / "codon_correlation.metadata.json"
     assert folder_metadata.is_file()
 
-    plot_png = out_dir / "WT_vs_KO_all.png"
-    assert plot_png.is_file()
-    payload = _read_sidecar(plot_png)
-    _assert_required_keys(payload)
-    assert payload["plot_type"] == "codon_correlation_scatter"
-    assert payload["stage"] == "rpf"
-    assert payload["source_data"] == "WT_vs_KO_all.csv"
-    # The scatter plots one point per merged codon row; the seven test
+    # Codon correlation now emits two standalone figures per pair —
+    # the scatter and the MA / Bland-Altman — each with its own sidecar.
+    scatter_png = out_dir / "WT_vs_KO_all_scatter.png"
+    ma_png = out_dir / "WT_vs_KO_all_ma.png"
+    assert scatter_png.is_file()
+    assert ma_png.is_file()
+
+    scatter_payload = _read_sidecar(scatter_png)
+    _assert_required_keys(scatter_payload)
+    assert scatter_payload["plot_type"] == "codon_correlation_scatter"
+    assert scatter_payload["stage"] == "rpf"
+    assert scatter_payload["source_data"] == "WT_vs_KO_all.csv"
+    # Each figure plots one point per merged codon row; the seven test
     # codons all merge cleanly so expected == drawn == 7.
-    assert payload["n_points_expected"] == payload["n_points_drawn"]
-    assert payload["n_points_drawn"] >= 1
+    assert scatter_payload["n_points_expected"] == scatter_payload["n_points_drawn"]
+    assert scatter_payload["n_points_drawn"] >= 1
+
+    ma_payload = _read_sidecar(ma_png)
+    _assert_required_keys(ma_payload)
+    assert ma_payload["plot_type"] == "codon_correlation_ma"
+    assert ma_payload["stage"] == "rpf"
+    assert ma_payload["source_data"] == "WT_vs_KO_all.csv"
+    assert ma_payload["n_points_expected"] == ma_payload["n_points_drawn"]

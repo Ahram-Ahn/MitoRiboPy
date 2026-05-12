@@ -588,15 +588,24 @@ def run_codon_correlation(
             metrics_row.insert(0, "site", site_label)
             metrics_records.append(metrics_row)
 
-            # ----- Two-panel publication figure -------------------------
+            # ----- Two standalone publication figures -------------------
             #
-            # Panel A: log2-density scatter with identity + robust fit
-            #          and support-aware labels.
-            # Panel B: MA / Bland-Altman plot — surfaces codon-specific
-            #          shifts a correlation hides.
-            # When metric='raw_count', panel A is rendered in the original
-            # raw scale and the figure is written under raw_count_qc/ to
-            # mark it as a QC artefact, not a publication figure.
+            # Each is written as its own .png / .svg so reviewers can drop
+            # them into a figure panel without having to crop a shared
+            # canvas:
+            #
+            #   *_scatter.{png,svg}  log2-density scatter with identity +
+            #                        robust fit and support-aware labels.
+            #   *_ma.{png,svg}       MA / Bland-Altman — surfaces codon-
+            #                        specific shifts a correlation hides.
+            #
+            # The "metric / regression / r / N" stats and the MA-axis
+            # interpretation live in a caption rendered in the figure's
+            # bottom margin (via ``fig.text``) instead of an in-axes box,
+            # so the explanation never occludes data points.
+            # When metric='raw_count', both figures are rendered in the
+            # original raw scale and written under raw_count_qc/ to mark
+            # them as QC artefacts, not publication figures.
             # The robust-residual diagnostic remains available in
             # codon_correlation_metrics.tsv (`robust_residual` column)
             # for downstream tooling that wants to plot it separately.
@@ -608,74 +617,14 @@ def run_codon_correlation(
 
             primary_mask = merged_current["include_primary"].to_numpy()
 
-            fig, (ax_scatter, ax_ma) = plt.subplots(
-                1, 2, figsize=(13, 6)
-            )
-
             x_plot = merged_current["base_metric"].to_numpy()
             y_plot = merged_current["sample_metric"].to_numpy()
-
-            # Panel A — scatter
-            for category, group in merged_current.groupby("Category", sort=False):
-                ax_scatter.scatter(
-                    group["base_metric"],
-                    group["sample_metric"],
-                    s=42,
-                    alpha=np.where(group["include_primary"], 0.85, 0.30),
-                    color=colour_map[str(category)],
-                    edgecolor="white",
-                    linewidth=0.6,
-                    label=str(category),
-                )
             data_min = float(min(x_plot.min(), y_plot.min()))
             data_max = float(max(x_plot.max(), y_plot.max()))
             pad = max((data_max - data_min) * 0.05, 1e-6)
             axis_min = data_min - pad
             axis_max = data_max + pad
-            ax_scatter.set_xlim(axis_min, axis_max)
-            ax_scatter.set_ylim(axis_min, axis_max)
-            ax_scatter.set_aspect("equal", adjustable="box")
-            line_x = np.linspace(axis_min, axis_max, 100)
-            ax_scatter.plot(line_x, line_x, color="0.6", linestyle=":", linewidth=1.0, label="y = x")
-            ax_scatter.plot(
-                line_x,
-                slope * line_x + intercept,
-                color="#D55E00",
-                linestyle="--",
-                linewidth=1.4,
-                label=f"{regression} (slope={slope:.3f})",
-            )
-            _place_residual_labels(
-                ax_scatter, top10,
-                x_col="base_metric",
-                y_col="sample_metric",
-                label_col="label",
-                axis_min=axis_min,
-                axis_max=axis_max,
-            )
-            slope_ci_str = (
-                f"slope = {slope:.3f}  95% CI [{slope_ci_low:.3f}, {slope_ci_high:.3f}]"
-                if math.isfinite(slope_ci_low) and math.isfinite(slope_ci_high)
-                else f"slope = {slope:.3f}"
-            )
-            stat_lines = [
-                f"metric = {metric}",
-                f"regression = {regression}",
-                f"r (transformed) = {r_value:.3f}",
-                f"Spearman rho = {spearman_r:.3f}",
-                f"Kendall tau = {kendall_tau:.3f}",
-                slope_ci_str,
-                f"intercept = {intercept:.3f}",
-                f"N primary = {int(primary_mask.sum())}",
-                f"N total = {len(merged_current)}",
-            ]
-            ax_scatter.text(
-                0.03, 0.97, "\n".join(stat_lines),
-                transform=ax_scatter.transAxes, ha="left", va="top",
-                fontsize=9, family="monospace",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
-                          edgecolor="0.7", linewidth=0.6, alpha=0.9),
-            )
+
             scatter_xlabel = (
                 f"{base_sample} ({metric})" if metric != "raw_count"
                 else f"{base_sample} ({column})"
@@ -684,65 +633,24 @@ def run_codon_correlation(
                 f"{sample_name} ({metric})" if metric != "raw_count"
                 else f"{sample_name} ({column})"
             )
-            ax_scatter.set_xlabel(scatter_xlabel, fontsize=11)
-            ax_scatter.set_ylabel(scatter_ylabel, fontsize=11)
-            ax_scatter.set_title("A. Codon density scatter", fontsize=12, fontweight="bold")
-            ax_scatter.grid(True, which="major", alpha=0.25, linewidth=0.6)
-            # Place the legend OUTSIDE the data axes (to the right of
-            # panel A) so it cannot occlude data points or labels.
-            # bbox_inches="tight" on savefig (below) keeps the figure
-            # framing snug around the legend.
-            ax_scatter.legend(
-                title="Category", title_fontsize=10, fontsize=9,
-                loc="upper left", bbox_to_anchor=(1.02, 1.0),
-                borderaxespad=0.0, frameon=True, framealpha=0.9,
-                edgecolor="0.7",
+            slope_ci_str = (
+                f"slope = {slope:.3f}  95% CI [{slope_ci_low:.3f}, {slope_ci_high:.3f}]"
+                if math.isfinite(slope_ci_low) and math.isfinite(slope_ci_high)
+                else f"slope = {slope:.3f}"
             )
-
-            # Panel B — MA plot
-            for category, group in merged_current.groupby("Category", sort=False):
-                ax_ma.scatter(
-                    group["mean_log2_density"],
-                    group["log2_fold_change"],
-                    s=36,
-                    alpha=np.where(group["include_primary"], 0.85, 0.25),
-                    color=colour_map[str(category)],
-                    edgecolor="white",
-                    linewidth=0.5,
-                    label=str(category),
-                )
-            ax_ma.axhline(0.0, color="0.5", linestyle=":", linewidth=1.0)
-            ax_ma.axhline(1.0, color="#D55E00", linestyle="--", linewidth=0.8, alpha=0.7)
-            ax_ma.axhline(-1.0, color="#D55E00", linestyle="--", linewidth=0.8, alpha=0.7)
-            ax_ma.set_xlabel("Mean log2 density (A)", fontsize=11)
-            ax_ma.set_ylabel("log2 fold change (M)", fontsize=11)
-            ax_ma.set_title("B. MA / Bland-Altman", fontsize=12, fontweight="bold")
-            ax_ma.grid(True, which="major", alpha=0.25, linewidth=0.6)
 
             title_suffix = "all codons" if version == "all" else "outlier-masked"
-            fig.suptitle(
-                f"Codon density: {base_sample} vs {sample_name} ({title_suffix})",
-                fontsize=14, fontweight="bold",
-            )
-            fig.tight_layout(rect=(0, 0, 1, 0.95))
-
             plot_dir = (
                 Path(output_dir) / "raw_count_qc"
                 if (raw_metric and str(raw_panel).lower() == "qc_only")
                 else Path(output_dir)
             )
             plot_dir.mkdir(parents=True, exist_ok=True)
-            out_svg = plot_dir / f"{base_sample}_vs_{sample_name}_{version}.svg"
-            out_png = plot_dir / f"{base_sample}_vs_{sample_name}_{version}.png"
-            fig.savefig(out_svg, bbox_inches="tight")
-            fig.savefig(out_png, dpi=300, bbox_inches="tight")
-            plt.close(fig)
-            # Per-plot sidecar so ``mitoribopy validate-figures`` can score
-            # the figure without re-running matplotlib. The folder-level
-            # ``codon_correlation.metadata.json`` still records the
-            # cross-plot policy (metric, regression, support_min_raw).
             n_pts = int(len(merged_current))
-            # v0.7.0: surface the robust-fit slope + CI in the sidecar
+            n_primary = int(primary_mask.sum())
+            n_low_support = n_pts - n_primary
+
+            # v0.7.0+: surface the robust-fit slope + CI in the sidecar
             # so validate-figures (and any downstream tooling reading
             # the JSON) can audit the fit quality without re-running
             # scipy.
@@ -758,8 +666,96 @@ def run_codon_correlation(
                 ),
                 "slope_ci_alpha": 0.05,
             }
+
+            # ---------- Figure 1: scatter ---------------------------------
+            fig_scatter, ax_scatter = plt.subplots(figsize=(7.5, 7.0))
+            for category, group in merged_current.groupby("Category", sort=False):
+                ax_scatter.scatter(
+                    group["base_metric"],
+                    group["sample_metric"],
+                    s=42,
+                    alpha=np.where(group["include_primary"], 0.85, 0.30),
+                    color=colour_map[str(category)],
+                    edgecolor="white",
+                    linewidth=0.6,
+                    label=str(category),
+                )
+            ax_scatter.set_xlim(axis_min, axis_max)
+            ax_scatter.set_ylim(axis_min, axis_max)
+            ax_scatter.set_aspect("equal", adjustable="box")
+            line_x = np.linspace(axis_min, axis_max, 100)
+            ax_scatter.plot(
+                line_x, line_x,
+                color="0.6", linestyle=":", linewidth=1.0,
+                label="y = x (identity)",
+            )
+            ax_scatter.plot(
+                line_x,
+                slope * line_x + intercept,
+                color="#D55E00",
+                linestyle="--",
+                linewidth=1.4,
+                label=f"{regression} fit (slope={slope:.3f})",
+            )
+            _place_residual_labels(
+                ax_scatter, top10,
+                x_col="base_metric",
+                y_col="sample_metric",
+                label_col="label",
+                axis_min=axis_min,
+                axis_max=axis_max,
+            )
+            ax_scatter.set_xlabel(scatter_xlabel, fontsize=11)
+            ax_scatter.set_ylabel(scatter_ylabel, fontsize=11)
+            ax_scatter.set_title(
+                f"Codon density scatter: {base_sample} vs {sample_name} ({title_suffix})",
+                fontsize=12, fontweight="bold",
+            )
+            ax_scatter.grid(True, which="major", alpha=0.25, linewidth=0.6)
+            ax_scatter.legend(
+                title="Codon category / reference lines",
+                title_fontsize=10, fontsize=9,
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, frameon=True, framealpha=0.9,
+                edgecolor="0.7",
+            )
+
+            scatter_caption_lines = [
+                f"metric = {metric}    regression = {regression}    "
+                f"pseudocount = {pc:.3g}",
+                f"r (transformed) = {r_value:.3f}    "
+                f"Spearman ρ = {spearman_r:.3f}    "
+                f"Kendall τ = {kendall_tau:.3f}",
+                f"{slope_ci_str}    intercept = {intercept:.3f}    "
+                f"N primary = {n_primary} / {n_pts} "
+                f"(low-support: {n_low_support}, faded)",
+                "Filled markers = primary-support codons; faded markers = "
+                "low-support (support_min_raw < threshold). Labels rank "
+                "by |log2 FC| × log10(1+min_support).",
+            ]
+            # Carve a bottom margin out of the figure for the caption so
+            # it never sits on top of data. The legend lives in the right
+            # margin via bbox_to_anchor, so we don't need extra width.
+            fig_scatter.subplots_adjust(left=0.11, right=0.74, top=0.92, bottom=0.28)
+            fig_scatter.text(
+                0.02, 0.02, "\n".join(scatter_caption_lines),
+                ha="left", va="bottom",
+                fontsize=8.5, family="monospace",
+                bbox=dict(
+                    boxstyle="round,pad=0.4",
+                    facecolor="white",
+                    edgecolor="0.7",
+                    linewidth=0.6,
+                    alpha=0.95,
+                ),
+            )
+            out_scatter_svg = plot_dir / f"{base_sample}_vs_{sample_name}_{version}_scatter.svg"
+            out_scatter_png = plot_dir / f"{base_sample}_vs_{sample_name}_{version}_scatter.png"
+            fig_scatter.savefig(out_scatter_svg, bbox_inches="tight")
+            fig_scatter.savefig(out_scatter_png, dpi=300, bbox_inches="tight")
+            plt.close(fig_scatter)
             write_plot_metadata(
-                out_png,
+                out_scatter_png,
                 plot_type="codon_correlation_scatter",
                 stage="rpf",
                 source_data=Path(out_csv).name,
@@ -769,7 +765,95 @@ def run_codon_correlation(
                 dpi=300,
                 extra=fit_extra,
             )
-            log_info("COR", f"Plot saved => {out_svg} (+ 300 dpi PNG)")
+            log_info("COR", f"Plot saved => {out_scatter_svg} (+ 300 dpi PNG)")
+
+            # ---------- Figure 2: MA / Bland-Altman -----------------------
+            fig_ma, ax_ma = plt.subplots(figsize=(7.5, 6.0))
+            for category, group in merged_current.groupby("Category", sort=False):
+                ax_ma.scatter(
+                    group["mean_log2_density"],
+                    group["log2_fold_change"],
+                    s=36,
+                    alpha=np.where(group["include_primary"], 0.85, 0.25),
+                    color=colour_map[str(category)],
+                    edgecolor="white",
+                    linewidth=0.5,
+                    label=str(category),
+                )
+            zero_line = ax_ma.axhline(
+                0.0, color="0.5", linestyle=":", linewidth=1.0,
+                label="M = 0 (no change)",
+            )
+            pos_line = ax_ma.axhline(
+                1.0, color="#D55E00", linestyle="--", linewidth=0.8, alpha=0.7,
+                label="|M| = 1 (2× fold change)",
+            )
+            ax_ma.axhline(
+                -1.0, color="#D55E00", linestyle="--", linewidth=0.8, alpha=0.7,
+            )
+            ax_ma.set_xlabel(
+                f"Mean log2 density (A) = ½·(log2 {base_sample} + log2 {sample_name})",
+                fontsize=11,
+            )
+            ax_ma.set_ylabel(
+                f"log2 fold change (M) = log2({sample_name} / {base_sample})",
+                fontsize=11,
+            )
+            ax_ma.set_title(
+                f"MA / Bland-Altman: {base_sample} vs {sample_name} ({title_suffix})",
+                fontsize=12, fontweight="bold",
+            )
+            ax_ma.grid(True, which="major", alpha=0.25, linewidth=0.6)
+            ax_ma.legend(
+                title="Codon category / reference lines",
+                title_fontsize=10, fontsize=9,
+                loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, frameon=True, framealpha=0.9,
+                edgecolor="0.7",
+            )
+
+            # MA plot caption: explain the diagnostic and report the
+            # robust-fit summary stats so the figure stands alone.
+            ma_caption_lines = [
+                "MA / Bland-Altman: y-axis (M) is the log2 ratio of "
+                "sample vs base; x-axis (A) is the mean log2 density.",
+                "Points far from M = 0 are codons whose density differs "
+                "between the two samples beyond what a correlation captures.",
+                f"metric = {metric}    pseudocount = {pc:.3g}    "
+                f"{slope_ci_str}    "
+                f"N primary = {n_primary} / {n_pts} "
+                f"(low-support: {n_low_support}, faded)",
+            ]
+            fig_ma.subplots_adjust(left=0.11, right=0.74, top=0.92, bottom=0.32)
+            fig_ma.text(
+                0.02, 0.02, "\n".join(ma_caption_lines),
+                ha="left", va="bottom",
+                fontsize=8.5, family="monospace",
+                bbox=dict(
+                    boxstyle="round,pad=0.4",
+                    facecolor="white",
+                    edgecolor="0.7",
+                    linewidth=0.6,
+                    alpha=0.95,
+                ),
+            )
+            out_ma_svg = plot_dir / f"{base_sample}_vs_{sample_name}_{version}_ma.svg"
+            out_ma_png = plot_dir / f"{base_sample}_vs_{sample_name}_{version}_ma.png"
+            fig_ma.savefig(out_ma_svg, bbox_inches="tight")
+            fig_ma.savefig(out_ma_png, dpi=300, bbox_inches="tight")
+            plt.close(fig_ma)
+            write_plot_metadata(
+                out_ma_png,
+                plot_type="codon_correlation_ma",
+                stage="rpf",
+                source_data=Path(out_csv).name,
+                n_points_expected=n_pts,
+                n_points_drawn=n_pts,
+                formats=["png", "svg"],
+                dpi=300,
+                extra=fit_extra,
+            )
+            log_info("COR", f"Plot saved => {out_ma_svg} (+ 300 dpi PNG)")
 
             corr_records.append({
                 "Base_Sample": base_sample,
