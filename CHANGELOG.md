@@ -11,6 +11,16 @@ Forward-looking entries only. Implemented changes are recorded under a
 versioned release header. Long-running design notes live in
 [`docs/developer/roadmap.md`](docs/developer/roadmap.md).
 
+### Added
+- `tqdm>=4.65` is now a hard runtime dependency. The progress system
+  already preferred tqdm bars (`--progress auto`) and silently fell
+  through to plain log lines when the import failed; promoting tqdm to
+  a declared dependency means a clean `pip install mitoribopy` gives
+  every user the bar UI by default rather than the fallback. The lazy
+  import in `progress/timing.py` and `progress/renderers.py` is
+  preserved as defensive code for environments where tqdm has been
+  uninstalled by hand.
+
 ### Planned
 - Extend `examples/smoke/` with richer numerical assertions once the
   synthetic reference and read simulator carry a stable biological

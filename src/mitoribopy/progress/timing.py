@@ -5,9 +5,10 @@ Two roles:
 1. Time the per-sample stages (cutadapt, bowtie2, dedup, ...) so the
    user can see how long each step took at a glance, both on the
    console and in the per-run ``mitoribopy.log``.
-2. Provide an optional thin tqdm wrapper for compact "N of M done"
-   counters, with a graceful no-op fallback when tqdm is not
-   installed (the package's hard deps do not include tqdm).
+2. Provide a thin tqdm wrapper for compact "N of M done" counters.
+   tqdm is a hard runtime dependency, but the import is still guarded
+   so the module remains usable in stripped-down environments where it
+   was uninstalled by hand.
 
 Usage shape mirrors the lightweight ``progress.py`` style: a
 ``Stopwatch`` context manager, a ``StageTimings`` accumulator, and a
